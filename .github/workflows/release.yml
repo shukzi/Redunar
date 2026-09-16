@@ -36,6 +36,7 @@ jobs:
           rm -rf ../local-builds/node_modules
           cp -a output/tauri-redunar/node_modules ../local-builds/node_modules
           cargo fetch --manifest-path Cargo.toml
+          cargo fetch --manifest-path output/tauri-redunar/src-tauri/Cargo.toml
           test "${RELEASE_TAG#v}" = "$(awk '$1 == "Version:" { print $2; exit }' packaging/redunar-app.spec)"
           assets="$RUNNER_TEMP/install-assets"
           mkdir -p "$assets"
