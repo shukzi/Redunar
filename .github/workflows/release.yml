@@ -29,23 +29,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes podman rpm zstd
-          cd source/output/tauri-redunar
+          cd output/tauri-redunar
           npm ci
-          cd ../../..
+          cd ../..
           mkdir -p local-builds/node_modules
-          cargo fetch --manifest-path source/Cargo.toml
-          test "${RELEASE_TAG#v}" = "$(awk '$1 == \"Version:\" { print $2; exit }' source/packaging/redunar-app.spec)"
+          cargo fetch --manifest-path Cargo.toml
+          test "${RELEASE_TAG#v}" = "$(awk '$1 == \"Version:\" { print $2; exit }' packaging/redunar-app.spec)"
           assets="$RUNNER_TEMP/install-assets"
           mkdir -p "$assets"
-          source/tools/build-linux-release.sh
-          source/tools/build-tauri-deb.sh "$assets"
-          source/tools/build-tauri-arch-package.sh "$assets"
-          source/tools/build-tauri-opensuse-rpm.sh "$assets"
+          tools/build-linux-release.sh
+          tools/build-tauri-deb.sh "$assets"
+          tools/build-tauri-arch-package.sh "$assets"
+          tools/build-tauri-opensuse-rpm.sh "$assets"
           rpm_assets="$RUNNER_TEMP/rpm-assets"
           mkdir -p "$rpm_assets"
-          source/tools/build-local-tauri-rpm.sh "$rpm_assets"
+          tools/build-local-tauri-rpm.sh "$rpm_assets"
           cp "$rpm_assets/redunar-app.rpm" "$assets/redunar-app-linux-x86_64.rpm"
-          source/tools/build-tauri-portable.sh "$assets"
+          tools/build-tauri-portable.sh "$assets"
           for asset in "$assets"/redunar-app-linux-*; do
             sha256sum "$asset" >"$asset.sha256"
           done
@@ -56,7 +56,7 @@ jobs:
         run: |
           key_file="$RUNNER_TEMP/redunar-release-private.pem"
           printf '%s' "$REDUNAR_RELEASE_SIGNING_KEY" >"$key_file"
-          source/tools/sign-release-assets.sh \
+          tools/sign-release-assets.sh \
             "$RUNNER_TEMP/install-assets" \
             "$key_file"
           rm -f "$key_file"
@@ -65,10 +65,10 @@ jobs:
         run: |
           openssl pkey \
             -pubin \
-            -in source/packaging/release-signing-public.pem \
+            -in packaging/release-signing-public.pem \
             -noout
           openssl dgst -sha256 \
-            -verify source/packaging/release-signing-public.pem \
+            -verify packaging/release-signing-public.pem \
             -signature "$RUNNER_TEMP/install-assets/SHA256SUMS.sig" \
             "$RUNNER_TEMP/install-assets/SHA256SUMS"
           (cd "$RUNNER_TEMP/install-assets" && sha256sum -c SHA256SUMS)
