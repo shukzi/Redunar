@@ -4,6 +4,10 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        required: true
 
 permissions:
   contents: write
@@ -16,16 +20,18 @@ jobs:
       - name: Check release inputs
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
 
       - name: Build Linux packages
         env:
           CARGO_TERM_COLOR: always
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
         run: |
           sudo apt-get update
           sudo apt-get install --yes podman rpm zstd
-          npm ci --prefix source/output/tauri-redunar
+          cd source/output/tauri-redunar
+          npm ci
+          cd ../../..
           mkdir -p local-builds/node_modules
           cargo fetch --manifest-path source/Cargo.toml
           test "${RELEASE_TAG#v}" = "$(awk '$1 == \"Version:\" { print $2; exit }' source/packaging/redunar-app.spec)"
@@ -70,7 +76,7 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
         run: |
           gh release upload "$RELEASE_TAG" \
             "$RUNNER_TEMP/install-assets"/* \
