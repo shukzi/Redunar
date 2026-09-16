@@ -32,6 +32,7 @@ jobs:
           cd output/tauri-redunar
           npm ci
           cd ../..
+          mkdir -p ../local-builds
           rm -rf ../local-builds/node_modules
           cp -a output/tauri-redunar/node_modules ../local-builds/node_modules
           cargo fetch --manifest-path Cargo.toml
