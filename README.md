@@ -60,6 +60,7 @@ To remove Redunar’s non-clip data too, then run:
 ```sh
 rm -rf -- ~/.local/state/redunar/
 rm -rf -- ~/.local/share/redunar/artwork-v1
+rm -rf -- ~/.local/share/com.redunar.Redunar
 rm -rf -- ~/.cache/redunar/updates
 ```
 
