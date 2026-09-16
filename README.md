@@ -83,13 +83,6 @@ Run the release checks without installing:
 tools/check-tauri-release.sh
 ```
 
-To build signed installer assets, provide the release private key outside the
-repository:
-
-```sh
-REDUNAR_RELEASE_SIGNING_KEY=/absolute/private.pem tools/build-install-assets.sh target/install-assets
-```
-
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md) — components, lifecycle, persistence, and recovery
