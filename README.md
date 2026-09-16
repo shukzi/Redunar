@@ -3,7 +3,7 @@
 Redunar provides instant replay recording and in-game metrics for Steam games
 running on Linux with AMD hardware.
 
-The current release targets x86_64 Linux with AMD/RADV graphics. It includes:
+## Features
 
 - Instant replay recording with a rolling buffer
 - An in-game metrics overlay
@@ -20,7 +20,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://redunar.com/install.sh | sh
 ```
 
 The installer detects the Linux package format, verifies the signed release
-manifest, and uses the system package manager. The current package boundary is
+manifest, and uses the system package manager. Initial package support covers
 x86_64 glibc Linux in the Fedora/RHEL, Debian/Ubuntu, Arch, and openSUSE
 families.
 
@@ -31,6 +31,41 @@ available, and automatic checks run when the app starts by default. The native
 process verifies the manifest and package checksum before handing a verified
 package to the system package installer. Settings, clips, and history remain
 in place across an update.
+
+## Uninstall
+
+Quit Redunar completely before removing the package.
+
+Remove Redunar with your distribution’s package manager:
+
+```sh
+# Fedora/RHEL-like
+sudo dnf remove redunar-app
+
+# Debian/Ubuntu-like
+sudo apt remove redunar-app
+
+# Arch-like
+sudo pacman -R redunar-app
+
+# openSUSE-like
+sudo zypper remove redunar-app
+```
+
+Removing the package leaves Redunar settings, history, cached artwork, and
+saved clips in place.
+
+To remove Redunar’s non-clip data too, then run:
+
+```sh
+rm -rf -- ~/.local/state/redunar/
+rm -rf -- ~/.local/share/redunar/artwork-v1
+rm -rf -- ~/.cache/redunar/updates
+```
+
+This removes Redunar’s state, artwork cache, and update cache while preserving
+saved clips in `~/Videos/Redunar Replays`. Clips saved in another location are
+also untouched unless that location is inside `~/.local/state/redunar/`.
 
 ## Build and run locally
 
@@ -71,9 +106,9 @@ artwork use files already present on the system. Capture and overlay features
 are capability-gated and report when required hardware or media support is
 unavailable.
 
-This release makes a focused support claim: x86_64 Linux, AMD/RADV graphics,
-and Steam games. Compatibility may vary by game and system configuration;
-broader hardware, distribution, launcher, and game support is not claimed.
+Initial support covers x86_64 Linux, AMD/RADV graphics, and Steam games.
+Compatibility may vary by game and system configuration; broader hardware,
+distribution, launcher, and game support is not claimed.
 
 ## License
 
