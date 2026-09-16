@@ -246,10 +246,7 @@ pub fn install_update() -> UpdateInstallStatus {
     }
     UpdateInstallStatus {
         state: "handoff".into(),
-        message: format!(
-            "Redunar {} was verified and handed to the desktop package installer.",
-            pending.version
-        ),
+        message: "The verified update was handed to your system package installer. Finish the installation there, then restart Redunar.".into(),
     }
 }
 
