@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.ttf binary
+*.spv binary
+packaging/DEPENDENCY-LICENSES.md -text -whitespace
+output/tauri-redunar/licenses/** -text -whitespace

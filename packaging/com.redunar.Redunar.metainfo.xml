@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.redunar.Redunar</id>
+  <name>Redunar</name>
+  <summary>Capture recent gameplay and view in-game metrics</summary>
+  <developer id="com.redunar">
+    <name>Redunar Project</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <url type="homepage">https://redunar.com/</url>
+  <description>
+    <p>
+      Redunar is a Linux app for Steam gameplay, with instant replays and
+      in-game metrics built for AMD hardware.
+    </p>
+    <p>
+      It keeps game profiles, measurements, and recorded media on the user's
+      machine. It does not require an online account or upload telemetry.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.redunar.Redunar.desktop</launchable>
+  <provides>
+    <binary>redunar-tauri</binary>
+  </provides>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <releases>
+    <release version="0.1.0" date="2026-09-11">
+      <description>
+        <p>Initial scoped release for x86_64 Linux with AMD/RADV hardware and Steam games. Includes instant replay recording, in-game metrics, session history, and clip editing.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>

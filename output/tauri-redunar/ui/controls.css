@@ -1,0 +1,42 @@
+/* Approved shared controls. Native inputs remain the value and event owners. */
+:root{--button-bg:#202023;--button-border:#39383e;--sans:Space,Arial,sans-serif;--mono:Plex,monospace;--line:#2b2b2b}
+.button{background:var(--button-bg);border:1px solid var(--button-border);border-radius:9px;min-height:40px;padding:10px 16px;font-size:12px;line-height:1.4;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.button.primary{background:#431b21;color:#f4f1ed;border-color:#a13943;box-shadow:inset 0 1px 0 #ffffff0a}
+.button:hover:not(:disabled){background:#2b2b30;border-color:#65626a}
+.button.primary:hover:not(:disabled){background:#5a222a;border-color:#e7474f;filter:none}
+.button:disabled{opacity:.4;filter:none}.button[hidden]{display:none}
+.heading-actions,.dialog-actions,.game-cover-actions{gap:12px;flex-wrap:wrap}
+.switch{display:inline-flex;position:relative;align-items:center;justify-content:center;width:48px;height:40px;min-width:48px;flex:none;cursor:pointer}
+.switch span{position:relative;display:block;inset:auto;width:40px;height:22px;background:#131215;border:1px solid #434047;border-radius:99px;box-shadow:none}
+.switch span:before{content:'';position:absolute;left:3px;top:3px;width:14px;height:14px;box-sizing:border-box;background:#131215;border:3px solid #8a858d;border-radius:50%;box-shadow:none;transform:none;transition:transform .15s ease,background .15s ease}
+.switch input:checked+span{background:#30171c;border-color:#7e303b}
+.switch input:checked+span:before{background:#160c0f;border-color:#e7474f;transform:translateX(18px)}
+.switch input:focus-visible+span{outline:2px solid #ff8288;outline-offset:4px}
+.switch:has(input:disabled){opacity:.4;cursor:default}
+.switch input:disabled+span{opacity:1}
+.field>div:first-child{min-width:0}.field{gap:24px}.field p{margin-top:6px;line-height:1.6}
+.field>.precision-select{flex-shrink:0}.override-control{gap:12px}
+.picker-field{display:flex;gap:12px;align-items:stretch;margin-top:7px}
+.form-label .picker-field input,.picker-field .button{margin:0;min-height:44px}
+.form-label .picker-field input{min-width:0;flex:1}.picker-field .button{flex:none}
+.form-label input,.form-label textarea{background:#121212;border-color:#3b3b3b;font-size:12px;padding:11px 12px}
+.small-note,.info-note{line-height:1.7}.small-note{margin-top:16px}.panel-footer+.small-note,.game-save-bar+.small-note{margin-top:24px}
+.controls-panel>.heading-actions{margin-block:16px;gap:12px}
+.export-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:26px 0;border:0;padding:0}
+.export-summary .stat{padding:0 18px;border:0;border-left:1px solid var(--line);min-width:0}
+.export-summary .stat:first-child{padding-left:0;border-left:0}
+.export-summary .stat>span{font-size:11px;color:var(--muted)}
+.export-summary .stat strong{font:22px/1.4 var(--mono);margin-top:12px;white-space:nowrap}
+#trim-export-form{margin-top:24px}dialog{background:#111111;border-color:#454545;border-radius:12px;padding:28px;max-width:min(560px,calc(100vw - 32px))}
+.dialog-head{margin-bottom:24px}.dialog-head h2{font-size:24px}.dialog-head button{width:32px;height:32px;flex:none}
+.history-view-toggle{background:#101010;border-color:#333333}.history-view-toggle button.active{background:#3b2027;color:#ffadb2}
+.history-view-toggle button:hover:not(.active){background:#1c1c1c}.text-button{color:#ff8288}
+.precision-select-trigger{font-size:12px;min-height:40px}
+@media(pointer:coarse){.switch{height:44px;min-width:48px}.button{min-height:44px}}
+@media(max-width:700px){.field{gap:16px}.export-summary .stat{padding:0 10px}.export-summary .stat strong{font-size:clamp(13px,4vw,20px)}.button{font-size:12px;min-height:40px}.heading-actions .button{font-size:11px}.picker-field{flex-wrap:wrap}.picker-field .button{flex-grow:1}}
+
+.replay-pref-actions{display:flex;flex-wrap:wrap;gap:12px;margin-block:16px}
+.switch span:after{content:none}.preset-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:24px}.preset-grid button{display:flex;flex-direction:column;align-items:start;justify-content:space-between;min-height:110px;padding:16px;background:#151515;border:1px solid #353535;border-radius:8px;text-align:left}.preset-grid button[aria-pressed=true]{background:#241516;border-color:#74323d}.preset-grid button>span{font:20px Plex;color:#e7474f}.preset-grid button small{display:block;font:8px Plex;margin-top:5px;color:#a1a1a1}.preset-grid button strong{font-size:11px;font-weight:500;margin-top:20px}.field label,.global-intro,.metric-toggles label{color:#ddd}.field p,.tabbar button:not(.active),.metric-hint,.panel-footer,.capture-summary span,.shortcut-input,.catalog-note,.module-summary>span{color:var(--muted)}
+@media(max-width:1150px) and (min-width:1001px){.preset-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.preset-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.settings-save-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;position:sticky;bottom:16px;z-index:3;margin-top:24px;padding:16px 20px;border:1px solid #333;border-radius:9px;background:#141414;box-shadow:0 10px 28px #0008}.settings-save-bar>span{font-size:11px;color:var(--muted)}

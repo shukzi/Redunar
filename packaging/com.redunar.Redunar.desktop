@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Redunar
+Comment=App for instant replay and in-game metrics.
+Exec=redunar-tauri
+Icon=com.redunar.Redunar
+Terminal=false
+Categories=Game;
+Keywords=gaming;performance;fps;frametime;metrics;replay;
+StartupNotify=true
+StartupWMClass=com.redunar.Redunar

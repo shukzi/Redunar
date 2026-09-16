@@ -1,0 +1,4 @@
+3f1c83c8195b1e61275863c36780254360d2495fb556a077701e2d7fb2a255f1  crates/redunar-capture-vulkan/src/shaders/glyph.vert
+73c8f43715dc75efc18380be12de3e13ac31db5149973ab640edf5f9444aa026  crates/redunar-capture-vulkan/src/shaders/glyph.vert.spv
+4d077a0d13e99620928515414079014705c59bfd7605f4ab10e34b923cc41cdd  crates/redunar-capture-vulkan/src/shaders/glyph.frag
+8f0d4293cf5173d93418f5b9201446302caba792dc1c72d2effd3d1deed03b33  crates/redunar-capture-vulkan/src/shaders/glyph.frag.spv

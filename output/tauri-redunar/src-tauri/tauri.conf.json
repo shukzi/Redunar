@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Redunar",
+  "version": "0.1.0",
+  "identifier": "com.redunar.Redunar",
+  "build": {
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Redunar",
+        "width": 1440,
+        "height": 900,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' http://127.0.0.1:*; font-src 'self'; connect-src ipc: http://ipc.localhost",
+      "capabilities": ["default"]
+    },
+    "enableGTKAppId": true
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

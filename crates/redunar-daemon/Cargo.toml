@@ -1,0 +1,18 @@
+[package]
+name = "redunar-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nix = { version = "0.29", default-features = false, features = ["fs"] }
+redunar-capture = { path = "../redunar-capture" }
+redunar-capture-audio = { path = "../redunar-capture-audio" }
+redunar-capture-kms = { path = "../redunar-capture-kms" }
+redunar-capture-vulkan = { path = "../redunar-capture-vulkan" }
+redunar-core = { path = "../redunar-core" }
+redunar-platform = { path = "../redunar-platform" }
+
+[lints]
+workspace = true

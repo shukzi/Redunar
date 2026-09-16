@@ -1,0 +1,324 @@
+"""Exercise the built production UI in WebKitGTK with isolated command fixtures.
+No host profile, real game, user clip, tray or hardware settings are changed.
+"""
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import json
+import threading
+import gi
+gi.require_version('Gtk','3.0')
+gi.require_version('WebKit2','4.1')
+from gi.repository import GLib, Gtk, Gdk, GdkPixbuf, WebKit2
+NATIVE=Path(__file__).resolve().parents[1]
+ARTIFACTS=NATIVE.parents[1]/'target/ui-review'
+ARTIFACTS.mkdir(parents=True,exist_ok=True)
+class Handler(SimpleHTTPRequestHandler):
+    def log_message(self,*_): pass
+server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(NATIVE/'ui/dist')))
+threading.Thread(target=server.serve_forever,daemon=True).start()
+manager=WebKit2.UserContentManager()
+fixture=r"""
+window.bridge={calls:[],errors:[],conflict:false,unavailable:false,automaticUpdates:true,revision:1,modules:{frame_metrics:'Enabled',in_game_overlay:'Enabled',instant_replay:'Enabled'}};
+window.addEventListener('error',e=>bridge.errors.push(e.message));
+window.addEventListener('unhandledrejection',e=>bridge.errors.push(String(e.reason)));
+function artworkFixture(width,height,label,mime='image/png'){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d');const gradient=ctx.createLinearGradient(0,0,width,height);gradient.addColorStop(0,'#8b202a');gradient.addColorStop(1,'#171717');ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);ctx.fillStyle='#ffffff';ctx.font='32px sans-serif';ctx.fillText(label,30,70);return Array.from(atob(canvas.toDataURL(mime).split(',')[1]),c=>c.charCodeAt(0));}
+const posterFixture=artworkFixture(300,450,'Poster');
+const bannerFixture=artworkFixture(1200,350,'Landscape banner');
+const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
+const values={overlay:true,preset:'Compact',position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
+const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/fixture/game',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',overrides:{overlay:false}}];
+window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
+ bridge.calls.push({command,args:structuredClone(args)});
+ if(command==='save_replay'&&bridge.failSave)throw Error('Fixture save failed');
+ if(command==='replay_runtime_status'&&bridge.failRuntime)throw Error('Fixture runtime unavailable');
+ if(command==='daemon_status')return bridge.unavailable?{available:false}:{available:true,revision:++bridge.revision,cpu_model:'Fixture CPU',cpu_utilization_percent:32,cpu_temperature_celsius:61,gpu_model:'Fixture GPU',gpu_utilization_percent:81,gpu_temperature_celsius:67,ram_used_bytes:12884901888,ram_total_bytes:34359738368,vram_used_bytes:5368709120,vram_total_bytes:12884901888};
+ if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
+ if(command==='session_status')return {phase:'Running',game:games[0].name,can_end:true,launch_locked:true,elapsed_seconds:1938,captures_saved:3,profile_label:'Session profile',feature_summary:'Metrics enabled · replay enabled',restoration:'NotRequired',history_revision:1,measurements:{revision:bridge.revision,average_fps:141,frame_time_ms:7.1,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000+Math.round(Math.sin(bridge.revision)*700000)],phase:'Live'}};
+ if(command==='replay_runtime_status'&&bridge.replayInactive)return {phase:'Inactive',can_save:false,buffered_seconds:0};
+ if(command==='replay_runtime_status')return {phase:'Buffering',can_save:true,buffered_seconds:30,received_frame_count:600,encoded_packet_count:600,completed_save_revision:1};
+ if(command==='module_statuses')return structuredClone(bridge.modules);
+ if(command==='discover_games')return structuredClone(bridge.discovered||[]);
+ if(command==='import_discovered_games')return structuredClone(games);
+ if(command==='catalog_games')return structuredClone(games);
+ if(command==='game_installation_statuses'){if(bridge.installationFailure)throw Error('Fixture library unavailable');return bridge.installation||{'1':'installed','2':'installed'};}
+ if(command==='game_poster')return posterFixture;
+ if(command==='game_banner')return args.gameId==='1'?bannerFixture:null;
+ if(command==='replay_clips')return Array.from({length:3},(_,i)=>({file_name:`redunar-replay-1789254367-629872093-${i+1}-a-long-capture-filename.mkv`,title:`Capture ${i+1}`,game_name:i===0?games[0].name:null,bytes:68000000,modified_unix_ns:'1789300000000000000',duration_seconds:30}));
+ if(command==='clip_metadata')return {duration_seconds:30,width:640,height:360,fps:60};
+ if(command==='clip_thumbnail')return captureFixture;
+ if(command==='replay_storage_status')return {used_bytes:0};
+ if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};
+ if(command==='set_close_to_tray')return {close_to_tray:args.enabled,automatic_updates:bridge.automaticUpdates};
+ if(command==='set_automatic_updates'){bridge.automaticUpdates=args.enabled;return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};}
+ if(command==='check_for_updates')return {current_version:'0.1.0',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
+ if(command==='global_settings')return {values:structuredClone(values),revision:'1'};
+ if(command==='save_global_settings'){if(bridge.conflict)throw new Error('Saved defaults changed elsewhere. Reload before saving.');Object.assign(values,args.input);return {values:structuredClone(values),revision:'2'};}
+ if(command==='save_game_profile'){games.find(g=>g.id===args.gameId).overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));return {games:structuredClone(games),liveNotice:'Game settings saved. The running game overlay was updated.'};}
+ if(command==='update_game_launch'){bridge.launchArgs=args.arguments;return structuredClone(games);}
+ if(command==='save_shortcuts'){values.shortcuts=args.shortcuts;return {values:structuredClone(values)};}
+ if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {close_overlay_on_outside_click:args.closeOnOutsideClick,overlay_shortcut:values.shortcuts.overlay||''};}
+ if(command==='replay_preferences')return {initial_save_duration_seconds:30,resolved_directory:'/fixture/Videos/Redunar Replays',custom_save_parent:'/fixture',close_overlay_on_outside_click:bridge.outsideClick!==false};
+ if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
+ if(command==='shortcut_status'||command==='activate_shortcuts')return {state:Object.values(values.shortcuts).some(Boolean)?'Active':'Inactive'};
+ if(command==='session_history')return bridge.historyFixture??[0,1,2].map((n)=>({id:n+1,game:n===2?'Other local game':games[0].name,started_unix:1789300000-n*86400,duration_seconds:1800,average_fps:141-n,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000,7300000],timeline:Array.from({length:96},(_,i)=>({elapsed_seconds:i*1800/95,fps:135+Math.sin(i)*6,frame_time_ms:7.1+Math.sin(i)*.3,cpu_temperature_celsius:61,gpu_temperature_celsius:67,cpu_utilization_percent:32,gpu_utilization_percent:81}))}));
+ return {};
+}};
+window.check=(condition,message)=>{if(!condition)throw new Error(message)};
+window.q=s=>document.querySelector(s);
+window.click=s=>{const el=q(s);check(!!el,'Missing '+s);check(!el.disabled,'Disabled '+s);el.click();};
+"""
+manager.add_script(WebKit2.UserScript.new(fixture,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
+view=WebKit2.WebView.new_with_user_content_manager(manager)
+view.set_background_color(Gdk.RGBA(0,0,0,0))
+window=Gtk.Window();window.set_default_size(1440,1000);window.add(view);window.show_all()
+def pump(ms=250):
+    loop=GLib.MainLoop();GLib.timeout_add(ms,lambda:(loop.quit(),False)[1]);loop.run()
+def js(source):
+    loop=GLib.MainLoop();result=[]
+    def done(w,value,_):
+        try: result.append(w.evaluate_javascript_finish(value).to_string())
+        except Exception as error: result.append(error)
+        loop.quit()
+    view.evaluate_javascript('(()=>{'+source+'})()',-1,None,None,None,done,None);loop.run()
+    if isinstance(result[0],Exception):raise result[0]
+    return result[0]
+def snap(name):
+    loop=GLib.MainLoop()
+    def done(w,value,_):w.get_snapshot_finish(value).write_to_png(str(ARTIFACTS/(name+'.png')));loop.quit()
+    view.get_snapshot(WebKit2.SnapshotRegion.VISIBLE,WebKit2.SnapshotOptions.NONE,None,done,None);loop.run()
+def route(name):js("location.hash="+json.dumps(name));pump(400)
+checks=[]
+def test(name,source,wait_ms=0):
+    js(source);checks.append(name)
+    if wait_ms: pump(wait_ms)
+try:
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/#overview');pump(1800)
+    test('Real overview values and compact session footer',"check(q('#ram-used').textContent==='12.0 GiB','RAM');check(q('#session-timer').textContent==='32:18','timer');check(q('#session-captures').textContent==='3 captures saved','captures');check(q('.session-end').contains(q('[data-action=end-session]')),'timer adjacent to end');window.plot=q('#live-chart');click('[data-overview-view=fps]');check(q('#live-chart')===plot,'graph toggle does not remount page');check(q('#overview-chart-label').textContent==='Frame rate','FPS selector');")
+    snap('overview')
+    test('Overview uses settings for visibility',"check(!q('[data-action=session-overlay]'),'no duplicate live button');")
+    route('library');pump(300)
+    test('Library uses independent landscape and portrait artwork',"const banner=q('.game-cover-banner img'),poster=q('.library-game img');check(banner?.naturalWidth===1200&&banner.naturalHeight===350,'wide banner received');check(poster?.naturalWidth===300&&poster.naturalHeight===450,'portrait retained in catalog');check(banner.src!==poster.src,'separate artwork caches');check(getComputedStyle(q('.game-cover-banner')).position==='absolute','banner is outside layout flow');const card=q('.game-cover').getBoundingClientRect();check(card.height<260,'image does not expand header');check(Math.abs(banner.getBoundingClientRect().width-card.width)<2,'banner spans header');")
+    test('Library inheritance and readiness use the approved layout',"check(q('.inheritance-banner strong').textContent==='Uses global settings','inheritance heading');check(q('.inheritance-banner p').textContent.includes('apply to this game'),'inheritance explanation');check(document.querySelectorAll('[data-readiness-status]').length===3,'inline readiness');check(q('[data-readiness-status]').dataset.ready==='true','observed ready dot');check(!q('.override-control .pill'),'no duplicated inherited badge');check(q('.game-save-bar').hidden,'clean library has no action bar');check(!q('.detail-body .game-save-bar'),'bar outside settings panel');check(q('.game-profile-footer').getBoundingClientRect().bottom+20<=q('.game-profile-footer+.small-note').getBoundingClientRect().top,'note spacing');")
+    test('Library drafts use viewport actions and discard hides them',"const select=q('[data-override=overlay]');select.value='Off';select.dispatchEvent(new Event('change',{bubbles:true}));const bar=q('.game-save-bar');check(!bar.hidden,'dirty library bar visible');check(getComputedStyle(bar).position==='fixed','viewport bar');check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'bottom aligned');check(bar.getBoundingClientRect().left>=q('.sidebar').getBoundingClientRect().right,'sidebar stays usable');click('[data-action=discard-game]');check(q('.game-save-bar').hidden,'discard hides bar');")
+    snap('library-banner')
+    js("click('[data-action=scan-games]')");pump()
+    test('Discovery empty state and dialog initial focus',"check(q('#dialog-title').textContent==='Scan installed games','installed title');check(q('#dialog').textContent.includes('No installed games were found.'),'installed empty message');check(q('#discovery-form [type=submit]').disabled,'empty import disabled');check(!bridge.calls.some(c=>c.command==='running_game_candidates'),'no process discovery request');check(document.activeElement===q('#dialog-title'),'focus starts at title');check(!q('#dialog [data-close]').matches(':focus-visible'),'close not highlighted');click('#dialog [data-close]');")
+    js("bridge.discovered=[{name:'Already saved game',source:'Steam',source_id:42,install_directory:'/fixture/steam/existing',launch_executable:'/usr/bin/steam',importable:true},{name:'Installed game',source:'Steam',source_id:730,install_directory:'/fixture/steam/new',launch_executable:'/usr/bin/steam',importable:true},{name:'Unavailable launcher',source:'Desktop entry',install_directory:'/fixture/missing',importable:false}];click('[data-action=scan-games]')");pump()
+    test('Installed discovery excludes wrappers and retains import validation',"const boxes=[...document.querySelectorAll('#discovery-form input')];check(boxes.length===3,'installed candidates only');check(boxes[0].disabled&&!boxes[0].checked,'existing game excluded');check(!boxes[1].disabled&&boxes[1].checked,'new installed game selected');check(boxes[2].disabled,'unverified launch excluded');check(!q('#dialog').textContent.includes('Running entries'),'no process section');check(!q('#dialog [name=pid]'),'no PID imports');")
+    snap('installed-game-discovery')
+    js("click('#discovery-form [type=submit]')");pump()
+    test('Installed import submits only selected installed entries',"const imports=bridge.calls.filter(c=>c.command==='import_discovered_games');check(imports.length===1&&JSON.stringify(imports[0].args.indices)==='[1]','installed index submitted');check(!bridge.calls.some(c=>c.command==='import_running_games'||c.command==='running_game_candidates'),'no process commands');check(!q('#dialog').open,'import closes dialog');check(q('#toast').textContent==='1 game imported into the local library.','import feedback');click('[data-game=\"1\"]');")
+    test('Catalog detail and launch locking',"check(q('[data-action=launch-game]').disabled,'active session launch gate');check(q('.library-game').textContent.includes('Test game'),'catalog');click('.game-more summary');click('[data-action=edit-launch]');check(q('[name=arguments]').value==='--one\\n--two','arguments displayed on separate lines');const a=q('.picker-field input').getBoundingClientRect(),b=q('.picker-field button').getBoundingClientRect();check(Math.abs(a.top-b.top)<1&&Math.abs(a.height-b.height)<1,'file picker alignment');")
+    snap('launch-dialog')
+    js("click('#dialog [type=submit]')");pump()
+    test('Launch arguments round-trip',"check(bridge.launchArgs.length===2&&bridge.launchArgs[1]==='--two','separate args preserved')")
+    test('Per-game visibility keeps inheritance and saves live feedback',"const input=q('[data-override=overlay]');check(input.getAttribute('aria-label')==='Show in-game overlay','game label');input.value='Off';input.dispatchEvent(new Event('change',{bubbles:true}));click('[data-action=save-game]');",350)
+    test('Per-game saved reply refreshes the catalog',"check(q('[data-override=overlay]').value==='Off','saved off retained');check(q('#toast').textContent.includes('overlay was updated'),'live feedback');click('[data-action=reset-game]');click('[data-action=save-game]');",350)
+    test('Reset to global restores visibility inheritance',"check(q('[data-override=overlay]').value==='inherit','inheritance restored');")
+    test('Library has no retired replay override',"check(!q('[data-override=replay]'),'automatic replay has no off selector');const input=q('[data-override=overlay]');input.value='Off';input.dispatchEvent(new Event('change',{bubbles:true}));click('[data-game=\"2\"]');const other=q('[data-override=overlay]');other.value='On';other.dispatchEvent(new Event('change',{bubbles:true}));click('[data-action=save-game]');",350)
+    test('Saving another game preserves the first pending draft',"click('[data-game=\"1\"]');check(q('[data-override=overlay]').value==='Off','first draft retained');check(!q('.game-save-bar').hidden,'still unsaved');click('.game-more summary');click('[data-action=edit-launch]');click('#dialog [type=submit]');",350)
+    test('Saving launch details preserves pending profile settings',"check(q('[data-override=overlay]').value==='Off','launch refresh keeps draft');check(!q('.game-save-bar').hidden,'launch save does not commit profile');click('[data-action=discard-game]');check(q('[data-override=overlay]').value==='inherit','discard uses saved baseline');")
+    test('Precision dropdown keyboard commits a game override',"window.trigger=q('[data-override=overlay]').nextElementSibling;trigger.focus();trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}));trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));check(q('[data-override=overlay]').value==='Off','selected override');check(document.activeElement.classList.contains('precision-select-trigger'),'replacement focus');check(!q('[data-action=save-game]').disabled,'dirty save');click('[data-action=discard-game]');check(q('[data-override=overlay]').value==='inherit','discard restored inheritance');")
+    test('Library search survives selection',"const search=q('#game-search');search.value='local';search.dispatchEvent(new Event('input',{bubbles:true}));document.querySelectorAll('[data-game]')[1].click();check(q('#game-search').value==='local','filter retained');")
+    pump(200)
+    test('Missing banner keeps neutral header without poster fallback',"check(!q('.game-cover-banner img'),'no portrait substituted for missing banner');check(q('.game-cover').getBoundingClientRect().height<260,'missing art keeps header compact');")
+    snap('library')
+    js("click('[data-game=\"1\"]');bridge.idle=true;window.dispatchEvent(new Event('focus'));");pump(2800)
+    test('Installed game is launchable when no session owns the runtime',"check(!q('[data-action=launch-game]').disabled,'installed launch enabled');check(q('#game-installation-note').hidden,'no installed warning');const select=q('[data-override=overlay]');select.value='Off';select.dispatchEvent(new Event('change',{bubbles:true}));window.retainedBanner=q('.game-cover-banner img');window.retainedPoster=q('.library-game img');window.retainedDraft=q('[data-override=overlay]');bridge.installation={'1':'not_installed','2':'installed'};window.dispatchEvent(new Event('focus'));")
+    pump(1600)
+    test('Uninstall changes only launch availability and preserves draft and artwork',"const launch=q('[data-action=launch-game]'),note=q('#game-installation-note');check(launch.disabled,'launch stays disabled through runtime updates');check(note.textContent==='Not installed'&&!note.hidden,'not installed label');check(launch.getAttribute('aria-describedby')===note.id,'accessible explanation');check(note.getBoundingClientRect().top>launch.getBoundingClientRect().bottom,'note below launch');check(q('.game-cover-banner img')===retainedBanner&&q('.library-game img')===retainedPoster,'artwork nodes retained');check(q('[data-override=overlay]')===retainedDraft&&retainedDraft.value==='Off','draft retained');check(!q('[data-action=save-game]').disabled,'profile remains editable');check(getComputedStyle(q('.game-detail')).opacity==='1','entry is not dimmed');")
+    snap('library-not-installed')
+    js("bridge.installationFailure=true;window.dispatchEvent(new Event('focus'))");pump(300)
+    test('Unreadable installation evidence is not mislabeled as uninstalled',"check(q('[data-action=launch-game]').disabled,'unknown launch blocked');check(q('#game-installation-note').textContent==='Installation status unavailable','accurate unknown label');bridge.installationFailure=false;bridge.installation={'1':'installed','2':'installed'};window.dispatchEvent(new Event('focus'));")
+    pump(300)
+    test('Reinstall restores launch without changing saved or draft settings',"check(!q('[data-action=launch-game]').disabled,'reinstalled launch enabled');check(q('#game-installation-note').hidden,'warning removed');check(q('[data-override=overlay]').value==='Off','draft still intact');click('[data-action=discard-game]');bridge.idle=false;")
+    js('bridge.idle=true');pump(2800)
+    route('global')
+    test('HUD preview retains native FPS typography',"check(getComputedStyle(q('.hud-native-value')).fontSize==='24px','native 24px measurement font');")
+    test('Clean global settings hide draft actions',"check(q('.settings-save-bar').hidden,'clean bar hidden')")
+    snap('global-overlay')
+    test('Global toggles preserve booleans across input and change',"q('[data-global=overlay]').click();click('[data-action=save-global]')")
+    pump()
+    test('Boolean persisted through native payload',"const save=bridge.calls.findLast(c=>c.command==='save_global_settings');check(save.args.input.overlay===false,'boolean false persisted');check(save.args.expectedRevision==='1','optimistic revision preserved');check(q('#hud').hidden,'overlay off preview');check(q('[data-global=overlay]').getAttribute('aria-label')==='Show in-game overlay','clear visibility label');check(q('.settings-save-bar').hidden,'save hides bar');q('[data-global=overlay]').click();")
+    test('Conflicts retain unsaved draft',"bridge.conflict=true;click('[data-action=save-global]')")
+    pump()
+    test('Conflict feedback and retry state',"check(q('#toast').textContent.includes('changed elsewhere'),'conflict surfaced');check(!q('[data-action=save-global]').disabled,'draft preserved');bridge.conflict=false;click('[data-action=discard-global]');check(!q('[data-global=overlay]').checked,'discard uses saved false');check(q('.settings-save-bar').hidden,'discard hides bar');")
+    test('Preset and range update native preview',"const preset=q('[data-global=preset]');preset.value='Custom';preset.dispatchEvent(new Event('change',{bubbles:true}));check(!q('[data-metric=FPS]').disabled,'custom metrics enabled');const range=q('[data-global=scale]');range.value='150';range.dispatchEvent(new Event('input',{bubbles:true}));check(q('#hud').style.getPropertyValue('--hud-scale')==='1.5','native geometry scale');check(range.style.getPropertyValue('--range-fill')!=='','precision fill');")
+    js("click('[data-global-tab=replay]')");pump()
+    test('Draft survives global tab switch and 120 FPS is gated',"check(!q('[data-action=save-global]').disabled,'draft retained across tabs');check(q('[data-global=fps] option[value=\"120\"]').disabled,'unsupported capture rate gated');const a=q('.replay-pref-actions').getBoundingClientRect(),above=q('.replay-pref-actions').previousElementSibling.getBoundingClientRect();check(a.top-above.bottom>=15,'folder action divider spacing')")
+    test('Global draft actions remain at viewport bottom while scrolling',"const bar=q('.settings-save-bar');check(!bar.hidden,'dirty bar shown');scrollTo(0,document.documentElement.scrollHeight);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed while scrolled');scrollTo(0,0);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed at page start');")
+    snap('global-replay')
+    js("click('[data-global-tab=shortcuts]')");pump()
+    test('All nine shortcut assignments remain accessible',"check(document.querySelectorAll('[data-shortcut]').length===9,'nine shortcuts');const shortcut=document.querySelectorAll('[data-shortcut]')[1];shortcut.focus();shortcut.dispatchEvent(new KeyboardEvent('keydown',{key:'F8',ctrlKey:true,bubbles:true}));click('[data-action=save-global]')")
+    pump();test('Separate shortcut save does not discard profile draft',"check(bridge.calls.some(c=>c.command==='save_shortcuts'&&c.args.shortcuts['15']==='Ctrl+F8'),'shortcut payload');click('[data-global-tab=overlay]');check(!q('[data-action=save-global]').disabled,'profile still dirty');click('[data-action=discard-global]')")
+    js("click('[data-global-tab=shortcuts]')");snap('global-shortcuts')
+    test('Clear all removes every shortcut without changing replay settings',"click('[data-action=clear-shortcuts]');check([...document.querySelectorAll('[data-shortcut]')].every(i=>i.value===''),'all fields blank');click('[data-action=save-global]');",350)
+    test('Empty shortcut set saves and disables keyboard activation',"const saved=bridge.calls.findLast(c=>c.command==='save_shortcuts');check(Object.values(saved.args.shortcuts).every(v=>!v),'empty assignments submitted');check(q('#toast').textContent.includes('All shortcuts cleared'),'clear feedback');check(!q('[data-action=save-global]')||q('[data-action=save-global]').disabled,'saved shortcuts clean');")
+    snap('shortcuts-cleared')
+    test('Save shortcut works without a menu shortcut',"const input=document.querySelectorAll('[data-shortcut]')[1];input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'F8',bubbles:true}));click('[data-action=save-global]');",350)
+    test('Menu can be reassigned after clearing all shortcuts',"const saved=bridge.calls.findLast(c=>c.command==='save_shortcuts');check(saved.args.shortcuts['15']==='F8'&&!saved.args.shortcuts.overlay,'save-only binding');const input=q('[data-shortcut]');input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'T',ctrlKey:true,shiftKey:true,bubbles:true}));click('[data-action=save-global]');",350)
+    js("click('[data-global-tab=replay]')");pump()
+    test('Automatic replay replaces the global off control',"check(!q('[data-global=replayEnabled]'),'no replay off control');check(q('#workspace').textContent.includes('Automatic'),'automatic status');q('[data-replay-preference=outside]').click();",350)
+    test('Outside click preference does not resend a stale shortcut',"const write=bridge.calls.findLast(c=>c.command==='set_replay_overlay_behavior');check(Object.keys(write.args).length===1&&Object.hasOwn(write.args,'closeOnOutsideClick'),'only changed preference sent');check(values.shortcuts.overlay==='Ctrl+Shift+T','new menu shortcut retained');")
+    route('history');snap('history')
+    test('History chart and inspector retain recorded data',"click('[data-history-view=temperature]');const slider=q('[data-history-cursor]');slider.value='1200';slider.dispatchEvent(new Event('input',{bubbles:true}));check(q('#history-moment-cpu-temp').textContent==='61.0°C','CPU sample');check(q('#history-moment-gpu-temp').textContent==='67.0°C','GPU sample');check(document.querySelectorAll('.timeline-trace').length===2,'both traces');")
+    snap('history-temperatures')
+    test('History labels align with grid lines and include units',"const svg=q('.history-timeline-chart svg');for(const label of document.querySelectorAll('.history-timeline-chart .y-axis span')){const grid=q('.gridline[data-axis-value=\"'+label.dataset.axisValue+'\"]');const y=Number(grid.getAttribute('d').split(' ')[1].split('H')[0]);const pt=new DOMPoint(0,y).matrixTransform(svg.getScreenCTM());const rect=label.getBoundingClientRect();check(Math.abs(rect.top+rect.height/2-pt.y)<1,'tick/grid mismatch');check(label.textContent.includes('°C'),'temperature unit');}check(q('.history-timeline-chart .y-axis').getBoundingClientRect().width>=70,'readable axis gutter');")
+    test('History thumb, marker, output and selected observation agree',"const slider=q('[data-history-cursor]');for(const value of [0,900,1800]){slider.value=value;slider.dispatchEvent(new Event('input',{bubbles:true}));const cursor=Number(slider.value),svg=q('.history-timeline-chart svg'),marker=q('#history-cursor-line');const pt=new DOMPoint(Number(marker.getAttribute('x1')),0).matrixTransform(svg.getScreenCTM());const rect=slider.getBoundingClientRect(),thumb=rect.left+7+(rect.width-14)*cursor/1800;check(Math.abs(pt.x-thumb)<1,'thumb/marker mismatch '+value);check(q('#history-cursor-time').textContent===q('#history-slider-time').textContent+' into session','heading agrees');check(slider.getAttribute('aria-valuetext')===q('#history-cursor-time').textContent,'accessible time agrees');}slider.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));check(Math.abs(Number(slider.value)-94*1800/95)<.001,'previous actual observation');")
+    test('History load axis is fixed at 0–100 percent',"click('[data-history-view=utilization]');check([...document.querySelectorAll('.y-axis span')].map(el=>el.textContent).join('|')==='0 %|25 %|50 %|75 %|100 %','load ticks');")
+    snap('history-load')
+    test('History graph retains all observations and actual FPS scale',"click('[data-history-view=fps]');const trace=q('.timeline-trace');check(trace.points.numberOfItems===96,'all journal observations retained');const ticks=[...document.querySelectorAll('.y-axis span')];check(ticks.at(-1).textContent==='150 FPS','raw FPS extrema determine scale');")
+    snap('history-fps')
+    js("q('#toast').hidden=true;q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-inspector');js('scrollTo(0,0)')
+    js("bridge.historyFixture=[{id:20,game:'Known temperature and load readings',started_unix:1789300000,duration_seconds:12,timeline:[0,3,9,12].map((elapsed_seconds,i)=>({elapsed_seconds,fps:[60,80,90,120][i],frame_time_ms:[10,20,5,12][i],cpu_temperature_celsius:[70,80,75,70][i],gpu_temperature_celsius:[75,72,80,75][i],cpu_utilization_percent:[25,80,75,100][i],gpu_utilization_percent:[60,40,80,0][i]}))}];click('[data-action=reload-history]')");pump()
+    test('All History metrics plot the values shown by the inspector',r"""
+      const cases=[['fps',['primary'],[[60,80,90,120]],['#history-moment-fps']],['frame-time',['primary'],[[10,20,5,12]],['#history-moment-frame']],['temperature',['cpu','gpu'],[[70,80,75,70],[75,72,80,75]],['#history-moment-cpu-temp','#history-moment-gpu-temp']],['utilization',['cpu','gpu'],[[25,80,75,100],[60,40,80,0]],['#history-moment-cpu-load','#history-moment-gpu-load']]];
+      for(const [metric,kinds,values,readings] of cases){
+        click('[data-history-view='+metric+']');
+        const svg=q('.history-timeline-chart svg'),matrix=svg.getScreenCTM();
+        const labels=[...document.querySelectorAll('.y-axis span')];
+        const bottom=labels[0].getBoundingClientRect(),top=labels.at(-1).getBoundingClientRect();
+        const bottomY=bottom.top+bottom.height/2,topY=top.top+top.height/2;
+        const low=parseFloat(labels[0].textContent),high=parseFloat(labels.at(-1).textContent);
+        for(const [index,time] of [0,3,9,12].entries()){
+          const slider=q('[data-history-cursor]');slider.value=time;slider.dispatchEvent(new Event('input',{bubbles:true}));
+          for(const [series,kind] of kinds.entries()){
+            const trace=q('polyline.timeline-trace.'+kind),point=trace.points[index];
+            const screen=new DOMPoint(point.x,point.y).matrixTransform(matrix);
+            const plottedValue=low+(bottomY-screen.y)/(bottomY-topY)*(high-low);
+            check(Math.abs(plottedValue-values[series][index])<.02,metric+' '+kind+' trace disagrees with left labels');
+            check(parseFloat(q(readings[series]).textContent)===values[series][index],metric+' '+kind+' inspector disagrees');
+            check(Math.abs(point.x-Number(q('#history-cursor-line').getAttribute('x1')))<.001,'cursor and observation disagree');
+            if(values[series][index]===80&&(metric==='temperature'||metric==='utilization')){
+              const tick=labels.find(el=>parseFloat(el.textContent)===75).getBoundingClientRect();
+              check(screen.y<tick.top+tick.height/2,'80 must be ABOVE the 75 tick');
+            }
+          }
+        }
+      }
+    """)
+    test('CPU and GPU use consistent distinct red tints',"for(const metric of ['temperature','utilization']){click('[data-history-view='+metric+']');const cpu=getComputedStyle(q('.timeline-trace.cpu')).stroke,gpu=getComputedStyle(q('.timeline-trace.gpu')).stroke;check(cpu==='rgb(231, 71, 79)'&&gpu==='rgb(255, 146, 151)','red series colors');check(getComputedStyle(q('.history-chart-legend .cpu i')).backgroundColor===cpu,'CPU legend');check(getComputedStyle(q('.history-chart-legend .gpu i')).backgroundColor===gpu,'GPU legend');check(getComputedStyle(q('#history-moment-cpu-'+(metric==='temperature'?'temp':'load'))).color===getComputedStyle(q('#history-moment-fps')).color,'CPU reading keeps neutral text');check(getComputedStyle(q('#history-moment-gpu-'+(metric==='temperature'?'temp':'load'))).color===getComputedStyle(q('#history-moment-fps')).color,'GPU reading keeps neutral text');}")
+    js("click('[data-history-view=temperature]');const slider=q('[data-history-cursor]');slider.value=3;slider.dispatchEvent(new Event('input',{bubbles:true}));q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-temperature-accuracy')
+    js("click('[data-history-view=utilization]');q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-load-accuracy')
+    js("scrollTo(0,0);click('[data-history-view=fps]')")
+    js("bridge.historyFixture=[{id:21,game:'Fractional load readings',started_unix:1789300000,duration_seconds:12,timeline:[0,3,9,12].map((elapsed_seconds,i)=>({elapsed_seconds,cpu_utilization_percent:[0,24.9999,25.0001,37.4256][i],gpu_utilization_percent:[10,20,30,40][i]}))}];click('[data-action=reload-history]')");pump()
+    js("click('[data-history-view=utilization]')")
+    test('Load uses session extrema and retains journal fractions at every cursor',r"""
+      {
+        const labels=[...document.querySelectorAll('.y-axis span')];
+        check(labels.at(-1).textContent==='40 %','low-load scale follows session');
+        const cpu=q('polyline.timeline-trace.cpu'),gpu=q('polyline.timeline-trace.gpu');
+        const cpuValues=[0,24.9999,25.0001,37.4256],gpuValues=[10,20,30,40];
+        for(const [i,time] of [0,3,9,12].entries()){
+          const slider=q('[data-history-cursor]');slider.value=time;slider.dispatchEvent(new Event('input',{bubbles:true}));
+          check(q('#history-moment-cpu-load').textContent===cpuValues[i]+'%','exact recorded CPU percentage');
+          check(q('#history-moment-gpu-load').textContent===gpuValues[i]+'%','exact GPU percentage');
+          for(const [line,value] of [[cpu,cpuValues[i]],[gpu,gpuValues[i]]]){
+            const point=line.points[i];
+            check(Math.abs((210-point.y)/190*40-value)<.00001,'load point and axis calculation agree');
+            check(Math.abs(point.x-Number(q('#history-cursor-line').getAttribute('x1')))<.001,'load cursor visits exact observation');
+          }
+        }
+      }
+    """)
+    js("q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-fractional-load');js("click('[data-history-view=fps]')")
+    js("bridge.historyFixture=[{id:10,game:'Sparse recorded session',started_unix:1789300000,duration_seconds:20,timeline:[{elapsed_seconds:2,fps:60,frame_time_ms:16.67},{elapsed_seconds:3,fps:360,frame_time_ms:2.78},{elapsed_seconds:9,fps:null},{elapsed_seconds:12,fps:45,frame_time_ms:22.22}]}];click('[data-action=reload-history]')");pump()
+    test('Sparse History preserves peaks, gaps and unavailable time',"check(q('.y-axis span:last-child').textContent==='400 FPS','spike scale');check(q('polyline.timeline-trace').points.numberOfItems===2,'gap splits trace');check(q('circle.timeline-observation')!==null,'isolated sample visible');check(Number(q('polyline.timeline-trace').points[0].x)===90,'no fabricated session-start point');const slider=q('[data-history-cursor]');slider.value=3;slider.dispatchEvent(new Event('input',{bubbles:true}));check(q('#history-moment-fps').textContent==='360.0','recorded peak');slider.value=0;slider.dispatchEvent(new Event('input',{bubbles:true}));check(q('#history-moment-fps').textContent==='—','no extrapolated FPS');check(q('#history-cursor-time').textContent==='00:00 into session','empty position time');")
+    js("q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-gaps');js('scrollTo(0,0)')
+    js("bridge.historyFixture=[{id:11,game:'Legacy retained frames',started_unix:1789300000,duration_seconds:10,frame_intervals_ns:[500000,20000000]}];click('[data-action=reload-history]')");pump()
+    test('Legacy History keeps fractional timestamps and uncapped FPS',"const slider=q('[data-history-cursor]');check(q('#history-moment-fps').textContent==='50.0','last retained frame');slider.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));check(q('#history-moment-fps').textContent==='2000.0','uncapped reciprocal');check(q('#history-slider-time').textContent==='00:09.98','fractional retained time');slider.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}));check(q('#history-moment-fps').textContent==='50.0','exact end after range round-trip');")
+    js("bridge.historyFixture=[{id:12,game:'No observations',started_unix:1789300000,duration_seconds:0}];click('[data-action=reload-history]')");pump()
+    test('Empty History disables the timeline without inventing numbers',"check(q('[data-history-cursor]').disabled,'disabled scrubber');check(q('#history-moment-fps').textContent==='—','unknown FPS');check(q('#history-slider-time').textContent==='00:00','zero duration');check(!q('#history-cursor-line'),'no fabricated graph');bridge.historyFixture=null;click('[data-action=reload-history]');")
+    pump()
+    route('settings');snap('settings')
+    test('Settings exposes only current preferences',"check(!q('[data-module]'),'no module switches');check(!q('[data-preference=motion]'),'no motion toggle');check(!q('[data-action=reload-preferences]'),'no reload button');check(!q('#workspace').textContent.includes('Feature modules'),'no module section');check(!q('.app-about'),'no redundant about card');check(!q('#workspace').textContent.includes('Measurement & storage'),'no fixed implementation counters');check(q('[data-preference=automatic-updates]').checked,'automatic updates default on');check(q('[data-action=check-for-updates]').textContent==='Check for updates','manual action');q('[data-preference=tray]').click()")
+    pump();test('Tray persists through the native command',"check(bridge.calls.some(c=>c.command==='set_close_to_tray'&&c.args.enabled===true),'tray save');check(q('[data-preference=tray]').checked,'saved tray state');")
+    js("q('[data-preference=tray]').click()");pump()
+    test('Disabling tray sends the native removal immediately',"check(bridge.calls.findLast(c=>c.command==='set_close_to_tray').args.enabled===false,'native removal requested');check(!q('[data-preference=tray]').checked,'disabled state shown');")
+    js("q('[data-preference=automatic-updates]').click()");pump()
+    test('Automatic update preference persists independently',"check(bridge.calls.findLast(c=>c.command==='set_automatic_updates').args.enabled===false,'automatic checks disabled');check(!q('[data-preference=automatic-updates]').checked,'saved update preference shown');click('[data-action=check-for-updates]');")
+    pump();test('Manual update check reports authenticated-source readiness honestly',"check(bridge.calls.some(c=>c.command==='check_for_updates'),'manual native check');check(q('[data-update-state]').textContent==='Source pending','honest readiness state');check(q('#toast').textContent.includes('not configured'),'honest check feedback');")
+    snap('settings-updates')
+    route('replay');snap('replay-loading')
+    js("bridge.replayInactive=true;click('[data-action=preview-replay-menu]')");pump(1600)
+    test('Desktop replay preview has no surrounding native window or shell',"const preview=q('#replay-preview'),panel=q('#replay-preview .replay-menu-panel');check(preview.open,'preview opens');check(!preview.querySelector('.sidebar,.topbar,.brand'),'preview contains only menu');check(!bridge.calls.some(c=>c.command==='preview_replay_menu'),'no separate transparent native surface');check(preview.getBoundingClientRect().height===panel.getBoundingClientRect().height,'no outer bars');check(preview.getBoundingClientRect().width===panel.getBoundingClientRect().width,'no side bars');check(q('#replay-menu-status-title').textContent==='Replay inactive','observed inactive state');check([...preview.querySelectorAll('[data-menu-duration]')].every(b=>b.disabled),'inactive durations disabled');check(!q('#replay-menu-feedback').textContent.includes('buffering'),'inactive does not claim buffering');check(document.activeElement===preview.querySelector('h1'),'neutral title focus');")
+    snap('replay-preview-in-app')
+    window.resize(640,720);pump(200)
+    test('Replay preview fits a narrow window',"const bounds=q('#replay-preview').getBoundingClientRect();check(bounds.left>=0&&bounds.right<=innerWidth,'fits width');check(bounds.top>=0&&bounds.bottom<=innerHeight,'fits height');check(q('#replay-preview').scrollWidth<=q('#replay-preview').clientWidth,'no horizontal scrollbar');")
+    snap('replay-preview-narrow')
+    js("click('#replay-preview [data-action=hide-replay-menu]')");pump(200)
+    test('Preview dismissal retains the replay page and returns button focus',"check(!q('#replay-preview').open,'dismissed');check(location.hash==='#replay','route unchanged');check(document.activeElement===q('[data-action=preview-replay-menu]'),'focus returned');bridge.replayInactive=false;")
+    window.resize(1440,1000);pump(200)
+    js("click('[data-action=preview-replay-menu]')");pump(300)
+    test('Preview uses the existing save command when replay is ready',"check(q('#replay-menu-status-title').textContent==='Ready to save','ready state refreshed on open');check(!q('#replay-preview [data-menu-duration]').disabled,'ready save enabled');click('#replay-preview [data-menu-duration=\"30\"]');")
+    pump(200)
+    test('Preview save requests the selected duration and keeps the menu usable',"check(bridge.calls.some(c=>c.command==='save_replay'&&c.args.durationSeconds===30),'native save duration');check(q('#replay-preview').open,'save leaves feedback visible');check(q('#replay-menu-feedback').textContent.includes('save requested'),'request feedback');click('#replay-preview [data-action=hide-replay-menu]');")
+    pump(200)
+    test('Delete dialog uses spaced actions and neutral initial focus',"click('[data-action=delete-selected-clip]');const buttons=q('#delete-clip-form').querySelectorAll('button');check(buttons[1].getBoundingClientRect().left-buttons[0].getBoundingClientRect().right>=12,'button spacing');check(document.activeElement===q('#dialog-title'),'initial focus on title');")
+    snap('delete-dialog');js("click('#dialog [data-close]')")
+    route('replay-menu');snap('replay-menu');test('Replay menu presents real readiness and duration controls',"check(document.querySelectorAll('[data-menu-duration]').length===4,'native menu durations');check(!q('[data-menu-duration]').disabled,'ready save');")
+    window.resize(760,520);pump()
+    test('Replay preview canvas is transparent and contains only the menu',"check(getComputedStyle(document.documentElement).backgroundColor==='rgba(0, 0, 0, 0)','transparent root');check(getComputedStyle(document.body).backgroundColor==='rgba(0, 0, 0, 0)','transparent body');check(getComputedStyle(q('.sidebar')).display==='none','no sidebar');check(getComputedStyle(q('.topbar')).display==='none','no header');check(document.documentElement.scrollHeight<=innerHeight,'no black overflow region');check(q('.replay-menu-panel').getBoundingClientRect().bottom<=innerHeight,'menu fits');")
+    snap('replay-menu-native-size')
+    pixels=GdkPixbuf.Pixbuf.new_from_file(str(ARTIFACTS/'replay-menu-native-size.png'))
+    assert pixels.get_has_alpha(), 'Replay preview snapshot must retain alpha'
+    data=pixels.get_pixels();stride=pixels.get_rowstride();channels=pixels.get_n_channels()
+    for x,y in [(0,0),(10,260),(380,5),(380,515)]:
+        assert data[y*stride+x*channels+3]==0, 'Opaque pixel outside replay menu'
+    checks.append('Replay preview pixels outside panel are fully transparent')
+    window.resize(1440,1000);pump()
+    route('overview');js('bridge.unavailable=true');pump(1400);test('Unavailable RAM never displays stale measurements',"check(q('#ram-used').textContent==='—','RAM cleared');check(q('#ram-meter').style.width==='0%','unavailable meter cleared');bridge.unavailable=false;")
+    window.resize(1040,900);pump();route('history');js("q('#toast').hidden=true;q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-compact')
+    test('History remains readable at compact width',"check(document.documentElement.scrollWidth<=innerWidth+1,'history overflow');check(q('.history-timeline-chart svg').getBoundingClientRect().width>200,'plot remains visible');")
+    route('global');snap('global-compact')
+    test('Compact window does not overflow horizontally',"check(document.documentElement.scrollWidth<=innerWidth+1,'horizontal overflow');check(bridge.errors.length===0,bridge.errors.join('; '));")
+    js("click('[data-global-tab=overlay]');q('[data-global=overlay]').click();q('#toast').hidden=true")
+    test('Compact global draft actions remain at window bottom',"const rect=q('.settings-save-bar').getBoundingClientRect();check(Math.abs(innerHeight-rect.bottom-16)<1,'compact bottom');check(rect.right<=innerWidth,'compact right edge');")
+    snap('global-dirty-compact')
+    window.resize(640,720);pump()
+    test('Narrow draft actions fit the viewport and hide after discard',"const bar=q('.settings-save-bar'),rect=bar.getBoundingClientRect();check(Math.abs(innerHeight-rect.bottom-12)<1,'narrow bottom');for(const button of bar.querySelectorAll('button')){const b=button.getBoundingClientRect();check(b.left>=0&&b.right<=innerWidth&&b.bottom<=innerHeight,'visible action');}check(document.documentElement.scrollWidth<=innerWidth+1,'narrow overflow');")
+    snap('global-dirty-narrow')
+    js("click('[data-action=discard-global]')")
+    test('Discard removes the narrow action bar',"check(q('.settings-save-bar').hidden,'bar hidden');check(document.body.dataset.unsaved==='false','content clearance removed');")
+    # A running game makes visibility an immediate, isolated save.
+    window.resize(1440,1000)
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/#global');pump(1800)
+    js("q('[data-global=scale]').value='105';q('[data-global=scale]').dispatchEvent(new Event('input',{bubbles:true}));click('[data-global-tab=replay]');q('[data-global=fps]').value='30';q('[data-global=fps]').dispatchEvent(new Event('change',{bubbles:true}));click('[data-global-tab=overlay]');q('[data-global=overlay]').click();")
+    pump(400)
+    test('Live visibility saves immediately without committing pending recording or appearance edits',"const save=bridge.calls.findLast(c=>c.command==='save_global_settings');check(save.args.input.overlay===false,'hide persisted without Save button');check(save.args.input.fps===60&&save.args.input.scale===100,'other draft values excluded');check(q('[data-global=scale]').value==='105','appearance draft retained');check(!q('.settings-save-bar').hidden,'other drafts still pending');check(!q('[data-global=overlay]').checked,'hidden');check(!q('[data-global=overlay]').disabled,'can show again');")
+    snap('global-live-overlay-hidden')
+    js("q('[data-global=overlay]').click()");pump(400)
+    test('Live overlay can be shown again without recording reconfiguration',"check(bridge.calls.findLast(c=>c.command==='save_global_settings').args.input.overlay===true,'show persisted');check(q('[data-global=overlay]').checked,'shown');check(q('[data-global=scale]').value==='105','draft still intact');bridge.conflict=true;q('[data-global=overlay]').click();")
+    pump(400)
+    test('Failed live visibility save restores the saved toggle and preserves drafts',"check(q('[data-global=overlay]').checked,'last saved shown state restored');check(!q('[data-global=overlay]').disabled,'retry usable');check(q('#toast').textContent.includes('changed elsewhere'),'error visible');check(q('[data-global=scale]').value==='105','draft retained');bridge.conflict=false;click('[data-action=discard-global]');check(q('[data-global=overlay]').checked,'discard does not undo saved visibility');check(q('.settings-save-bar').hidden,'draft bar cleared');")
+    # Cold-load the actual native menu entry, not a hash change in an already
+    # initialized desktop document. This is the path the global hotkey opens.
+    window.resize(760,520);pump()
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/replay-menu.html');pump(1400)
+    test('Native menu cold load has no desktop shell or unrelated data requests',"check(location.pathname==='/replay-menu.html','dedicated native entry');check(!q('.sidebar,.topbar,.brand,.app-shell,#workspace'),'desktop shell is absent');check(document.body.dataset.page==='replay-menu','static identity');check(bridge.calls.every(c=>['replay_runtime_status','replay_preferences'].includes(c.command)),'only menu reads');check(q('#replay-menu-status-title').textContent==='Ready to save','runtime read');check(document.activeElement===q('h1'),'neutral initial focus');check(!bridge.errors.length,bridge.errors.join(';'));")
+    snap('native-menu-cold')
+    pixels=GdkPixbuf.Pixbuf.new_from_file(str(ARTIFACTS/'native-menu-cold.png'))
+    assert pixels.get_has_alpha(), 'Native menu must retain alpha'
+    data=pixels.get_pixels();stride=pixels.get_rowstride();channels=pixels.get_n_channels()
+    for x,y in [(0,0),(10,260),(380,5),(380,515)]:
+        assert data[y*stride+x*channels+3]==0, 'Opaque native menu surround'
+    checks.append('Cold native menu has transparent pixels on all four sides')
+    js("bridge.replayInactive=true");pump(1200)
+    test('Native menu updates inactive controls without replacing focus',"check(q('#replay-menu-status-title').textContent==='Replay inactive','inactive status');check([...document.querySelectorAll('[data-menu-duration]')].every(b=>b.disabled),'inactive saves disabled');bridge.replayInactive=false;bridge.failSave=true;")
+    pump(1200);js("click('[data-menu-duration=\"30\"]')");pump(300)
+    test('Native menu recovers controls after a rejected save',"check(q('#replay-menu-feedback').textContent==='Fixture save failed','save error visible');check(!q('[data-menu-duration]').disabled,'retry available');bridge.failSave=false;click('[data-menu-duration=\"30\"]');")
+    pump(300)
+    test('Native menu requests saves through the native bridge',"check(q('#replay-menu-feedback').textContent.includes('save requested'),'honest save feedback');check(bridge.calls.some(c=>c.command==='save_replay'&&c.args.durationSeconds===30),'duration preserved');bridge.failRuntime=true;")
+    pump(1200)
+    test('Native menu clears stale readiness when the runtime disconnects',"check(q('#replay-menu-status-title').textContent==='Replay unavailable','unavailable status');check(q('[data-menu-duration]').disabled,'stale saves disabled');bridge.failRuntime=false;bridge.outsideClick=false;")
+    pump(1200)
+    test('Native menu respects disabled outside dismissal',"window.beforeCloses=bridge.calls.filter(c=>c.command==='hide_replay_menu').length;document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(bridge.calls.filter(c=>c.command==='hide_replay_menu').length===beforeCloses,'outside click ignored');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));check(bridge.calls.filter(c=>c.command==='hide_replay_menu').length===beforeCloses+1,'Escape closes');bridge.outsideClick=true;")
+    pump(1200)
+    test('Native menu supports outside and explicit dismissal',"window.beforeCloses=bridge.calls.filter(c=>c.command==='hide_replay_menu').length;document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));click('[data-action=hide-replay-menu]');check(bridge.calls.filter(c=>c.command==='hide_replay_menu').length===beforeCloses+2,'both dismissal controls');window.dispatchEvent(new Event('focus'));check(document.activeElement===q('h1'),'reopen neutral focus');")
+    pump(300)
+    test('Native menu refreshes when reopened without retaining old save feedback',"check(!q('#replay-menu-feedback').dataset.manual,'old feedback cleared');check(q('#replay-menu-status-title').textContent==='Ready to save','fresh status');check(!bridge.errors.length,bridge.errors.join(';'));")
+    (ARTIFACTS/'workspace-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
+    print(f'PASS: {len(checks)} workspace checks. Screenshots: {ARTIFACTS}')
+finally:
+    window.destroy();server.shutdown()

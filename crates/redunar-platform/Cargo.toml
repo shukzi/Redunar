@@ -1,0 +1,15 @@
+[package]
+name = "redunar-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = "0.2"
+nix = { version = "0.29", default-features = false, features = ["socket"] }
+redunar-capture = { path = "../redunar-capture" }
+redunar-core = { path = "../redunar-core" }
+
+[lints]
+workspace = true

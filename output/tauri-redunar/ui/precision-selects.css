@@ -1,0 +1,24 @@
+/* Selected Precision treatment. Native selects retain values and form behavior. */
+.precision-select { display:inline-block; position:relative; min-width:125px; max-width:210px; vertical-align:middle; }
+.precision-select-trigger { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:40px; padding:10px 12px; text-align:left; font:12px/1.5 var(--sans); color:var(--text); background:#121212; border:1px solid #414141; border-radius:7px; cursor:pointer; transition:background .12s,border-color .12s; }
+.precision-select-trigger:hover:not(:disabled) { border-color:#777; }
+.precision-select-trigger[aria-expanded=true] { border-color:var(--red); }
+.precision-select-trigger:focus-visible { outline:2px solid var(--red); outline-offset:3px; }
+.precision-select-trigger>svg { width:14px; height:14px; flex:none; color:#aaa; transition:transform .12s; }
+.precision-select-trigger[aria-expanded=true]>svg { transform:rotate(180deg); color:var(--red); }
+.precision-select-trigger:disabled { opacity:1; color:#777; background:#101010; border-color:#282828; cursor:default; }
+.precision-select-value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.precision-select-menu { position:fixed; z-index:100; box-sizing:border-box; max-height:300px; overflow-y:auto; overscroll-behavior:contain; padding:5px; margin:0; list-style:none; border:1px solid #494949; border-radius:8px; background:#161616; box-shadow:0 16px 35px #000b; scrollbar-width:thin; font:12px/1.5 var(--sans); color:var(--text); }
+.precision-select-option { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:40px; padding:10px; border:1px solid transparent; border-radius:4px; cursor:pointer; }
+.precision-select-option.active { background:#292929; border-color:#494949; }
+.precision-select-option[aria-selected=true] { background:#271516; }
+.precision-select-option[aria-selected=true].active { border-color:#853338; }
+.precision-select-option[aria-disabled=true] { color:#737373; cursor:default; }
+.precision-select-check { flex:none; color:var(--red); visibility:hidden; }
+.precision-select-option[aria-selected=true] .precision-select-check { visibility:visible; }
+.field>.precision-select { flex-shrink:0; }
+.sample-state-fields label { flex-wrap:wrap; }
+.sample-state-fields .precision-select { min-width:130px; }
+@media(max-width:520px) { .precision-select { min-width:115px; max-width:165px; } .precision-select-trigger { font-size:11px; } .field>.precision-select { max-width:55%; } }
+@media(pointer:coarse) { .precision-select-trigger,.precision-select-option { min-height:44px; } }
+@media(prefers-reduced-motion:reduce) { .precision-select-trigger,.precision-select-trigger>svg { transition:none; } }

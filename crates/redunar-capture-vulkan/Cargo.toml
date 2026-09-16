@@ -1,0 +1,24 @@
+[package]
+name = "redunar-capture-vulkan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nix = { version = "0.29", default-features = false, features = ["socket", "uio"] }
+redunar-capture = { path = "../redunar-capture" }
+redunar-core = { path = "../redunar-core" }
+
+# Vulkan is the only crate allowed to cross a native ABI boundary. Keep unsafe
+# code isolated here and require explicit unsafe blocks inside unsafe functions.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

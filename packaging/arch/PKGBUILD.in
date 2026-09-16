@@ -1,0 +1,27 @@
+pkgname=redunar-app
+pkgver=@REDUNAR_ARCH_PKGVER@
+pkgrel=@REDUNAR_ARCH_PKGREL@
+pkgdesc='Instant replay and game performance metrics'
+arch=('x86_64')
+url='https://redunar.com'
+license=('GPL-3.0-or-later')
+depends=(
+  'ffmpeg'
+  'gst-libav'
+  'gtk3'
+  'libdrm'
+  'opus'
+  'pipewire-audio'
+  'systemd'
+  'webkit2gtk-4.1'
+)
+conflicts=('redunar' 'redunar-tauri')
+replaces=('redunar' 'redunar-tauri')
+install=redunar-app.install
+source=('redunar-app-package-root.tar.gz')
+sha256sums=('@REDUNAR_PACKAGE_ROOT_SHA256@')
+options=('!debug' '!strip')
+
+package() {
+  cp -a "$srcdir/usr" "$pkgdir/"
+}

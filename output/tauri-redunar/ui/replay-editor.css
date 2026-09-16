@@ -1,0 +1,48 @@
+/* The clip editor follows Redunar's website filmstrip reference. */
+.native-player { aspect-ratio: auto; min-height: 0; }
+.player-controls .timecode { margin-left: auto; }
+.media-load-status { display: flex; align-items: center; gap: 12px; padding-right: 16px; border-top: 1px solid #1e1d22; }
+.media-load-status .media-note { flex: 1; min-width: 0; margin: 0; border: 0; }
+.media-load-status .text-button { flex: none; font-size: 11px; }
+.replay-clip-editor { padding: 26px 28px 20px; background: #101012; border-top: 1px solid #29272e; }
+.clip-editor-heading { display: flex; align-items: start; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+.clip-editor-heading .editor-label { font: 10px Plex, monospace; letter-spacing: .15em; color: #a49a9f; }
+.clip-editor-heading h3 { margin: 8px 0 0; font-size: 22px; font-weight: 500; letter-spacing: -.7px; }
+.clip-selection-duration { text-align: right; flex: none; }
+.clip-selection-duration output { display: block; font: 24px Plex, monospace; color: #f2ecef; }
+.clip-selection-duration small { display: block; margin-top: 5px; font: 10px Plex, monospace; color: #a49a9f; }
+.clip-time-ruler { display: flex; justify-content: space-between; margin-bottom: 12px; font: 9px Plex, monospace; color: #a49a9f; }
+.replay-clip-editor .clip-timeline { position: relative; height: 78px; min-width: 0; width: 100%; background: #1b1b20; touch-action: none; cursor: pointer; }
+.clip-filmstrip { display: block; width: 100%; height: 100%; pointer-events: none; }
+.clip-filmstrip-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to right, #0009 0 var(--trim-in, 0%), transparent var(--trim-in, 0%) var(--trim-out, 100%), #0009 var(--trim-out, 100%) 100%); }
+.replay-clip-editor .timeline-selection { position: absolute; top: -2px; height: calc(100% + 4px); border: 2px solid var(--red); border-radius: 2px; background: transparent; pointer-events: none; }
+.replay-clip-editor .timeline-handle { appearance: none; position: absolute; z-index: 3; transform: translateX(-50%); margin: 0; padding: 0; cursor: ew-resize; top: -3px; width: 10px; height: calc(100% + 6px); border: 0; border-radius: 2px; background: #ef7183; }
+.replay-clip-editor .timeline-handle::after { content: ''; position: absolute; left: -7px; right: -7px; inset-block: -4px; }
+.replay-clip-editor .timeline-handle:hover, .replay-clip-editor .timeline-handle:focus-visible { background: #ffa8b3; }
+.replay-clip-editor .timeline-playhead { position: absolute; pointer-events: none; top: -9px; width: 1px; height: calc(100% + 18px); background: #fff; z-index: 2; }
+.replay-clip-editor .timeline-playhead::before { content: ''; position: absolute; top: -2px; left: -4px; border: 4px solid transparent; border-top: 5px solid #fff; }
+.clip-editor-footer { display: flex; align-items: center; gap: 20px; margin-top: 20px; }
+.clip-editor-footer .trim-time { display: flex; align-items: center; gap: 10px; color: #a49a9f; font: 10px Plex, monospace; text-transform: uppercase; }
+.clip-editor-footer output { color: #ded5d9; }
+.clip-editor-footer #export-clip-button { margin-left: auto; min-height: 40px; padding: 10px 16px; font-size: 12px; background: var(--button-bg); border-color: var(--button-border); }
+.clip-editor-footer #export-clip-button .icon { color: var(--red); }
+.clip-preview-status { min-height: 14px; margin-top: 12px; color: #a49a9f; font-size: 10px; }
+/* Finishing the asynchronous previews must not shift a scrolled clip list. */
+.clip-preview-status[hidden] { display: block !important; visibility: hidden; }
+.clip-timeline[aria-disabled="true"] { cursor: wait; }
+.replay-clip-editor .timeline-handle:focus-visible, .replay-clip-editor .clip-timeline:focus-visible { outline: 2px solid #fff; outline-offset: 5px; }
+@media (max-width: 1180px) {
+  .replay-clip-editor { padding: 22px 20px 18px; }
+  .clip-editor-heading h3 { font-size: 19px; }
+  .clip-selection-duration output { font-size: 21px; }
+  .clip-editor-footer { gap: 12px; }
+}
+@media (max-width: 600px) {
+  .replay-clip-editor { padding: 20px 16px; }
+  .clip-editor-heading { gap: 12px; margin-bottom: 24px; }
+  .clip-editor-heading h3 { font-size: 17px; }
+  .clip-time-ruler span:nth-child(even) { display: none; }
+  .clip-editor-footer { flex-wrap: wrap; }
+  .clip-editor-footer .trim-time { font-size: 9px; gap: 6px; }
+  .clip-editor-footer #export-clip-button { font-size: 10px; }
+}

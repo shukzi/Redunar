@@ -1,0 +1,83 @@
+/* Native desktop readability. Keep the approved layout and the HUD's own
+   preview scale; size the surrounding workspace without webview zoom. */
+@media (min-width: 701px) {
+  :root { --sidebar-width: 244px; }
+
+  .sidebar { width: var(--sidebar-width); }
+  .app-shell { margin-left: var(--sidebar-width); }
+  .skip-link { left: calc(var(--sidebar-width) + 14px); }
+  #toast { left: calc(50% + var(--sidebar-width) / 2); }
+
+  .brand { padding: 32px 23px 38px; gap: 12px; }
+  .brand .brand-mark { width: 36px; height: 36px; }
+  .brand .brand-wordmark { width: 138px; }
+  .brand small { font-size: 10px; }
+  .sidebar nav { padding: 0 14px; gap: 8px; }
+  .nav-link { height: 52px; padding: 0 14px; gap: 13px; font-size: 15px; }
+  .nav-link .icon { width: 21px; height: 21px; }
+  .nav-link.active:before { left: -15px; }
+  .nav-count { font-size: 11px; min-width: 21px; }
+  .sidebar-bottom { padding: 30px 23px 22px; }
+  .local-note { font-size: 12px; }
+  .local-note small { font-size: 10px; }
+  .settings-link { font-size: 15px; }
+
+  #workspace { max-width: 1760px; padding: 34px 36px 30px; font-size: 15px; }
+  .topbar { height: 70px; padding: 0 36px; font-size: 12px; }
+  .demo-badge { font-size: 11px; }
+  h1 { font-size: 34px; }
+  h2 { font-size: 21px; }
+  h3 { font-size: 16px; }
+  .page-heading p { font-size: 14px; }
+  .button { min-height: 41px; padding: 10px 16px; font-size: 12px; }
+  .button .icon { width: 16px; height: 16px; }
+  .pill { font-size: 11px; }
+  .panel { padding: 26px; }
+  .session-banner { padding: 23px 26px; }
+  .session-game h2 { font-size: 25px; }
+  .session-game small, .session-game p, .session-meta span { font-size: 11px; }
+  .session-meta strong { font-size: 12px; }
+  .section-heading p, .system-panel > p { font-size: 12px; }
+  .stat > span, .stat strong small { font-size: 11px; }
+  .stat strong { font-size: 36px; }
+  .panel-footer, .controls-panel .info-note { font-size: 11px; }
+  .shortcut-panel h3 { font-size: 15px; }
+  .shortcut-panel p { font-size: 12px; }
+
+  .field { min-height: 71px; padding: 21px 0; }
+  .field label, .shortcuts-panel .field label { font-size: 13px; }
+  .field p { font-size: 11px; }
+  .field select { font-size: 12px; }
+  .tabbar button, .global-tabs button { font-size: 12px; }
+  .controls-panel > p, .search input { font-size: 12px; }
+  .library-game strong { font-size: 13px; }
+  .library-game small, .catalog-label, .catalog-note p { font-size: 11px; }
+  .history-row strong { font-size: 15px; }
+  .history-row > small, .history-row > span { font-size: 11px; }
+  .history-stats .stat strong { font-size: 28px; }
+
+  /* A narrower native window keeps readable navigation and uses the existing
+     stacked page layouts instead of shrinking the whole interface. */
+  @media (max-width: 1180px) {
+    :root { --sidebar-width: 220px; }
+    .brand { padding: 28px 18px 34px; gap: 10px; }
+    .brand .brand-mark { width: 32px; height: 32px; }
+    .brand .brand-wordmark { width: 130px; }
+    .sidebar nav { padding: 0 10px; }
+    .nav-link { padding: 0 11px; gap: 10px; font-size: 14px; }
+    .nav-link.active:before { left: -11px; }
+    .sidebar-bottom { padding: 26px 18px 20px; }
+    #workspace { padding: 28px 26px; }
+    .topbar { padding: 0 26px; }
+    .panel { padding: 22px; }
+    .stat { padding: 0 12px; }
+    .stat strong { font-size: 31px; }
+    .history-stats .stat strong { font-size: 23px; }
+    .field select { min-width: 110px; max-width: 155px; }
+  }
+
+  @media (min-width: 1500px) {
+    #workspace { padding: 40px 48px; }
+    .panel { padding: 30px; }
+  }
+}
