@@ -1,7 +1,22 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {mapGames,mapClips,mapSessions,measurement,overridePayload,mapDefaults,profilePayload,profileDraftChanged,shortcutDraftChanged,overrideDraftChanged} from '../ui/native-data.mjs';
+import {mapGames,mapClips,mapSessions,measurement,overridePayload,mapDefaults,profilePayload,profileDraftChanged,shortcutDraftChanged,overrideDraftChanged,visibleSession} from '../ui/native-data.mjs';
+
+test('ended unlocked sessions are hidden from the live Overview while pending sessions remain visible',()=>{
+ assert.equal(visibleSession({phase:'Ended',can_end:false,launch_locked:false,game:'Finished game'}),null);
+ const pending={phase:'Ended',can_end:false,launch_locked:true,game:'Finishing game'};
+ assert.deepEqual(visibleSession(pending),pending);
+ const active={phase:'Running',can_end:true,launch_locked:false,game:'Active game'};
+ assert.deepEqual(visibleSession(active),active);
+});
+
+test('release assets publish the VERSION metadata consumed by the updater',()=>{
+ const workflow=readFileSync(new URL('../../../.github/workflows/release.yml',import.meta.url),'utf8');
+ const signer=readFileSync(new URL('../../../tools/sign-release-assets.sh',import.meta.url),'utf8');
+ assert.match(workflow,/printf '%s\\n' "\$\{RELEASE_TAG#v\}" >"\$assets\/VERSION"/);
+ assert.match(signer,/sha256sum VERSION/);
+});
 
 test('an empty backend remains empty; unknown measurements never become zero',()=>{
  assert.deepEqual(mapGames([]),[]);assert.deepEqual(mapClips([]),[]);assert.deepEqual(mapSessions([]),[]);

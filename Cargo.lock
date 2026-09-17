@@ -92,25 +92,25 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "redunar-capture"
-version = "0.1.1"
+version = "0.1.0"
 
 [[package]]
 name = "redunar-capture-audio"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "nix",
 ]
 
 [[package]]
 name = "redunar-capture-kms"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "redunar-core",
 ]
 
 [[package]]
 name = "redunar-capture-vulkan"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "nix",
  "redunar-capture",
@@ -119,11 +119,11 @@ dependencies = [
 
 [[package]]
 name = "redunar-core"
-version = "0.1.1"
+version = "0.1.0"
 
 [[package]]
 name = "redunar-daemon"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "nix",
  "redunar-capture",
@@ -136,14 +136,14 @@ dependencies = [
 
 [[package]]
 name = "redunar-hotkeys"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "evdev",
 ]
 
 [[package]]
 name = "redunar-platform"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "libc",
  "nix",

@@ -45,6 +45,12 @@ for artifact in "${artifacts[@]}"; do
     sha256sum "$(basename -- "$artifact")"
   ) >>"$manifest"
 done
+if [[ -f "$asset_directory/VERSION" ]]; then
+  (
+    cd "$asset_directory"
+    sha256sum VERSION
+  ) >>"$manifest"
+fi
 openssl dgst -sha256 -sign "$private_key" -out "$signature" "$manifest"
 openssl dgst -sha256 -verify "$public_key" -signature "$signature" "$manifest" >/dev/null
 

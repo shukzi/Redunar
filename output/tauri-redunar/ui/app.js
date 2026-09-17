@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { latestReplayRequest } from './replay-requests.mjs';
 import { renderReplayFilmstrip } from './replay-filmstrip.mjs';
 import { watchReplayLoading } from './replay-loading.mjs';
-import { mapGames, mapClips, mapSessions, mapDefaults, profilePayload, overridePayload, measurement, profileDraftChanged, shortcutDraftChanged, overrideDraftChanged } from './native-data.mjs';
+import { mapGames, mapClips, mapSessions, mapDefaults, profilePayload, overridePayload, measurement, visibleSession, profileDraftChanged, shortcutDraftChanged, overrideDraftChanged } from './native-data.mjs';
 import { enhancePrecisionSelects, focusPrecisionSelect, closePrecisionSelect } from './precision-selects.js';
 import { updatePrecisionSliders, updatePrecisionSlider } from './precision-sliders.js';
 import { loadGameArtwork } from './game-artwork.js';
@@ -797,7 +797,7 @@ async function refreshRuntime() {
  const oldDisplay=JSON.stringify(displayCapability);
  hardware=results[0].status==='fulfilled'&&results[0].value.available?results[0].value:null;
  runtime=results[1].status==='fulfilled'?results[1].value:null;
- activeSession=results[2].status==='fulfilled'?results[2].value:null;
+ activeSession=results[2].status==='fulfilled'?visibleSession(results[2].value):null;
  modules=results[3].status==='fulfilled'?results[3].value:null;
  shortcutStatus=results[4].status==='fulfilled'?results[4].value:shortcutStatus;
  if(slowResults){

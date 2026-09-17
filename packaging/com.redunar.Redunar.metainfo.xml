@@ -27,14 +27,9 @@
     <category>Game</category>
   </categories>
   <releases>
-    <release version="0.1.1" date="2026-09-17">
+    <release version="0.1.0" date="2026-09-17">
       <description>
-        <p>Fixes Replay saves longer than the legacy profile duration failing against an undersized clip budget.</p>
-      </description>
-    </release>
-    <release version="0.1.0" date="2026-09-11">
-      <description>
-        <p>Initial scoped release for x86_64 Linux with AMD/RADV hardware and Steam games. Includes instant replay recording, in-game metrics, session history, and clip editing.</p>
+        <p>Initial scoped release for x86_64 Linux with AMD/RADV hardware and Steam games. Includes Instant Replay recording, in-game metrics, session history, clip editing, signed update metadata, and clean startup Overview state.</p>
       </description>
     </release>
   </releases>

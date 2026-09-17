@@ -5,6 +5,9 @@ import { validHistoryValue } from './history-timeline.mjs';
 export const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 export const measurement = (value, digits=0) => number(value) === null ? '—' : value.toFixed(digits);
 export const duration = value => number(value) === null ? '—' : `${Math.floor(value/60)}m ${Math.floor(value%60)}s`;
+export function visibleSession(status) {
+  return status && status.phase === 'Ended' && !status.can_end && !status.launch_locked ? null : status ?? null;
+}
 
 const profileDraftKeys = ['overlay','preset','position','scale','opacity','metrics','captureMetrics','replay','fps','quality','format'];
 const normalizedMetrics = value => [...(Array.isArray(value)?value:[])].sort();

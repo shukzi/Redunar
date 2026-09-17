@@ -55,6 +55,7 @@ jobs:
           for asset in "$assets"/redunar-app-linux-*; do
             sha256sum "$asset" >"$asset.sha256"
           done
+          printf '%s\n' "${RELEASE_TAG#v}" >"$assets/VERSION"
 
       - name: Sign release manifest
         env:

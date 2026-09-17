@@ -17,8 +17,12 @@ Current design/calculation contracts are [DESIGN](../../DESIGN.md) and
 
 ## Current automated evidence
 
-On September 17, 2026, `tools/check-tauri-release.sh` completed successfully
-with Podman for the v0.1.1 release source. The gate built the pinned glibc 2.36
+On September 17, 2026, the focused updater/session checks and both Rust
+workspace checks passed for the v0.1.0 initial-release source. The full
+`tools/check-tauri-release.sh` gate remains to be run after the final version
+bump. The prior gate completed successfully with Podman for the same release
+source before its release metadata was reset;
+it built the pinned glibc 2.36
 compatibility artifacts, passed the Rust, frontend, license, installer,
 staging, desktop metadata, and package checks, and produced signed DEB, RPM,
 openSUSE RPM, Arch, and portable artifacts.
@@ -33,7 +37,7 @@ reported matching application binary, capture layer, Steam wrapper, shortcut
 helper, desktop entry, AppStream metadata, icon, and uaccess rule. A fresh
 `/usr/bin/redunar-tauri` process then stayed running for 20 seconds with no
 startup output and was terminated cleanly. This evidence does not establish
-that the v0.1.1 package is installed or running.
+that the rebuilt initial-release package is installed or running.
 
 ## Owner-scoped initial release
 
@@ -48,7 +52,11 @@ The deferred checks below are therefore follow-up work, not publication gates.
 
 ## Open release gates
 
-- [ ] Complete the in-app updater before publication. Signed metadata
+- [x] Publish the signed `VERSION` metadata consumed by the in-app updater and
+      clear ended sessions from the live Overview after startup while retaining
+      History. The full in-app updater qualification remains open for installer
+      result handling, user-data preservation, offline/failure/restart states,
+      and keeping package privileges outside the webview. Signed metadata
       verification, supported-package selection, bounded download, and checksum
       verification, private cache persistence, and native installer handoff are
       implemented. Release builds now embed the HTTPS GitHub release channel;
