@@ -1,6 +1,6 @@
 use crate::{
-    EncodedReplayPacket, ReplayClipStore, ReplayOutputFormat, ReplayRing, ReplayVideoStream,
-    StoredReplayClip,
+    EncodedReplayPacket, ReplayBudget, ReplayClipStore, ReplayOutputFormat, ReplayRing,
+    ReplayVideoStream, StoredReplayClip,
 };
 use redunar_core::{ReplayDuration, ReplayQuality, ReplaySettings};
 use std::collections::VecDeque;
@@ -535,12 +535,25 @@ fn assemble_snapshot(
             "Replay snapshot contains no decodable encoded packets",
         ));
     }
-    store.ensure_free_space_for_clip().map_err(|error| {
-        ReplaySpoolError::new(format!(
-            "could not reserve space for assembled Replay: {error}"
-        ))
-    })?;
-    store
+    // Clip duration is selected at save time and can be longer than the
+    // legacy duration retained in the recording profile. Re-open the owned
+    // store with the requested interval's byte budget so long saves are not
+    // capped by that stale profile value.
+    let requested_store =
+        ReplayClipStore::open_existing(store.directory(), ReplayBudget::from_settings(settings))
+            .map_err(|error| {
+                ReplaySpoolError::new(format!(
+                    "could not prepare Replay storage for the requested interval: {error}"
+                ))
+            })?;
+    requested_store
+        .ensure_free_space_for_clip()
+        .map_err(|error| {
+            ReplaySpoolError::new(format!(
+                "could not reserve space for assembled Replay: {error}"
+            ))
+        })?;
+    requested_store
         .save_with_audio_as(stream, &ring, audio, output_format)
         .map_err(|error| {
             ReplaySpoolError::new(format!("could not store assembled Replay: {error}"))
@@ -1116,6 +1129,14 @@ mod tests {
             u64::from(ReplayQuality::Efficient.target_megabits_per_second()) * BYTES_PER_MEGABIT,
         )
         .expect("one second target payload fits usize");
+        packet_with_payload_bytes(timestamp_ns, keyframe, packet_bytes)
+    }
+
+    fn packet_with_payload_bytes(
+        timestamp_ns: u64,
+        keyframe: bool,
+        packet_bytes: usize,
+    ) -> EncodedReplayPacket {
         let mut payload = vec![0_u8; packet_bytes];
         payload[..4].copy_from_slice(
             &u32::try_from(packet_bytes - 4)
@@ -1337,6 +1358,44 @@ mod tests {
             .join()
             .expect("full target bitrate history fits its single configured headroom");
         assert!(clip.bytes > 5 * 1024 * 1024);
+        spool.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn requested_duration_sets_clip_budget_independently_of_legacy_profile_duration() {
+        let root = fixture();
+        let spool_root = root.join("spool");
+        let clip_root = root.join("clips");
+        let configured = settings(ReplayDuration::Seconds15);
+        let mut spool = ReplaySegmentSpool::open(&spool_root, configured).expect("open spool");
+        for second in 0..30_u64 {
+            let mut packet = packet_with_payload_bytes(
+                second * NANOSECONDS_PER_SECOND,
+                second % 2 == 0,
+                2_500_000,
+            );
+            loop {
+                match spool.try_submit(packet) {
+                    Ok(()) => break,
+                    Err(ReplaySpoolSubmitError::QueueFull(returned)) => {
+                        packet = returned;
+                        thread::yield_now();
+                    }
+                    Err(error) => panic!("submit failed: {error}"),
+                }
+            }
+        }
+        let legacy_budget = ReplayBudget::from_settings(configured).maximum_ring_bytes;
+        let store = ReplayClipStore::open(&clip_root, ReplayBudget::from_settings(configured))
+            .expect("open store");
+        let clip = spool
+            .save_async(ReplayDuration::Seconds30, configured, stream(), store)
+            .expect("start save longer than legacy profile duration")
+            .join()
+            .expect("requested duration supplies the clip byte budget");
+
+        assert!(clip.bytes > legacy_budget);
         spool.shutdown();
         let _ = fs::remove_dir_all(root);
     }

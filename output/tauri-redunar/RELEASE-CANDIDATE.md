@@ -1,6 +1,6 @@
 # Tauri release qualification
 
-Reviewed September 16, 2026. The active local app is implemented, but release
+Reviewed September 17, 2026. The active local app is implemented, but release
 qualification is still open. Read `packaging/redunar-app.spec` for the current
 package version; do not infer the installed or running version from this file.
 
@@ -17,24 +17,23 @@ Current design/calculation contracts are [DESIGN](../../DESIGN.md) and
 
 ## Current automated evidence
 
-On September 16, 2026, `tools/check-tauri-release.sh` completed successfully
-with Podman. The gate built the pinned glibc 2.36 compatibility artifacts,
-passed the Rust, frontend, license, installer, staging, desktop metadata, and
-package checks, and produced signed DEB, RPM, openSUSE RPM, Arch, and portable
-artifacts.
+On September 17, 2026, `tools/check-tauri-release.sh` completed successfully
+with Podman for the v0.1.1 release source. The gate built the pinned glibc 2.36
+compatibility artifacts, passed the Rust, frontend, license, installer,
+staging, desktop metadata, and package checks, and produced signed DEB, RPM,
+openSUSE RPM, Arch, and portable artifacts.
 
 This evidence applies only to the checked source snapshot. The installed-runtime
 and manual acceptance items below remain open; the passing gate does not by
 itself qualify an installed package or a public release.
 
-On September 16, 2026, the generated Fedora 44 RPM was installed on the
+On September 16, 2026, the v0.1.0 Fedora 44 RPM was installed on the
 owner-controlled Fedora 44 x86_64 host. `tools/check-installed-tauri-runtime.sh`
 reported matching application binary, capture layer, Steam wrapper, shortcut
 helper, desktop entry, AppStream metadata, icon, and uaccess rule. A fresh
 `/usr/bin/redunar-tauri` process then stayed running for 20 seconds with no
-startup output and was terminated cleanly. This establishes installation and
-startup evidence for this package; it does not replace the interactive checks
-below.
+startup output and was terminated cleanly. This evidence does not establish
+that the v0.1.1 package is installed or running.
 
 ## Owner-scoped initial release
 
