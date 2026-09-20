@@ -32,7 +32,7 @@ coordinator. Hidden webviews must not stop native supervision or shortcuts.
 | `redunar-daemon` | Service state, catalog/preferences/history, monitor, capture receiver, replay lifecycle and store |
 | `redunar-capture` | Versioned bounded telemetry/control contracts |
 | `redunar-capture-vulkan` | Game-local presentation measurements, metrics rendering, bounded GPU frame export |
-| `redunar-capture-audio` | PipeWire discovery/capture and Opus packets; see audio behavior in REPLAY |
+| `redunar-capture-audio` | Default-output capture through PulseAudio or PipeWire and Opus packets; see audio behavior in REPLAY |
 | `redunar-hotkeys` | Same-user bounded keyboard shortcut helper |
 | `redunar-capture-kms` | Experimental diagnostic, excluded from production Replay |
 
@@ -139,9 +139,10 @@ save feedback can remain visible independently. Geometry/font details live in
 [shader notes](crates/redunar-capture-vulkan/src/shaders/README.md).
 The effective profile carries Grid, Ribbon, or Telemetry and one of eight
 bounded palettes through direct-launch environment values, the versioned Steam
-activation wire format, and the live overlay telemetry block. Metric presets
-and Custom metric bits remain separate, so changing structure or color never
-changes which measurements are selected.
+activation wire format, and the live overlay telemetry block. Branding
+visibility follows those same launch and telemetry paths. Metric presets and
+Custom metric bits remain separate, so changing structure or color never changes
+which measurements are selected.
 
 The active Tauri replay shortcut toggles the in-game Replay menu through the
 daemon's replay control socket. The Vulkan capture layer renders the panel into
@@ -149,9 +150,8 @@ the game's own swapchain (see `redunar-capture-vulkan/src/overlay.rs`), and the
 hotkey helper grabs the mice and streams pointer events while it is open; no
 desktop menu webview exists. If the session exposes readable keyboard devices
 but no readable mouse event device, the helper still opens the in-game panel in
-view-only mode and reports the missing pointer capability to Tauri. The app's
-Preview replay menu is a dialog using shared menu presentation in
-`ui/replay-menu-view.mjs`.
+view-only mode and reports the missing pointer capability to Tauri. The app does
+not expose a desktop preview of this game-rendered menu.
 Close to tray controls icon visibility immediately. Closing hides only when the
 preference and usable tray registration allow reopening; otherwise it exits.
 Loss of the tray host must not strand a hidden main window. Native hotkey

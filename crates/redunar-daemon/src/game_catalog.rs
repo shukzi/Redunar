@@ -30,6 +30,7 @@ const CATALOG_HEADER_V8: &str = "redunar-games-v8";
 const CATALOG_HEADER_V9: &str = "redunar-games-v9";
 const CATALOG_HEADER_V10: &str = "redunar-games-v10";
 const CATALOG_HEADER_V11: &str = "redunar-games-v11";
+const CATALOG_HEADER_V12: &str = "redunar-games-v12";
 const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
 const MAX_GAMES: usize = 256;
 const MAX_IMPORT_GAMES: usize = 64;
@@ -721,12 +722,12 @@ fn validate_stored(stored: &StoredCatalog) -> Result<(), GameCatalogError> {
 
 fn serialize(stored: &StoredCatalog) -> String {
     let catalog = &stored.catalog;
-    let mut output = String::from(CATALOG_HEADER_V11);
+    let mut output = String::from(CATALOG_HEADER_V12);
     output.push('\n');
     writeln!(output, "next\t{}", stored.next_id).expect("write to string");
     writeln!(
         output,
-        "global\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "global\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         bool_token(catalog.global_profile.capture_metrics),
         bool_token(catalog.global_profile.overlay_visible),
         overlay_preset_token(catalog.global_profile.overlay_preset),
@@ -742,7 +743,8 @@ fn serialize(stored: &StoredCatalog) -> String {
         replay_frame_rate_token(catalog.global_profile.replay.frame_rate),
         replay_quality_token(catalog.global_profile.replay.quality),
         replay_storage_token(catalog.global_profile.replay.storage_limit),
-        bool_token(catalog.global_profile.instant_replay)
+        bool_token(catalog.global_profile.instant_replay),
+        bool_token(catalog.global_profile.overlay_branding)
     )
     .expect("write to string");
     for game in &catalog.games {
@@ -794,6 +796,7 @@ fn parse(contents: &str) -> Result<StoredCatalog, GameCatalogError> {
         Some(CATALOG_HEADER_V9) => 9,
         Some(CATALOG_HEADER_V10) => 10,
         Some(CATALOG_HEADER_V11) => 11,
+        Some(CATALOG_HEADER_V12) => 12,
         _ => {
             return Err(GameCatalogError::new(
                 "catalog header or version is invalid",
@@ -842,7 +845,9 @@ fn parse(contents: &str) -> Result<StoredCatalog, GameCatalogError> {
 )]
 fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, GameCatalogError> {
     let fields = line.split('\t').collect::<Vec<_>>();
-    let expected_fields = if version >= 11 {
+    let expected_fields = if version >= 12 {
+        18
+    } else if version >= 11 {
         17
     } else if version >= 10 {
         15
@@ -917,6 +922,11 @@ fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, Ga
             OverlayPalette::default()
         } else {
             parse_overlay_palette(fields[9])?
+        },
+        overlay_branding: if version < 12 {
+            true
+        } else {
+            parse_bool(fields[17])?
         },
         gamescope_enabled: if version >= 8 {
             parse_bool(fields[8 + 2 * usize::from(version >= 11)])?
@@ -1748,7 +1758,7 @@ mod tests {
             .expect("migrate legacy catalog on mutation");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V12));
         assert_eq!(
             load(&fixture.root).expect("reload migrated catalog").games[0],
             loaded.games[0]
@@ -1790,7 +1800,7 @@ mod tests {
             .expect("migrate v2 catalog on mutation");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V12));
         assert_eq!(load(&fixture.root).expect("reload v3 catalog"), loaded);
     }
 
@@ -1815,7 +1825,7 @@ mod tests {
         update_global_profile(&fixture.root, loaded.global_profile).expect("migrate v3 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V12));
     }
 
     #[test]
@@ -1852,7 +1862,7 @@ mod tests {
         update_global_profile(&fixture.root, loaded.global_profile).expect("migrate v4 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V12));
     }
 
     #[test]
@@ -1880,7 +1890,7 @@ mod tests {
         update_global_profile(&fixture.root, loaded.global_profile).expect("migrate v5 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V12));
     }
 
     #[test]
@@ -1932,7 +1942,7 @@ mod tests {
             .expect("migrate v9 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V12));
         assert_eq!(
             load(&fixture.root).expect("reload migrated catalog"),
             loaded
@@ -2049,6 +2059,7 @@ mod tests {
             overlay_preset: OverlayPreset::FpsOnly,
             overlay_layout: OverlayLayout::Ribbon,
             overlay_palette: OverlayPalette::Glacier,
+            overlay_branding: false,
             overlay_metrics: OverlayMetricSet::DETAILED,
             overlay_corner: OverlayCorner::BottomRight,
             overlay_opacity: OverlayOpacity::new(65).expect("opacity"),

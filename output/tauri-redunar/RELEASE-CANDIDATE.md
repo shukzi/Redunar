@@ -18,12 +18,12 @@ Current design/calculation contracts are [DESIGN](../../DESIGN.md) and
 ## Current automated evidence
 
 On September 20, 2026, the full `tools/check-tauri-release.sh` gate passed for
-the v0.1.1 source. It built the pinned glibc 2.36 compatibility artifacts,
+the v0.1.2 source. It built the pinned glibc 2.36 compatibility artifacts,
 passed the Rust, frontend, license, installer, staging, desktop metadata, and
 package checks, and produced signed DEB, RPM, openSUSE RPM, Arch, and portable
 artifacts.
 
-This evidence applies only to the checked source snapshot. The v0.1.1 package
+This evidence applies only to the checked source snapshot. The v0.1.2 package
 has not been installed or run as the system application. The installed-runtime
 and manual acceptance items below remain open; the passing gate does not by
 itself qualify an installed package or a public release.

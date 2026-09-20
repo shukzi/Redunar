@@ -5,7 +5,7 @@ pub const OVERLAY_HARDWARE_TELEMETRY_BYTES: usize = 48;
 pub const REPLAY_MENU_TELEMETRY_BYTES: usize = 48;
 
 const MAGIC: [u8; 8] = *b"RDOVL001";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 const CPU_UTILIZATION_PRESENT: u16 = 1 << 0;
 const CPU_TEMPERATURE_PRESENT: u16 = 1 << 1;
 const GPU_UTILIZATION_PRESENT: u16 = 1 << 2;
@@ -190,6 +190,7 @@ pub struct OverlayHardwareTelemetry {
     pub replay_saved_revision: u16,
     /// None preserves launch visibility; Some is a session-only override.
     pub metrics_visible: Option<bool>,
+    pub branding_visible: bool,
     pub cpu_utilization_tenths: Option<u16>,
     pub cpu_temperature_tenths_celsius: Option<u16>,
     pub gpu_utilization_tenths: Option<u16>,
@@ -260,6 +261,7 @@ pub fn encode_overlay_hardware_telemetry(
     };
     output[37] = telemetry.layout;
     output[38] = telemetry.palette;
+    output[39] = u8::from(telemetry.branding_visible);
     write_u64(output, 16, telemetry.revision);
     write_u64(output, 40, telemetry.revision);
     Ok(OVERLAY_HARDWARE_TELEMETRY_BYTES)
@@ -316,6 +318,11 @@ pub fn decode_overlay_hardware_telemetry(
             1 => Some(true),
             2 => Some(false),
             _ => return Err(OverlayTelemetryError::new("invalid overlay visibility")),
+        },
+        branding_visible: match input[39] {
+            0 => false,
+            1 => true,
+            _ => return Err(OverlayTelemetryError::new("invalid branding visibility")),
         },
         cpu_utilization_tenths: read_optional(input, 24, flags, CPU_UTILIZATION_PRESENT),
         cpu_temperature_tenths_celsius: read_optional(input, 26, flags, CPU_TEMPERATURE_PRESENT),
@@ -442,6 +449,7 @@ mod tests {
             scale_percent: 100,
             replay_saved_revision: 7,
             metrics_visible: None,
+            branding_visible: true,
             cpu_utilization_tenths: Some(487),
             cpu_temperature_tenths_celsius: Some(624),
             gpu_utilization_tenths: Some(991),
@@ -485,6 +493,7 @@ mod tests {
             scale_percent: 125,
             replay_saved_revision: 0,
             metrics_visible: None,
+            branding_visible: false,
             cpu_utilization_tenths: Some(0),
             cpu_temperature_tenths_celsius: None,
             gpu_utilization_tenths: None,

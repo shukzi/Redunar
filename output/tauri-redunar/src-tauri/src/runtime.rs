@@ -59,6 +59,7 @@ pub struct ReplayRuntimeDto {
     encoded_packet_count: u64,
     audio_packet_count: u64,
     audio_byte_count: u64,
+    audio_active: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +157,7 @@ pub fn replay_runtime_status() -> Result<ReplayRuntimeDto, String> {
         encoded_packet_count: status.encoded_packet_count,
         audio_packet_count: status.audio_packet_count,
         audio_byte_count: status.audio_byte_count,
+        audio_active: status.audio_active,
     })
 }
 

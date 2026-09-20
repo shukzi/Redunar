@@ -44,6 +44,7 @@ const OVERLAY_TELEMETRY_ENV: &str = "REDUNAR_OVERLAY_TELEMETRY";
 const OVERLAY_PRESET_ENV: &str = "REDUNAR_OVERLAY_PRESET";
 const OVERLAY_LAYOUT_ENV: &str = "REDUNAR_OVERLAY_LAYOUT";
 const OVERLAY_PALETTE_ENV: &str = "REDUNAR_OVERLAY_PALETTE";
+const OVERLAY_BRANDING_ENV: &str = "REDUNAR_OVERLAY_BRANDING";
 const OVERLAY_CORNER_ENV: &str = "REDUNAR_OVERLAY_CORNER";
 const OVERLAY_METRICS_ENV: &str = "REDUNAR_OVERLAY_METRICS";
 const OVERLAY_OPACITY_ENV: &str = "REDUNAR_OVERLAY_OPACITY_PERCENT";
@@ -723,7 +724,9 @@ impl OverlayPlan {
         };
         plan.accent.push(0, 0, 3, panel_height);
         push_panel_grid(&mut plan.dividers, panel_height);
-        push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
+        if config.branding_visible {
+            push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
+        }
 
         let mut y = FIRST_METRIC_ROW_Y;
         if frame_row {
@@ -793,16 +796,22 @@ impl OverlayPlan {
                 .count(),
         )
         .unwrap_or(0);
-        let width =
-            RIBBON_BRAND_WIDTH.saturating_add(metric_count.saturating_mul(RIBBON_METRIC_WIDTH));
+        let brand_width = if config.branding_visible {
+            RIBBON_BRAND_WIDTH
+        } else {
+            0
+        };
+        let width = brand_width.saturating_add(metric_count.saturating_mul(RIBBON_METRIC_WIDTH));
         let mut plan = Self::metric_panel(width, RIBBON_HEIGHT, config);
-        push_text(&mut plan.accent_glyphs, b"REDUNAR", 10, 15);
+        if config.branding_visible {
+            push_text(&mut plan.accent_glyphs, b"REDUNAR", 10, 15);
+        }
         let mut index = 0_i32;
         for (bit, label) in metric_labels() {
             if metrics & bit == 0 {
                 continue;
             }
-            let left = i32::try_from(RIBBON_BRAND_WIDTH).unwrap_or(94)
+            let left = i32::try_from(brand_width).unwrap_or(94)
                 + 8
                 + index * i32::try_from(RIBBON_METRIC_WIDTH).unwrap_or(89);
             plan.dividers.push(left - 8, 6, 1, RIBBON_HEIGHT - 12);
@@ -824,7 +833,9 @@ impl OverlayPlan {
         .unwrap_or(0);
         let height = PANEL_BASE_HEIGHT + count.saturating_mul(TELEMETRY_ROW_HEIGHT);
         let mut plan = Self::metric_panel(TELEMETRY_WIDTH, height, config);
-        push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
+        if config.branding_visible {
+            push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
+        }
         let mut heading = FixedText::<16>::default();
         heading.push_bytes(b"FRAME METRICS");
         let heading_x = i32::try_from(TELEMETRY_WIDTH).unwrap_or(300)
@@ -1556,6 +1567,7 @@ struct OverlayConfig {
     preset: OverlayPreset,
     layout: OverlayLayout,
     palette: OverlayPalette,
+    branding_visible: bool,
     corner: OverlayCorner,
     metrics: u16,
     opacity_percent: u8,
@@ -1568,6 +1580,7 @@ impl Default for OverlayConfig {
             preset: OverlayPreset::default(),
             layout: OverlayLayout::default(),
             palette: OverlayPalette::default(),
+            branding_visible: true,
             corner: OverlayCorner::default(),
             metrics: METRICS_COMPACT,
             opacity_percent: 50,
@@ -1576,12 +1589,19 @@ impl Default for OverlayConfig {
     }
 }
 
+fn parse_overlay_branding(value: Option<&str>) -> bool {
+    !matches!(value, Some("0"))
+}
+
 impl OverlayConfig {
     fn from_environment() -> Self {
         Self {
             preset: parse_overlay_preset(env::var(OVERLAY_PRESET_ENV).ok().as_deref()),
             layout: parse_overlay_layout(env::var(OVERLAY_LAYOUT_ENV).ok().as_deref()),
             palette: parse_overlay_palette(env::var(OVERLAY_PALETTE_ENV).ok().as_deref()),
+            branding_visible: parse_overlay_branding(
+                env::var(OVERLAY_BRANDING_ENV).ok().as_deref(),
+            ),
             corner: parse_overlay_corner(env::var(OVERLAY_CORNER_ENV).ok().as_deref()),
             metrics: parse_overlay_metrics(env::var(OVERLAY_METRICS_ENV).ok().as_deref()),
             opacity_percent: parse_overlay_opacity(env::var(OVERLAY_OPACITY_ENV).ok().as_deref()),
@@ -2488,6 +2508,7 @@ impl RendererState {
                     7 => OverlayPalette::Rose,
                     _ => OverlayPalette::Redunar,
                 },
+                branding_visible: telemetry.branding_visible,
                 metrics: telemetry.metrics,
                 opacity_percent: telemetry.opacity_percent,
                 scale_percent: telemetry.scale_percent,
@@ -4372,6 +4393,35 @@ mod tests {
     }
 
     #[test]
+    fn branding_can_be_hidden_without_removing_metrics() {
+        let snapshot = OverlaySnapshot {
+            fps: Some(144),
+            frame_time_tenths_ms: Some(69),
+            ..OverlaySnapshot::default()
+        };
+        let branded = OverlayPlan::new(snapshot, OverlayConfig::default());
+        let unbranded = OverlayPlan::new(
+            snapshot,
+            OverlayConfig {
+                branding_visible: false,
+                ..OverlayConfig::default()
+            },
+        );
+        assert!(branded.accent_glyphs.length > unbranded.accent_glyphs.length);
+        assert!(unbranded.text_glyphs.length > 0);
+
+        let ribbon = OverlayPlan::new(
+            snapshot,
+            OverlayConfig {
+                layout: OverlayLayout::Ribbon,
+                branding_visible: false,
+                ..OverlayConfig::default()
+            },
+        );
+        assert_eq!(ribbon.width, 2 * RIBBON_METRIC_WIDTH);
+    }
+
+    #[test]
     fn larger_bitmap_glyphs_and_row_spacing_remain_inside_the_plan() {
         let mut glyph_batch = GlyphBatch::default();
         push_text(&mut glyph_batch, b"8", 0, 0);
@@ -4604,6 +4654,7 @@ mod tests {
             scale_percent: 100,
             replay_saved_revision: 0,
             metrics_visible: None,
+            branding_visible: true,
             cpu_utilization_tenths: Some(994),
             cpu_temperature_tenths_celsius: Some(615),
             gpu_utilization_tenths: None,

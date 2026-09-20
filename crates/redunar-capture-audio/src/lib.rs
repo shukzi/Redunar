@@ -1,9 +1,9 @@
-//! Bounded game-owned audio capture foundations for Instant Replay.
+//! Bounded system-output audio capture for Instant Replay.
 //!
-//! Redunar identifies one `PipeWire` game playback node by process ownership,
-//! captures fixed 48 kHz stereo PCM from that node, and encodes independent
-//! 20 ms Opus packets. Prefer the game-owned stream; when none is identified,
-//! output-monitor fallback retains audio and can include other applications.
+//! Redunar records the default output monitor: the same mixed system audio the
+//! user hears. It uses PulseAudio (including PipeWire's Pulse server) when
+//! available and direct PipeWire otherwise, then produces fixed 48 kHz stereo
+//! PCM and independent 20 ms Opus packets.
 
 mod node;
 mod opus;
@@ -14,7 +14,8 @@ pub use node::{
 };
 pub use opus::{EncodedOpusPacket, OpusEncoder, OpusEncoderError, OpusStreamDescription};
 pub use source::{
-    AudioCaptureError, PipeWireGameAudioCapture, discover_pipewire_game_node, process_tree,
+    AudioCaptureError, AudioCaptureSource, SystemAudioCapture, discover_system_audio_source,
+    discover_system_audio_sources,
 };
 
 pub const AUDIO_SAMPLE_RATE: u32 = 48_000;

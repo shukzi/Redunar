@@ -199,6 +199,8 @@ pub struct ReplayRuntimeStatus {
     pub audio_packet_count: u64,
     /// Bytes retained by the bounded audio timeline in this epoch.
     pub audio_byte_count: u64,
+    /// True only while new audio packets have arrived recently.
+    pub audio_active: bool,
     pub recorder_health: ReplayRecorderHealth,
     pub settings: ReplaySettings,
     pub budget: ReplayBudget,
@@ -219,6 +221,7 @@ impl ReplayRuntimeStatus {
             encoded_packet_count: 0,
             audio_packet_count: 0,
             audio_byte_count: 0,
+            audio_active: false,
             recorder_health: ReplayRecorderHealth::Inactive,
             settings,
             budget: ReplayBudget::from_settings(settings),
@@ -239,6 +242,7 @@ impl ReplayRuntimeStatus {
             encoded_packet_count: 0,
             audio_packet_count: 0,
             audio_byte_count: 0,
+            audio_active: false,
             recorder_health: ReplayRecorderHealth::Inactive,
             settings,
             budget: ReplayBudget::from_settings(settings),
@@ -505,6 +509,7 @@ mod tests {
             encoded_packet_count: 0,
             audio_packet_count: 0,
             audio_byte_count: 0,
+            audio_active: false,
             recorder_health: ReplayRecorderHealth::Inactive,
             settings: ReplaySettings::default(),
             budget: ReplayBudget::from_settings(ReplaySettings::default()),

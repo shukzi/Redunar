@@ -161,12 +161,8 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         check(getComputedStyle(document.querySelector('.clip-select strong')).whiteSpace==='normal','filenames wrap');
         check(!document.querySelector('.clip-delete'),'deletion belongs to selected toolbar');
         check(!document.querySelector('.editor').contains(document.querySelector('#save-duration')),'save footer spans workspace');
-        document.querySelector('[data-action=preview-replay-menu]').click();
-        check(document.querySelector('#replay-preview').open,'preview opens in app');
-        document.querySelector('#replay-preview [data-action=hide-replay-menu]').click();
-        check(!document.querySelector('#replay-preview').open,'preview closes without leaving replay');
         """)
-        pump(200)  # Let the dialog's queued close/focus-restoration finish.
+        pump(200)
         js("""
         window.search=document.querySelector('#clip-search');
         search.value='Clip 1';search.dispatchEvent(new Event('input',{bubbles:true}));

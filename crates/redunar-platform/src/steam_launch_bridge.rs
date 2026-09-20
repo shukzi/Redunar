@@ -7,11 +7,11 @@
 //! inherited environment, and directly `exec`s Steam's original argv.
 
 use crate::launch::{
-    REDUNAR_CAPTURE_REPLY_SOCKET_ENV, REDUNAR_OVERLAY_CORNER_ENV, REDUNAR_OVERLAY_LAYOUT_ENV,
-    REDUNAR_OVERLAY_METRICS_ENV, REDUNAR_OVERLAY_OPACITY_ENV, REDUNAR_OVERLAY_PALETTE_ENV,
-    REDUNAR_OVERLAY_PRESET_ENV, REDUNAR_OVERLAY_TELEMETRY_ENV, REDUNAR_OVERLAY_VISIBLE_ENV,
-    REDUNAR_REPLAY_FRAME_RATE_ENV, REDUNAR_REPLAY_PRODUCTION_ENV, REDUNAR_REPLAY_TRANSFER_ENV,
-    ReplayTransferLaunchConfig, VULKAN_CAPTURE_LAYER_NAME,
+    REDUNAR_CAPTURE_REPLY_SOCKET_ENV, REDUNAR_OVERLAY_BRANDING_ENV, REDUNAR_OVERLAY_CORNER_ENV,
+    REDUNAR_OVERLAY_LAYOUT_ENV, REDUNAR_OVERLAY_METRICS_ENV, REDUNAR_OVERLAY_OPACITY_ENV,
+    REDUNAR_OVERLAY_PALETTE_ENV, REDUNAR_OVERLAY_PRESET_ENV, REDUNAR_OVERLAY_TELEMETRY_ENV,
+    REDUNAR_OVERLAY_VISIBLE_ENV, REDUNAR_REPLAY_FRAME_RATE_ENV, REDUNAR_REPLAY_PRODUCTION_ENV,
+    REDUNAR_REPLAY_TRANSFER_ENV, ReplayTransferLaunchConfig, VULKAN_CAPTURE_LAYER_NAME,
 };
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use redunar_capture::{CaptureSessionId, PROTOCOL_VERSION};
@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 const STEAM_BROKER_SOCKET_FILE: &str = "steam-launch-v1.sock";
 const STEAM_WIRE_MAGIC: [u8; 8] = *b"RDSTML01";
-const STEAM_WIRE_VERSION: u16 = 3;
+const STEAM_WIRE_VERSION: u16 = 4;
 const REQUEST_BYTES: usize = 18;
 const MAX_PATH_BYTES: usize = 4_096;
 const MAX_RESPONSE_BYTES: usize = 4 * MAX_PATH_BYTES + 64;
@@ -51,7 +51,7 @@ const PRESSURE_VESSEL_FILESYSTEMS_RW_ENV: &str = "PRESSURE_VESSEL_FILESYSTEMS_RW
 
 pub const DEFAULT_STEAM_ACTIVATION_TTL: Duration = Duration::from_mins(5);
 
-const MANAGED_ENVIRONMENT_NAMES: [&str; 17] = [
+const MANAGED_ENVIRONMENT_NAMES: [&str; 18] = [
     "REDUNAR_CAPTURE_SOCKET",
     REDUNAR_CAPTURE_REPLY_SOCKET_ENV,
     "REDUNAR_CAPTURE_SESSION",
@@ -61,6 +61,7 @@ const MANAGED_ENVIRONMENT_NAMES: [&str; 17] = [
     REDUNAR_OVERLAY_PRESET_ENV,
     REDUNAR_OVERLAY_LAYOUT_ENV,
     REDUNAR_OVERLAY_PALETTE_ENV,
+    REDUNAR_OVERLAY_BRANDING_ENV,
     REDUNAR_OVERLAY_CORNER_ENV,
     REDUNAR_OVERLAY_OPACITY_ENV,
     REDUNAR_OVERLAY_METRICS_ENV,
@@ -100,6 +101,7 @@ pub struct SteamCaptureEnvironment {
     overlay_preset: OverlayPreset,
     overlay_layout: OverlayLayout,
     overlay_palette: OverlayPalette,
+    overlay_branding: bool,
     overlay_corner: OverlayCorner,
     overlay_opacity: OverlayOpacity,
     overlay_metrics: OverlayMetricSet,
@@ -137,6 +139,7 @@ impl SteamCaptureEnvironment {
             overlay_preset: OverlayPreset::Compact,
             overlay_layout: OverlayLayout::default(),
             overlay_palette: OverlayPalette::default(),
+            overlay_branding: true,
             overlay_corner: OverlayCorner::TopLeft,
             overlay_opacity: OverlayOpacity::default(),
             overlay_metrics: OverlayMetricSet::default(),
@@ -178,6 +181,12 @@ impl SteamCaptureEnvironment {
     ) -> Self {
         self.overlay_layout = layout;
         self.overlay_palette = palette;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_overlay_branding(mut self, visible: bool) -> Self {
+        self.overlay_branding = visible;
         self
     }
 
@@ -311,6 +320,10 @@ impl SteamCaptureEnvironment {
         updates.insert(
             OsString::from(REDUNAR_OVERLAY_PALETTE_ENV),
             OsString::from(overlay_palette_name(self.overlay_palette)),
+        );
+        updates.insert(
+            OsString::from(REDUNAR_OVERLAY_BRANDING_ENV),
+            OsString::from(if self.overlay_branding { "1" } else { "0" }),
         );
         updates.insert(
             OsString::from(REDUNAR_OVERLAY_CORNER_ENV),
@@ -853,6 +866,7 @@ fn encode_granted(environment: &SteamCaptureEnvironment) -> Result<Vec<u8>, Stea
     bytes.push(overlay_preset_wire(environment.overlay_preset));
     bytes.push(overlay_layout_wire(environment.overlay_layout));
     bytes.push(overlay_palette_wire(environment.overlay_palette));
+    bytes.push(u8::from(environment.overlay_branding));
     bytes.push(overlay_corner_wire(environment.overlay_corner));
     bytes.push(environment.overlay_opacity.percent());
     bytes.extend_from_slice(&environment.overlay_metrics.bits().to_le_bytes());
@@ -907,6 +921,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
     let overlay_preset = decode_overlay_preset(take_u8(bytes, &mut cursor)?)?;
     let overlay_layout = decode_overlay_layout(take_u8(bytes, &mut cursor)?)?;
     let overlay_palette = decode_overlay_palette(take_u8(bytes, &mut cursor)?)?;
+    let overlay_branding = take_bool(bytes, &mut cursor)?;
     let overlay_corner = decode_overlay_corner(take_u8(bytes, &mut cursor)?)?;
     let overlay_opacity = OverlayOpacity::new(take_u8(bytes, &mut cursor)?)
         .map_err(|_| SteamActivationError::new("invalid overlay opacity"))?;
@@ -936,6 +951,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
                 overlay_metrics,
             )
             .with_overlay_style(overlay_layout, overlay_palette)
+            .with_overlay_branding(overlay_branding)
             .with_replay_frame_rate(replay_frame_rate)
             .with_replay_requested(replay_requested);
     if let Some(path) = overlay_telemetry_path {
@@ -1328,6 +1344,7 @@ mod tests {
             OverlayMetricSet::DETAILED,
         )
         .with_overlay_style(OverlayLayout::Telemetry, OverlayPalette::Amethyst)
+        .with_overlay_branding(false)
         .with_overlay_telemetry_path("/run/user/1000/redunar/capture/overlay.bin")
         .expect("telemetry path")
         .with_replay_requested(true)
@@ -1401,6 +1418,10 @@ mod tests {
         assert_eq!(
             updates.get(OsStr::new(REDUNAR_OVERLAY_PALETTE_ENV)),
             Some(&OsString::from("amethyst"))
+        );
+        assert_eq!(
+            updates.get(OsStr::new(REDUNAR_OVERLAY_BRANDING_ENV)),
+            Some(&OsString::from("0"))
         );
     }
 

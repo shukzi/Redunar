@@ -1,4 +1,4 @@
-use redunar_capture_audio::{PipeWireGameAudioCapture, discover_pipewire_game_node, process_tree};
+use redunar_capture_audio::{SystemAudioCapture, discover_system_audio_source};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -28,29 +28,15 @@ fn main() {
             std::process::exit(1);
         });
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let node = loop {
-        let pids = process_tree(std::process::id());
-        match discover_pipewire_game_node(&pids) {
-            Ok(Some(node)) => break node,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-            Ok(None) => {
-                let _ = playback.kill();
-                let _ = playback.wait();
-                eprintln!("game_audio_live_unavailable=playback_node_not_found");
-                std::process::exit(1);
-            }
-            Err(error) => {
-                let _ = playback.kill();
-                let _ = playback.wait();
-                eprintln!("game_audio_live_unavailable=discovery {error}");
-                std::process::exit(1);
-            }
-        }
-    };
+    let source = discover_system_audio_source().unwrap_or_else(|error| {
+        let _ = playback.kill();
+        let _ = playback.wait();
+        eprintln!("game_audio_live_unavailable=discovery {error}");
+        std::process::exit(1);
+    });
 
     let mut capture =
-        PipeWireGameAudioCapture::start(&node, 1, Instant::now()).unwrap_or_else(|error| {
+        SystemAudioCapture::start(&source, 1, Instant::now()).unwrap_or_else(|error| {
             let _ = playback.kill();
             let _ = playback.wait();
             eprintln!("game_audio_live_unavailable=capture_start {error}");
@@ -85,7 +71,10 @@ fn main() {
         std::process::exit(1);
     }
     println!(
-        "game_audio_live_ready=node_serial={} packets={} opus_bytes={}",
-        node.serial, packets, bytes
+        "game_audio_live_ready=backend={} source={} packets={} opus_bytes={}",
+        source.backend_name(),
+        source.name(),
+        packets,
+        bytes
     );
 }

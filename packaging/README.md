@@ -61,14 +61,17 @@ is not proof the game is configured; verify its saved local options read-only.
 
 ## Runtime dependencies
 
-The current spec explicitly requires GTK3, WebKitGTK 4.1, libdrm, PipeWire tools,
-Opus, the `/usr/bin/ffmpeg` and `/usr/bin/ffprobe` files, and the architecture-specific
+The current spec explicitly requires GTK3, WebKitGTK 4.1, libdrm, PulseAudio
+client utilities (`pactl` and `parec`), Opus, the `/usr/bin/ffmpeg` and
+`/usr/bin/ffprobe` files, and the architecture-specific
 `libavcodec-freeworld` capability, and the GStreamer `libgstlibav.so` plugin used
 by WebKit, in addition to discovered binary dependencies. A tray provider is optional; missing registration must leave normal window closing usable.
 
 Replay capture uses the hardware Vulkan Video path. An FFmpeg encoder name is
-not evidence that live hardware recording is supported. Audio uses system
-`pw-cat` and `libopus.so.0`; its approved output-fallback behavior is documented in
+not evidence that live hardware recording is supported. Audio records the
+default output through `parec` against either PulseAudio or PipeWire's Pulse
+server, with direct `pw-cat` capture available when PipeWire has no Pulse
+compatibility service. Opus encoding uses `libopus.so.0`; see
 [REPLAY.md](../REPLAY.md).
 
 Playback preparation and trimmed export invoke FFmpeg separately from recording.

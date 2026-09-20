@@ -31,19 +31,22 @@ completed run; record the results separately with the exact build and host.
 - [ ] Start with metrics hidden, then save Show in-game overlay on/off repeatedly.
       The prepared runtime stays available. Verify global inheritance and a
       per-game custom value without adding an Overview visibility button.
+- [ ] Start with Show Redunar branding disabled and verify every overlay layout
+      launches without the label while metrics remain visible. Toggle it on and
+      off during the session and verify the live update does not restart the game.
 - [ ] Confirm recording settings remain locked until the owned game closes,
       while visibility-only saves work. Availability comes from runtime status,
       not the saved preference alone.
 - [ ] Confirm frame/encode counters progress and a healthy populated replay
       buffer exists. Record drops, overruns, resize/reset behavior, and failures.
-- [ ] Verify whether audio uses a game-owned node, an output fallback, or no
-      source. Check controlled unrelated audio separately. Approved output fallback
-      can include other apps and must not be labeled game-only; see [REPLAY](../../REPLAY.md).
+- [ ] Verify Replay records the current default output and follows an output
+      change during the session. Check controlled unrelated audio separately;
+      mixed output can include other apps and is not game-only. See
+      [REPLAY](../../REPLAY.md).
 - [ ] Open/close the replay menu by shortcut with the main window visible and
       hidden. Verify transparent exterior, no desktop sidebar/black bars, correct
       focus, Escape, repeated shortcut dismissal, and outside-click preference.
       Closing the menu must not quit Redunar.
-- [ ] Open Preview replay menu in the app and check the separate dialog layout.
 - [ ] Clear all shortcuts and save: keys no longer open/save, while buffering and
       app Save replay still work. Restart to verify clearing persists. Restore
       save-only and menu-only assignments and check each independently.

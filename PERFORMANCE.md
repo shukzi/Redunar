@@ -53,8 +53,8 @@ The authoritative constants live in `replay_spool.rs`, `replay_encoder.rs`, and
 
 Audio uses fixed 20 ms Opus frames and one long-lived capture process, with
 retention capped at 45,000 packets/32 MiB. Audio discovery is bounded; audio
-failure must not stop video. The intended output fallback is described in [REPLAY.md](REPLAY.md); it does not
-change these resource budgets.
+failure must not stop video. The default-output behavior is described in
+[REPLAY.md](REPLAY.md); it does not change these resource budgets.
 
 Fixed 120 FPS is subject to the implemented display/surface limits and hardware
 validation. A capability check or short encode probe is not sustained frame-pacing

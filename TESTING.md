@@ -126,8 +126,7 @@ These live probes require an explicit, scoped hardware run:
 
 | Probe | Command and scope |
 | --- | --- |
-| PipeWire game audio | `cargo run --release --offline -p redunar-capture-audio --example game_audio_live_probe` starts a temporary silent `pw-cat` playback node, captures ten Opus packets, and terminates the child. It checks owned-node discovery/capture only. |
-| PipeWire output fallback | `cargo run --release --offline -p redunar-capture-audio --example output_audio_live_probe` resolves the actual default output, starts temporary silent playback on that exact sink, captures ten Opus packets from its monitor, and terminates both children. It does not capture microphone input or retain audio. |
+| System-output audio | `cargo run --release --offline -p redunar-capture-audio --example output_audio_live_probe` resolves the actual default output, starts temporary silent playback on that exact sink, captures ten Opus packets from its monitor through the selected PulseAudio/PipeWire backend, and terminates both children. It does not capture microphone input or retain audio. |
 | Vulkan capture | Build `redunar-capture-vulkan`, then run `cargo run --release --offline -p redunar-daemon --example capture_probe -- /usr/bin/vkcube`. It launches the absolute target through the private layer and cleans isolated state. `REDUNAR_CAPTURE_PROBE_OVERLAY=1` checks rendered overlay submission; `REDUNAR_CAPTURE_PROBE_REPLAY_CANDIDATE=1` requests source eligibility; `REDUNAR_CAPTURE_PROBE_REQUIRE_REPLAY_CANDIDATE=1` makes missing eligibility fail; `REDUNAR_CAPTURE_PROBE_REPLAY_ENCODE=1` performs a real Vulkan Video encode. WSI, frame count, dimensions, FPS, metrics, preset, corner, opacity, scale, and timeout have bounded `REDUNAR_CAPTURE_PROBE_*` overrides in the example source. |
 | KMS discovery/planning | `cargo run --release --offline -p redunar-capture-kms --example kms_replay_probe` enumerates local DRM outputs and constructs 60 FPS plans. It does not capture or encode frames. |
 | KMS DRM read | `cargo run --release --offline -p redunar-capture-kms --example kms_drm_read_probe -- 1 DP-2` opens the selected card/connector read path and reports its active dimensions. Replace the example arguments with the intended output. |
@@ -165,8 +164,9 @@ through the service and should not need the example directly.
   application, and crashes. The Tauri application must keep privileged actions
   outside the webview.
 
-The [audio behavior](REPLAY.md#audio-behavior-and-output-fallback) needs separate
-owned-node and intended output-fallback checks. The latter can include other apps.
+The [audio behavior](REPLAY.md#audio-behavior) needs default-output discovery,
+PulseAudio compatibility, direct PipeWire fallback, route-change, stall, and
+backend-failover checks. Captured output can include other applications.
 Media-tool tests cover executable discovery, provider-neutral encoder checks,
 cached success/retried misses, missing codecs, timeouts, and bounded probe output.
 The RPM gate checks file/capability requirements without pinning a multimedia

@@ -29,11 +29,11 @@ source/provider validation are deferred from the initial release. Keep the
 existing bounded probes and document the actual output-monitor fallback; do not
 claim game-only audio isolation or a completed performance study.
 
-For audio, distinguish a game-owned node from output fallback. The current
-implementation can capture other applications through an output sink; do not
-claim game-only isolation. Use controlled nonsensitive sounds and record the
-actual source and mixed-audio result. [REPLAY.md](REPLAY.md) explains the
-approved fallback behavior. Record mixed output as fallback, not game-only isolation.
+For audio, verify the active default output and change outputs during the run.
+The implementation captures the mixed system output and can include other
+applications; do not claim game-only isolation. Use controlled nonsensitive
+sounds and record the selected backend, output, and mixed-audio result.
+[REPLAY.md](REPLAY.md) defines the behavior.
 
 ## Optional isolated diagnostics
 

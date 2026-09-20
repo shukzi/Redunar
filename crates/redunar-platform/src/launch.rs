@@ -22,6 +22,7 @@ pub const REDUNAR_OVERLAY_TELEMETRY_ENV: &str = "REDUNAR_OVERLAY_TELEMETRY";
 pub const REDUNAR_OVERLAY_PRESET_ENV: &str = "REDUNAR_OVERLAY_PRESET";
 pub const REDUNAR_OVERLAY_LAYOUT_ENV: &str = "REDUNAR_OVERLAY_LAYOUT";
 pub const REDUNAR_OVERLAY_PALETTE_ENV: &str = "REDUNAR_OVERLAY_PALETTE";
+pub const REDUNAR_OVERLAY_BRANDING_ENV: &str = "REDUNAR_OVERLAY_BRANDING";
 pub const REDUNAR_OVERLAY_CORNER_ENV: &str = "REDUNAR_OVERLAY_CORNER";
 pub const REDUNAR_OVERLAY_OPACITY_ENV: &str = "REDUNAR_OVERLAY_OPACITY_PERCENT";
 pub const REDUNAR_OVERLAY_METRICS_ENV: &str = "REDUNAR_OVERLAY_METRICS";
@@ -95,6 +96,7 @@ pub struct OverlayLaunchConfig {
     preset: OverlayPreset,
     layout: OverlayLayout,
     palette: OverlayPalette,
+    branding_visible: bool,
     corner: OverlayCorner,
     opacity: OverlayOpacity,
     metrics: OverlayMetricSet,
@@ -108,6 +110,7 @@ impl OverlayLaunchConfig {
             preset: OverlayPreset::Compact,
             layout: OverlayLayout::default(),
             palette: OverlayPalette::default(),
+            branding_visible: true,
             corner: OverlayCorner::TopLeft,
             opacity: OverlayOpacity::default(),
             metrics: OverlayMetricSet::default(),
@@ -142,6 +145,12 @@ impl OverlayLaunchConfig {
     pub const fn with_style(mut self, layout: OverlayLayout, palette: OverlayPalette) -> Self {
         self.layout = layout;
         self.palette = palette;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_branding(mut self, visible: bool) -> Self {
+        self.branding_visible = visible;
         self
     }
 }
@@ -438,6 +447,10 @@ impl CaptureLaunchPlan {
                 OverlayPalette::Solar => "solar",
                 OverlayPalette::Rose => "rose",
             }),
+        );
+        self.environment.insert(
+            OsString::from(REDUNAR_OVERLAY_BRANDING_ENV),
+            OsString::from(if config.branding_visible { "1" } else { "0" }),
         );
         self.environment.insert(
             OsString::from(REDUNAR_OVERLAY_CORNER_ENV),
@@ -901,7 +914,9 @@ mod tests {
         )
         .expect("launch plan")
         .with_overlay_config(
-            OverlayLaunchConfig::new(true).with_style(OverlayLayout::Ribbon, OverlayPalette::Mint),
+            OverlayLaunchConfig::new(true)
+                .with_style(OverlayLayout::Ribbon, OverlayPalette::Mint)
+                .with_branding(false),
         );
         assert_eq!(
             plan.environment()
@@ -912,6 +927,11 @@ mod tests {
             plan.environment()
                 .get(OsStr::new(REDUNAR_OVERLAY_PALETTE_ENV)),
             Some(&OsString::from("mint"))
+        );
+        assert_eq!(
+            plan.environment()
+                .get(OsStr::new(REDUNAR_OVERLAY_BRANDING_ENV)),
+            Some(&OsString::from("0"))
         );
     }
 

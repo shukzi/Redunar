@@ -1,5 +1,5 @@
 import { mergeGameDrafts } from './game-drafts.mjs';
-import { replayStatusCopy, renderReplayMenu, updateReplayMenu } from './replay-menu-view.mjs';
+import { replayStatusCopy } from './replay-menu-view.mjs';
 import { invoke } from '@tauri-apps/api/core';
 import { latestReplayRequest } from './replay-requests.mjs';
 import { renderReplayFilmstrip } from './replay-filmstrip.mjs';
@@ -32,7 +32,7 @@ const overlayPalettes = {
 };
 const presetMetrics = preset => preset==='Compact'?['FPS','Frame time','GPU','CPU','GPU temperature','CPU temperature']:preset==='Detailed'?[...metricNames]:preset==='FPS only'?['FPS']:[];
 const effectiveMetrics = (preset,custom=[]) => preset==='Custom'?[...custom]:presetMetrics(preset||'Compact');
-const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null,storage:null};
+const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,branding:true,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null,storage:null};
 const durations = [15,30,60,120,180,300,600,900];
 let defaults = structuredClone(initialDefaults);
 let draft = structuredClone(defaults);
@@ -45,7 +45,7 @@ let globalTab = 'overlay', libraryTab = 'profile';
 let preferences = {tray:null,automaticUpdates:true};
 let updateStatus = null;
 let startupUpdateCheckStarted = false;
-let toastTimer, replayPreviewTrigger = null;
+let toastTimer;
 const native = Boolean(window.__TAURI_INTERNALS__);
 const loaded = {catalog:false,clips:false,history:false,global:false,preferences:false,replayPreferences:false};
 const errors = {};
@@ -131,7 +131,7 @@ function overlayHeight(preset=draft.preset||'Compact',metrics=draft.metrics) {
  return preset==='FPS only'?24:25+(frame?38:0)+(lows?26:0)+(hardware?26:0);
 }
 function ribbonWidth(preset=draft.preset||'Compact',metrics=draft.metrics) {
- return 94+effectiveMetrics(preset,metrics).length*89;
+ return (draft.branding===false?0:94)+effectiveMetrics(preset,metrics).length*89;
 }
 function overlayPreview() {
  const preset=draft.preset||'Compact';
@@ -152,13 +152,13 @@ function hudContent() {
   has('FPS')&&['FPS','144 FPS'],has('Frame time')&&['FRAME TIME','6.9 MS'],has('1% low')&&['1% LOW','118 FPS'],has('0.1% low')&&['0.1% LOW','96 FPS'],
   has('GPU')&&['GPU LOAD','91%'],has('GPU temperature')&&['GPU TEMP','68°C'],has('CPU')&&['CPU LOAD','38%'],has('CPU temperature')&&['CPU TEMP','62°C']
  ].filter(Boolean);
- if(draft.layout==='Ribbon')return `<div class="hud-layout-brand"><span>REDUNAR</span></div>${items.map(([label,value])=>`<div class="hud-ribbon-metric"><small>${label}</small><b>${value}</b></div>`).join('')}`;
- if(draft.layout==='Telemetry')return `<div class="hud-telemetry-head"><span>REDUNAR</span><small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
+ if(draft.layout==='Ribbon')return `${draft.branding===false?'':'<div class="hud-layout-brand"><span>REDUNAR</span></div>'}${items.map(([label,value])=>`<div class="hud-ribbon-metric"><small>${label}</small><b>${value}</b></div>`).join('')}`;
+ if(draft.layout==='Telemetry')return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
  const sections=[];
  if(frame)sections.push(`<div class="hud-native-frame">${has('FPS')?'<b class="hud-native-value hud-native-fps-value">144</b><span class="hud-native-label hud-native-fps-label">FPS</span>':''}${has('Frame time')?'<b class="hud-native-value hud-native-frame-time-value">6.9</b><span class="hud-native-label hud-native-frame-time-label">MS</span>':''}</div>`);
  if(lows)sections.push(`<div class="hud-native-row hud-native-lows">${has('1% low')?'<span class="hud-native-left">1% LOW&nbsp;&nbsp;118</span>':''}${has('0.1% low')?'<span class="hud-native-right">0.1% LOW&nbsp;&nbsp;96</span>':''}</div>`);
  if(hardware)sections.push(`<div class="hud-native-row hud-native-hardware">${has('CPU')||has('CPU temperature')?`<span class="hud-native-left">CPU${has('CPU')?' 38%':''}${has('CPU temperature')?(has('CPU')?' · 62°C':' 62°C'):''}</span>`:''}${has('GPU')||has('GPU temperature')?`<span class="hud-native-right">GPU${has('GPU')?' 91%':''}${has('GPU temperature')?(has('GPU')?' · 68°C':' 68°C'):''}</span>`:''}</div>`);
- return `<div class="hud-native-header">REDUNAR</div>${sections.join('')}`;
+ return `${draft.branding===false?'':'<div class="hud-native-header">REDUNAR</div>'}${sections.join('')}`;
 }
 function formatStorageBytes(bytes) {
  const value=Number(bytes);
@@ -175,8 +175,8 @@ function replay() {
  const unlimited=limitBytes===null||limitBytes>=Number.MAX_SAFE_INTEGER;
  const usedPercent=unlimited?0:Math.min(100,Math.max(0,usedBytes/limitBytes*100));
  const storageValue=unlimited?formatStorageBytes(usedBytes):`${formatStorageBytes(usedBytes).replace(' used','')} / ${formatStorageBytes(limitBytes).replace(' used','')}`;
- return heading('Instant Replay','Review, trim, and save recent captures.',button(`${icon('folder')} Clip folder`,'folder'))+`<div class="replay-tools heading-actions">${button('Refresh clips','reload-clips')}${button('Open selected externally','open-clip-external',false,c?'':'disabled')}${button('Delete selected clip','delete-selected-clip',false,c?'':'disabled')}${button('Preview replay menu','preview-replay-menu')}</div>`+
- `<div class="capture-strip"><div><span class="status-dot" id="replay-status-dot"></span><strong id="replay-status-title">${escape(replayStatusCopy(runtime).title)}</strong><span id="replay-phase">${escape(runtime?.phase||'Unavailable')}</span></div><div><span id="replay-buffer">${runtime?measurement(runtime.buffered_seconds)+' s buffered':'—'}</span><span id="replay-frame-count">${runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_packet_count>0?'audio active':'audio waiting':'audio inactive'}`:'—'}</span><a href="#global" data-global-tab="replay">Capture settings ${icon('arrow')}</a></div></div>
+ return heading('Instant Replay','Review, trim, and save recent captures.',button(`${icon('folder')} Clip folder`,'folder'))+`<div class="replay-tools heading-actions">${button('Refresh clips','reload-clips')}${button('Open selected externally','open-clip-external',false,c?'':'disabled')}${button('Delete selected clip','delete-selected-clip',false,c?'':'disabled')}</div>`+
+ `<div class="capture-strip"><div><span class="status-dot" id="replay-status-dot"></span><strong id="replay-status-title">${escape(replayStatusCopy(runtime).title)}</strong><span id="replay-phase">${escape(runtime?.phase||'Unavailable')}</span></div><div><span id="replay-buffer">${runtime?measurement(runtime.buffered_seconds)+' s buffered':'—'}</span><span id="replay-frame-count">${runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—'}</span><a href="#global" data-global-tab="replay">Capture settings ${icon('arrow')}</a></div></div>
  <div class="replay-workspace"><section class="editor"><div id="replay-selection">${replaySelection(c)}</div>
 </section><aside class="clip-browser"><div class="section-heading"><h3>Saved clips <span>${clips.length}</span></h3></div><label class="search">${icon('search')}<input type="search" id="clip-search" placeholder="Find a clip" aria-label="Find a clip"></label><div class="clip-list">${clipRows()}</div><div class="storage-meter${unlimited?' unlimited':storageStatus?.bytes_over_limit?' over-limit':''}"><div><span>Local storage</span><b>${storageValue}</b></div>${unlimited?'':`<i aria-hidden="true"><span style="width:${usedPercent.toFixed(2)}%"></span></i>`}<small>Captures remain in your local library.</small></div></aside></div><div class="replay-save-row"><div class="replay-save-copy">${icon('replay')}<div><strong>Save recent gameplay</strong><p>Keep the recent buffer in your local clips.</p></div></div><div class="heading-actions"><label class="replay-duration-label">Save last <select id="save-duration" aria-label="Replay duration">${durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')}</select></label>${button(`${icon('plus')} Save replay`,'save-replay',true,!runtime?.can_save?'disabled':'')}</div><kbd id="save-replay-shortcut" hidden></kbd></div>`;
 }
@@ -240,11 +240,11 @@ function globalSettings() {
 }
 function globalOverlay() {
  const swatches=Object.entries(overlayPalettes).map(([name,colors])=>`<button type="button" class="overlay-palette" data-palette="${name}" aria-label="${name} palette" aria-pressed="${draft.palette===name}" style="--swatch:${colors[0]}"></button>`).join('');
- return `<div class="global-grid"><section class="overlay-preview-panel">${overlayPreview()}<div class="layout-grid">${['Grid','Ribbon','Telemetry'].map(name=>`<button data-layout="${name}" aria-pressed="${draft.layout===name}"><strong>${name}</strong><small>${name==='Grid'?'Connected current layout':name==='Ribbon'?'Wide peripheral scan':'Dense technical readout'}</small></button>`).join('')}</div><div class="palette-grid" role="group" aria-label="Overlay palette">${swatches}</div><div class="preset-grid">${['FPS only','Compact','Detailed','Custom'].map(name=>`<button data-preset="${name}" aria-pressed="${draft.preset===name}"><span>${name==='Custom'?'+':'144'}${name!=='FPS only'?'<small>Frame metrics</small>':''}</span><strong>${name}</strong></button>`).join('')}</div><h2 class="metrics-title">Displayed metrics</h2><p class="metric-hint">${draft.preset==='Custom'?'Custom selection · choose the metrics shown in any layout.':'Preset controlled · choose Custom to edit individual metrics.'}</p><p class="metric-validation" id="metric-validation" role="status"></p><div class="metric-toggles">${metricNames.map(name=>`<label><input type="checkbox" data-metric="${name}" ${effectiveMetrics(draft.preset||'Compact',draft.metrics).includes(name)?'checked':''} ${draft.preset==='Custom'?'':'disabled'}><span>${name}</span></label>`).join('')}</div></section><section class="panel controls-panel"><h2>Overlay appearance</h2>${field('Collect frame metrics','Record frame-time data for future sessions',switchControl('captureMetrics','Frame metrics',draft.captureMetrics))}${field('Show in-game overlay',active()?'Shows or hides immediately; keeps the overlay available. Per-game overrides still apply.':'Hides only the metrics display; you can show it again during a game.',switchControl('overlay','Show in-game overlay',draft.overlay))}${field('Information preset','Controls which measurements are shown',selectControl('preset','Information preset',['Compact','FPS only','Detailed','Custom'],draft.preset))}${field('Layout','Changes the structure without changing selected metrics',selectControl('layout','Layout',['Grid','Ribbon','Telemetry'],draft.layout))}${field('Palette','Eight bounded renderer themes',selectControl('palette','Palette',Object.keys(overlayPalettes),draft.palette))}${field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))}${['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control"><output id="${key}-value">${draft[key]}%</output><input type="range" data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}"></div>`)).join('')}<div class="info-note">Layout, palette, position, scale, opacity, and metric selection apply to all games. Library can override whether metrics are shown and collected.</div></section></div>`;
+ return `<div class="global-grid"><section class="overlay-preview-panel">${overlayPreview()}<div class="layout-grid">${['Grid','Ribbon','Telemetry'].map(name=>`<button data-layout="${name}" aria-pressed="${draft.layout===name}"><strong>${name}</strong><small>${name==='Grid'?'Connected current layout':name==='Ribbon'?'Wide peripheral scan':'Dense technical readout'}</small></button>`).join('')}</div><div class="palette-grid" role="group" aria-label="Overlay palette">${swatches}</div><div class="preset-grid">${['FPS only','Compact','Detailed','Custom'].map(name=>`<button data-preset="${name}" aria-pressed="${draft.preset===name}"><span>${name==='Custom'?'+':'144'}${name!=='FPS only'?'<small>Frame metrics</small>':''}</span><strong>${name}</strong></button>`).join('')}</div><h2 class="metrics-title">Displayed metrics</h2><p class="metric-hint">${draft.preset==='Custom'?'Custom selection · choose the metrics shown in any layout.':'Preset controlled · choose Custom to edit individual metrics.'}</p><p class="metric-validation" id="metric-validation" role="status"></p><div class="metric-toggles">${metricNames.map(name=>`<label><input type="checkbox" data-metric="${name}" ${effectiveMetrics(draft.preset||'Compact',draft.metrics).includes(name)?'checked':''} ${draft.preset==='Custom'?'':'disabled'}><span>${name}</span></label>`).join('')}</div></section><section class="panel controls-panel"><h2>Overlay appearance</h2>${field('Collect frame metrics','Record frame-time data for future sessions',switchControl('captureMetrics','Frame metrics',draft.captureMetrics))}${field('Show in-game overlay',active()?'Shows or hides immediately; keeps the overlay available. Per-game overrides still apply.':'Hides only the metrics display; you can show it again during a game.',switchControl('overlay','Show in-game overlay',draft.overlay))}${field('Show Redunar branding','Shows the Redunar label in the in-game metrics overlay',switchControl('branding','Show Redunar branding',draft.branding!==false))}${field('Information preset','Controls which measurements are shown',selectControl('preset','Information preset',['Compact','FPS only','Detailed','Custom'],draft.preset))}${field('Layout','Changes the structure without changing selected metrics',selectControl('layout','Layout',['Grid','Ribbon','Telemetry'],draft.layout))}${field('Palette','Eight bounded renderer themes',selectControl('palette','Palette',Object.keys(overlayPalettes),draft.palette))}${field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))}${['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control"><output id="${key}-value">${draft[key]}%</output><input type="range" data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}"></div>`)).join('')}<div class="info-note">Layout, palette, branding, position, scale, opacity, and metric selection apply to all games. Library can override whether metrics are shown and collected.</div></section></div>`;
 }
 function globalReplay() {
  const folder=replayPreferences?.resolved_directory||'Loading replay folder…';
- return `<div class="global-grid"><section class="panel controls-panel"><h2>Capture defaults</h2><p>Changes apply to future sessions.</p>${field('Instant replay','Buffers automatically for supported games launched through Redunar. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Capture frame rate','',frameRateControl())}${field('Quality preset','',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Replay folder','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use Videos folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section><section class="capture-explainer"><div class="buffer-graphic" aria-hidden="true">${icon('replay')}<span>Local replay buffer</span></div><h2>Replay controls</h2><p>Use Save replay in the Instant Replay page to save the available buffer. Clip size follows the selected duration and quality. Saved clips remain local until you delete them or the filesystem safety reserve prevents another save.</p><div class="capture-summary"><span>Hardware encoding</span><b>When supported</b><span>Saved clips</span><b>Local files</b><span>Per-game preferences</span><b>In Library</b></div><div class="heading-actions">${button('Preview replay menu','preview-replay-menu')}<button class="button" data-global-tab="shortcuts">Edit shortcuts</button></div></section></div>`;
+ return `<section class="panel controls-panel"><h2>Capture defaults</h2><p>Changes apply to future sessions.</p>${field('Instant replay','Buffers automatically for supported games launched through Redunar. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Capture frame rate','',frameRateControl())}${field('Quality preset','',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Replay folder','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use Videos folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
 }
 function frameRateControl() {
  const selected=Number(draft.fps), supported=displayCapability?.compatible_120_modes>0;
@@ -357,7 +357,6 @@ function history() {
  return heading('History','Review session measurements and compare recorded runs.',button('Refresh history','reload-history'))+
  `<div class="history-workspace"><aside class="history-catalog"><label class="search">${icon('search')}<input id="history-search" type="search" placeholder="Find a session" aria-label="Find a session"></label><div class="catalog-label">${sessions.length} recorded sessions</div><div id="session-list">${historyRows()}</div><div class="catalog-note">${icon('history')}<p>Your journal stays on this device.</p></div></aside><section class="panel history-detail"><div class="section-heading"><div><p class="record-label">Recorded session</p><h2>${escape(s.game)}</h2><p>${s.date} at ${s.time}</p></div>${pill('Completed','green')}</div><div class="telemetry-row history-stats">${stat('Duration',s.duration)}${stat('Average',s.fps,'FPS')}${stat('1% low',s.low,'FPS')}${stat('0.1% low',s.lowest,'FPS')}</div><div class="history-controls"><div class="history-view-toggle" role="group" aria-label="History chart metric">${[['fps','FPS'],['frame-time','Frame time'],['temperature','Temperatures'],['utilization','Load']].map(([value,label])=>`<button class="${historyMetric===value?'active':''}" data-history-view="${value}" aria-pressed="${historyMetric===value}">${label}</button>`).join('')}</div>${peer?button(historyCompare?'Hide comparison':'Compare another session','history-compare'):''}</div><div class="section-heading"><div><h3>Session timeline</h3><p>${timeline.legacy?'Legacy retained frame sequence':'Sampled throughout the complete session'}</p></div><span>${timeline.samples.length} observations</span></div>${historyTimelineChart(timeline.samples,historyMetric,historyCursor,duration)}${historyMoment(moment,timeline.legacy,historyCursor)}${historyComparison(s,peer)}<div class="history-explanation"><span>${icon('history')}</span><div><h3>Move through the complete session.</h3><p>Drag the timeline to inspect frame rate, frame time, temperatures, and hardware load at that moment. Long sessions retain the full time span with gradually reduced sample resolution.</p></div></div></section></div>`;
 }
-function replayMenu() { return renderReplayMenu(runtime); }
 function historyRows(filter='') {
  return sessions.map((s,i)=>({...s,id:i})).filter(s=>s.game.toLowerCase().includes(filter.toLowerCase())).map(s=>`<button class="history-row ${s.id===selectedSession?'selected':''}" data-session="${s.id}" aria-pressed="${s.id===selectedSession}"><small>${s.date}</small><strong>${escape(s.game)}</strong><span>${s.duration}<b>${s.fps} FPS</b></span></button>`).join('') || '<p class="empty">No matching sessions.</p>';
 }
@@ -390,9 +389,6 @@ function render() {
  closePrecisionSelect();
  resetPlayback();
  const current=route();
- if(current==='replay-menu'){
-  $('#navigation').innerHTML='';$('.settings-link').classList.remove('active');$('#breadcrumb').textContent='Replay menu';workspace.innerHTML=replayMenu();document.title='Redunar — Replay';document.body.dataset.page='replay-menu';document.documentElement.dataset.page='replay-menu';updateObservedElements();return;
- }
  const navigationPages=visiblePages();
  const valid=[...navigationPages.map(p=>p[0]),'settings'].includes(current)?current:'overview';
  if(current==='replay'&&valid==='overview')history.replaceState(null,'','#overview');
@@ -733,11 +729,7 @@ function updateDirtyActionButtons() {
  const gameBar=$('.game-save-bar');if(gameBar)gameBar.hidden=!gameChanged;
  document.body.dataset.unsaved=String(!!$('.change-save-bar:not([hidden])'));
 }
-function updateReplayMenuStatus() {
- if(route()==='replay-menu'||$('#replay-preview').open)updateReplayMenu(document,runtime,busy);
-}
 function updateObservedElements() {
- updateReplayMenuStatus();
  updateDirtyActionButtons();
  for(const el of document.querySelectorAll('[data-module-status]')){
   const value=modules?.[el.dataset.moduleStatus],label=el.dataset.moduleLabel;
@@ -778,7 +770,7 @@ function updateObservedElements() {
   'session-note':activeSession?.message||(active()?'':'Launch a saved game from Library to begin a session.'),
   'live-phase':activeSession?.phase==='Ended'?'Session ended':activeSession?.measurements?.phase||'Awaiting telemetry',
   'session-name':activeSession?.game||'No active game', 'session-phase':activeSession?.phase||'Unavailable',
-  'replay-status-title':replayStatusCopy(runtime).title, 'replay-phase':runtime?.failure||(!runtime?.can_save?replayStatusCopy(runtime).detail:''), 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_packet_count>0?'audio active':'audio waiting':'audio inactive'}`:'—',
+  'replay-status-title':replayStatusCopy(runtime).title, 'replay-phase':runtime?.failure||(!runtime?.can_save?replayStatusCopy(runtime).detail:''), 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—',
   'overview-replay-status':runtime?`${runtime.phase} · ${measurement(runtime.buffered_seconds)} s buffered`:'Replay status unavailable',
  };
  for(const [id,text] of Object.entries(values)){ const el=document.getElementById(id);if(el&&el.textContent!==text)el.textContent=text; }
@@ -860,7 +852,7 @@ async function checkUpdatesOnStartup() {
 }
 function pollDelay() {
  if(document.hidden)return 2000;
- return $('#replay-preview').open||['overview','replay','replay-menu'].includes(route())?1000:2500;
+ return ['overview','replay'].includes(route())?1000:2500;
 }
 async function poll() {
  if(!document.hidden)await refreshRuntime();
@@ -950,20 +942,9 @@ document.addEventListener('click',event=>{
   const item=target.dataset.deleteClip?clips.find(c=>c.id===target.dataset.deleteClip):clip(); if(!item)return;
   modal('Delete local clip',`<p>Delete <strong>${escape(item.title)}</strong> from Redunar's local replay store?</p><p class="small-note">This cannot be undone. The original recording will be removed from disk.</p><form id="delete-clip-form"><input type="hidden" name="fileName" value="${escape(item.id)}"><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Delete clip</button></div></form>`);return;
  }
- if(target.dataset.action==='preview-replay-menu'){
-  const preview=$('#replay-preview');replayPreviewTrigger=target;preview.innerHTML=replayMenu();
-  const title=$('h1',preview);title.tabIndex=-1;title.setAttribute('autofocus','');
-  preview.showModal();title.focus({preventScroll:true});updateReplayMenuStatus();
-  refreshRuntime().catch(error=>notify(message(error)));return;
- }
- if(target.dataset.action==='hide-replay-menu'&&$('#replay-preview').open){$('#replay-preview').close();return;}
  if(target.dataset.recentClip){selectedClip=target.dataset.recentClip;return;}
  if(target.dataset.clip){selectClip(target.dataset.clip);return;}
  if(target.dataset.action==='retry-clip'){resetPlayback();$('#replay-selection').innerHTML=replaySelection(clip());loadVideo();return;}
- if(target.dataset.menuDuration){
-  const seconds=Number(target.dataset.menuDuration);target.disabled=true;const feedback=$('#replay-menu-feedback');if(feedback){feedback.dataset.manual='true';feedback.textContent=`Saving the last ${seconds<60?seconds+' seconds':seconds/60+' minutes'}…`;}
-  perform(async()=>{await call('save_replay',{durationSeconds:seconds});if(feedback){feedback.dataset.manual='true';feedback.textContent='Replay save requested. Return to your game when ready.';}});return;
- }
  if(target.dataset.game){selectedGame=target.dataset.game;render();return;}
  if(target.dataset.session!==undefined){selectedSession=Number(target.dataset.session);historyCursor=null;historyCompare=false;render();return;}
  if(target.dataset.overviewView){overviewMetric=target.dataset.overviewView;document.querySelectorAll('[data-overview-view]').forEach(el=>{const selected=el.dataset.overviewView===overviewMetric;el.classList.toggle('active',selected);el.setAttribute('aria-pressed',String(selected));});updateObservedElements();return;}
@@ -1024,7 +1005,6 @@ document.addEventListener('click',event=>{
   }
   if(action==='folder')await call('open_replay_folder');
   if(action==='open-clip-external'){if(!clip())throw new Error('Select a clip first.');await call('open_clip_external',{fileName:clip().file_name});notify('Opened the selected clip in your desktop player.');}
-  if(action==='hide-replay-menu'){await call('hide_replay_menu');}
   if(action==='change-replay-folder'){
    modal('Choose replay folder','<form id="replay-folder-form"><label class="form-label">Parent directory<input name="parent" required maxlength="4096" placeholder="/home/you/Videos"></label><p class="small-note">Redunar will create and own a <code>Redunar Replays</code> folder inside this directory. Existing clips stay where they are.</p><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Save folder</button></div></form>');
   }
@@ -1079,11 +1059,10 @@ document.addEventListener('input',event=>{
 });
 function pointerTimelineValue(event){const timeline=$('#clip-timeline');if(!timeline||!playerDuration)return null;const rect=timeline.getBoundingClientRect();return clamp((event.clientX-rect.left)/Math.max(1,rect.width)*playerDuration,0,playerDuration);}
 document.addEventListener('pointerdown',event=>{const timeline=event.target.closest('#clip-timeline');if(!timeline||!videoReady||exporting)return;event.preventDefault();suppressTimelineClick=true;timelineDrag=event.target.closest('[data-timeline]')?.dataset.timeline||'seek';timeline.setPointerCapture(event.pointerId);const value=pointerTimelineValue(event);if(value!==null)setTimelineValue(timelineDrag,value,false);});
-document.addEventListener('pointerdown',event=>{if(route()==='replay-menu'&&!event.target.closest('.replay-menu-panel'))call('hide_replay_menu').catch(()=>{});});
 document.addEventListener('pointermove',event=>{if(!timelineDrag)return;const value=pointerTimelineValue(event);if(value!==null)setTimelineValue(timelineDrag,value,false);});
 document.addEventListener('pointerup',event=>{if(!timelineDrag)return;const kind=timelineDrag,value=pointerTimelineValue(event);timelineDrag=null;if(value!==null)setTimelineValue(kind,value,true);});
 document.addEventListener('pointercancel',()=>{timelineDrag=null;suppressTimelineClick=false;});
-document.addEventListener('keydown',event=>{if(route()==='replay-menu'&&event.key==='Escape'){event.preventDefault();call('hide_replay_menu').catch(()=>{});return;}const shortcut=event.target.closest('[data-shortcut]');if(shortcut){event.preventDefault();if(event.key==='Escape'){shortcut.value='';draftShortcuts[Number(shortcut.dataset.shortcut)]='';updateDirtyActionButtons();return;}if(['Control','Alt','Shift','Meta'].includes(event.key))return;const keyMap={' ':'Space','ArrowUp':'Up','ArrowDown':'Down','ArrowLeft':'Left','ArrowRight':'Right','Escape':'Esc','Tab':'Tab','Enter':'Enter','Backspace':'Backspace','Delete':'Delete'};const key=keyMap[event.key]||(/^F\d{1,2}$/i.test(event.key)?event.key.toUpperCase():event.key.length===1?event.key.toUpperCase():event.key);const parts=[];if(event.ctrlKey)parts.push('Ctrl');if(event.altKey)parts.push('Alt');if(event.shiftKey)parts.push('Shift');if(event.metaKey)parts.push('Super');parts.push(key);const value=parts.join('+');shortcut.value=value;draftShortcuts[Number(shortcut.dataset.shortcut)]=value;updateDirtyActionButtons();return;}const target=event.target.closest('[data-timeline]');if(!target||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const kind=target.dataset.timeline,current=kind==='start'?trimStart:kind==='end'?trimEnd:playerPosition;let value=current+(event.key==='ArrowRight'?1:-1)*(event.shiftKey?5:.25);if(event.key==='Home')value=kind==='seek'?trimStart:kind==='end'?trimStart+.1:0;if(event.key==='End')value=kind==='seek'?trimEnd:kind==='start'?trimEnd-.1:playerDuration;setTimelineValue(kind,value,true);});
+document.addEventListener('keydown',event=>{const shortcut=event.target.closest('[data-shortcut]');if(shortcut){event.preventDefault();if(event.key==='Escape'){shortcut.value='';draftShortcuts[Number(shortcut.dataset.shortcut)]='';updateDirtyActionButtons();return;}if(['Control','Alt','Shift','Meta'].includes(event.key))return;const keyMap={' ':'Space','ArrowUp':'Up','ArrowDown':'Down','ArrowLeft':'Left','ArrowRight':'Right','Escape':'Esc','Tab':'Tab','Enter':'Enter','Backspace':'Backspace','Delete':'Delete'};const key=keyMap[event.key]||(/^F\d{1,2}$/i.test(event.key)?event.key.toUpperCase():event.key.length===1?event.key.toUpperCase():event.key);const parts=[];if(event.ctrlKey)parts.push('Ctrl');if(event.altKey)parts.push('Alt');if(event.shiftKey)parts.push('Shift');if(event.metaKey)parts.push('Super');parts.push(key);const value=parts.join('+');shortcut.value=value;draftShortcuts[Number(shortcut.dataset.shortcut)]=value;updateDirtyActionButtons();return;}const target=event.target.closest('[data-timeline]');if(!target||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const kind=target.dataset.timeline,current=kind==='start'?trimStart:kind==='end'?trimEnd:playerPosition;let value=current+(event.key==='ArrowRight'?1:-1)*(event.shiftKey?5:.25);if(event.key==='Home')value=kind==='seek'?trimStart:kind==='end'?trimStart+.1:0;if(event.key==='End')value=kind==='seek'?trimEnd:kind==='start'?trimEnd-.1:playerDuration;setTimelineValue(kind,value,true);});
 document.addEventListener('change',event=>{
  const t=event.target;
  if(t.id==='save-duration'){updateObservedElements();return;}
@@ -1170,8 +1149,6 @@ document.addEventListener('submit',event=>{
  const form=new FormData(event.target),name=String(form.get('name')).trim(),executable=String(form.get('exe')).trim();
  perform(async()=>{acceptGames(await call('add_game',{name,executable}));selectedGame=games.find(g=>g.name===name)?.id??selectedGame;$('#dialog').close();render();notify('Game added to the production catalog.');});
 });
-$('#replay-preview').addEventListener('close',()=>{$('#replay-preview').replaceChildren();if(replayPreviewTrigger?.isConnected)replayPreviewTrigger.focus({preventScroll:true});replayPreviewTrigger=null;});
-$('#replay-preview').addEventListener('click',event=>{if(event.target===$('#replay-preview')&&replayPreferences?.close_overlay_on_outside_click)$('#replay-preview').close();});
 $('#dialog').addEventListener('cancel',event=>{if(exporting)event.preventDefault();});
 window.addEventListener('native-error',event=>notify(event.detail));
 window.addEventListener('focus',()=>{if(native&&route()==='library'&&loaded.catalog)installation.refresh();});

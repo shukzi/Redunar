@@ -63,10 +63,8 @@ when the metrics overlay is hidden. Its Vulkan surface and bounded control
 outlines use rounded corners, and measured labels are centered within their
 cells so scaling cannot push shortcut or status text across a divider. A replay menu requires a running captured
 session, and without one the helper reports the rejection and the shortcuts
-panel shows it. The app's Preview replay menu
-(the `#replay-menu` route and `#replay-preview` dialog) remains for
-configuration checks and keeps the same look through
-`ui/replay-menu-view.mjs`.
+panel shows it. The app does not expose a desktop preview because the production
+menu is rendered by the Vulkan layer inside the captured game.
 
 A completed save drives the bottom-left **Moment saved** pill in the game,
 including duration and Local library. It is independent of metrics visibility.
@@ -99,25 +97,32 @@ ledger failures never affect the save, and clips without a ledger line are
 resolved later by matching the commit time encoded in the clip name against
 exactly one recorded session window.
 
-## Audio behavior and output fallback
+## Audio behavior
 
-Audio uses PipeWire discovery, one long-lived `pw-cat` stream, bounded Opus
-packets, and timestamped muxing. Missing or failed audio can leave video-only
-recording; no microphone permission or arbitrary source selector is exposed.
+Replay records the default output monitor: the same mixed audio the user hears.
+It does not depend on game-process ownership and does not request microphone
+access. This deliberately includes other applications that play through the
+same output, so it must be described as system-output audio rather than isolated
+game audio.
 
-When a game-owned stream cannot be identified, output-monitor fallback is
-intentional and owner-approved. It keeps recordings audible when games or
-launchers do not expose usable process ownership metadata. The fallback can
-include audio from other applications; do not describe it as game-only capture.
+`crates/redunar-capture-audio/src/source.rs` prefers the PulseAudio monitor API.
+That works with a native PulseAudio server and with PipeWire's Pulse server. If
+Pulse compatibility is absent, Redunar resolves the active PipeWire output with
+`wpctl` and records it directly with `pw-cat`. Both paths produce fixed 48 kHz
+stereo PCM, bounded 20 ms Opus packets, and timestamped muxing. The worker
+rechecks the default route every two seconds, reconnects within 250 ms after a
+route change or capture failure, and treats three seconds without samples as a
+stalled transport that must be restarted. When both backends are available, a
+failed or stalled recorder is retried through the other backend instead of
+repeatedly selecting the same broken route. Older PulseAudio clients without
+`pactl get-default-sink` use the long-standing `pactl info` result.
 
-`crates/redunar-capture-audio/src/source.rs` first tries a game-process-owned
-playback node. If none is found, it resolves WirePlumber's default output with
-`wpctl`, falling back to PipeWire's Pulse compatibility through `pactl`, and
-captures that exact monitor. It never guesses between multiple outputs. The
-worker periodically rechecks the route and reconnects when the game stream
-appears or the default output changes. Missing or ambiguous discovery and audio
-failures still need honest runtime states. Validation should record which source
-was selected and check both game-owned audio and the intended output fallback.
+Redunar therefore requires either a working PulseAudio-compatible server with
+`pactl` and `parec`, or a working PipeWire server with `pw-dump`, `wpctl`, and
+`pw-cat`. PipeWire itself is not mandatory. A pure ALSA setup has no standard
+monitor for already-mixed playback and is unsupported unless the user routes
+output through PulseAudio or PipeWire. Missing audio still leaves video capture
+running and must be reported honestly.
 
 ## Clip browsing, playback, and export
 
@@ -148,7 +153,7 @@ and are removed when replaced or on normal shutdown.
 Startup also sweeps leftovers a crash or kill cannot clean itself: private
 `/var/tmp/redunar-player-*` copies older than one hour and stale
 `$XDG_RUNTIME_DIR/redunar/capture-*` session directories (including in-game
-reply sockets) owned by this user. Game-audio `pw-cat` and FFmpeg children get
+reply sockets) owned by this user. Audio-capture and FFmpeg children get
 `PR_SET_PDEATHSIG`, so a killed Redunar cannot orphan a live recorder.
 
 Playback waits for a decoded frame, not just metadata. The media-load deadline

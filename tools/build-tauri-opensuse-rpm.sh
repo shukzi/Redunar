@@ -38,7 +38,7 @@ if [[ -z "$rpm_path" ]]; then
   exit 1
 fi
 requirements=$(rpm -qp --requires "$rpm_path")
-for requirement in gtk3 libwebkit2gtk-4_1-0 libdrm2 pipewire-tools libopus0 gstreamer-plugins-libav udev; do
+for requirement in gtk3 libwebkit2gtk-4_1-0 libdrm2 /usr/bin/parec /usr/bin/pactl libopus0 gstreamer-plugins-libav udev; do
   grep -Fxq "$requirement" <<<"$requirements" || {
     printf 'openSUSE RPM is missing dependency %s\n' "$requirement" >&2
     exit 1

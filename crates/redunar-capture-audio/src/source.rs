@@ -1,13 +1,11 @@
 use crate::{
     AUDIO_CHANNELS, AUDIO_FRAME_DURATION_NS, AUDIO_FRAME_SAMPLES_PER_CHANNEL,
     AUDIO_PCM_FRAME_BYTES, AUDIO_SAMPLE_RATE, EncodedOpusPacket, GameAudioNode, OpusEncoder,
-    discover_game_audio_node, discover_output_monitor_node,
+    discover_output_monitor_node,
 };
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::fs;
 use std::io::{Read, Take};
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
@@ -19,9 +17,8 @@ const PW_DUMP_PATH: &str = "/usr/bin/pw-dump";
 const PW_CAT_PATH: &str = "/usr/bin/pw-cat";
 const WPCTL_PATH: &str = "/usr/bin/wpctl";
 const PACTL_PATH: &str = "/usr/bin/pactl";
+const PAREC_PATH: &str = "/usr/bin/parec";
 const MAX_REGISTRY_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_PROCESSES: usize = 8_192;
-const MAX_PROCESS_DEPTH: usize = 32;
 
 #[derive(Debug)]
 pub struct AudioCaptureError(String);
@@ -40,58 +37,81 @@ impl fmt::Display for AudioCaptureError {
 
 impl Error for AudioCaptureError {}
 
-/// Return the bounded process tree rooted at the game renderer process.
-///
-/// Missing or unreadable `/proc` entries are ignored because game processes
-/// may exit during discovery. The root PID remains included.
-#[must_use]
-pub fn process_tree(root_pid: u32) -> BTreeSet<u32> {
-    let mut result = BTreeSet::from([root_pid]);
-    if root_pid == 0 {
-        return result;
-    }
-    let mut parents = BTreeMap::new();
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return result;
-    };
-    for entry in entries.flatten().take(MAX_PROCESSES) {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|value| value.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        if let Ok(stat) = fs::read_to_string(entry.path().join("stat"))
-            && let Some(parent) = stat_parent_pid(&stat)
-        {
-            parents.insert(pid, parent);
-        }
-    }
-    for _ in 0..MAX_PROCESS_DEPTH {
-        let before = result.len();
-        for (&pid, &parent) in &parents {
-            if result.contains(&parent) {
-                result.insert(pid);
-            }
-        }
-        if result.len() == before {
-            break;
-        }
-    }
-    result
+/// One exact default-output monitor selected for the Replay worker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AudioCaptureSource {
+    PipeWire(GameAudioNode),
+    PulseAudio { sink_name: String },
 }
 
-/// Query the local `PipeWire` registry once and select exactly one audio node
-/// owned by the current game process tree.
+impl AudioCaptureSource {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::PipeWire(node) => &node.node_name,
+            Self::PulseAudio { sink_name } => sink_name,
+        }
+    }
+
+    #[must_use]
+    pub const fn backend_name(&self) -> &'static str {
+        match self {
+            Self::PipeWire(_) => "PipeWire",
+            Self::PulseAudio { .. } => "PulseAudio monitor",
+        }
+    }
+}
+
+/// Select the strongest available Linux output-capture route.
+///
+/// PulseAudio's default monitor is preferred because it works with both a real
+/// PulseAudio server and PipeWire's Pulse server. A direct PipeWire default
+/// output remains available when the Pulse compatibility service is absent.
 ///
 /// # Errors
 ///
-/// Returns [`AudioCaptureError`] when the system utility is unavailable,
-/// its bounded output is malformed, or process ownership is ambiguous.
-pub fn discover_pipewire_game_node(
-    process_ids: &BTreeSet<u32>,
-) -> Result<Option<GameAudioNode>, AudioCaptureError> {
+/// Returns [`AudioCaptureError`] when neither supported sound server exposes a
+/// usable output route.
+pub fn discover_system_audio_source() -> Result<AudioCaptureSource, AudioCaptureError> {
+    discover_system_audio_sources()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AudioCaptureError::new("no output-monitor capture route is available"))
+}
+
+/// Find every usable output-capture backend in preference order.
+///
+/// Keeping both routes lets the session worker fall back when a sound server
+/// advertises a route but its recorder exits or stops delivering samples.
+///
+/// # Errors
+///
+/// Returns [`AudioCaptureError`] when neither supported sound server exposes a
+/// usable output route.
+pub fn discover_system_audio_sources() -> Result<Vec<AudioCaptureSource>, AudioCaptureError> {
+    let mut sources = Vec::with_capacity(2);
+    if let Some(source) = discover_pulse_default_monitor() {
+        sources.push(source);
+    }
+
+    if system_utility(PW_CAT_PATH, "pw-cat").is_some() {
+        if let Ok(registry) = inspect_pipewire_registry()
+            && let Ok(Some(source)) = discover_default_output_monitor_node(&registry)
+        {
+            sources.push(AudioCaptureSource::PipeWire(source));
+        }
+    }
+
+    if !sources.is_empty() {
+        return Ok(sources);
+    }
+
+    Err(AudioCaptureError::new(
+        "no output-monitor capture route is available; install PulseAudio utilities or PipeWire tools",
+    ))
+}
+
+fn inspect_pipewire_registry() -> Result<Vec<u8>, AudioCaptureError> {
     let Some(pw_dump) = system_utility(PW_DUMP_PATH, "pw-dump") else {
         return Err(AudioCaptureError::new(
             "PipeWire registry utility is unavailable",
@@ -132,12 +152,13 @@ pub fn discover_pipewire_game_node(
             "PipeWire registry query failed or exceeded its bound",
         ));
     }
-    discover_game_audio_node(&bytes, process_ids)
-        .and_then(|node| match node {
-            Some(found) => Ok(Some(found)),
-            None => discover_default_output_monitor_node(&bytes),
-        })
-        .map_err(|error| AudioCaptureError::new(error.to_string()))
+    Ok(bytes)
+}
+
+fn discover_pulse_default_monitor() -> Option<AudioCaptureSource> {
+    system_utility(PAREC_PATH, "parec")?;
+    let sink_name = inspect_pactl_default_sink_name()?;
+    Some(AudioCaptureSource::PulseAudio { sink_name })
 }
 
 fn discover_default_output_monitor_node(
@@ -160,17 +181,37 @@ fn inspect_default_sink_name() -> Option<String> {
     {
         return Some(name);
     }
+    inspect_pactl_default_sink_name()
+}
+
+fn inspect_pactl_default_sink_name() -> Option<String> {
     let pactl = system_utility(PACTL_PATH, "pactl")?;
-    let output = Command::new(pactl)
+    let output = Command::new(&pactl)
         .arg("get-default-sink")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    if !output.status.success() || output.stdout.len() > 4 * 1024 {
+    if output.status.success()
+        && output.stdout.len() <= 4 * 1024
+        && let Some(name) = parse_pactl_default_sink_name(&output.stdout)
+    {
+        return Some(name);
+    }
+
+    // `get-default-sink` is newer than the long-standing `info` command.
+    // Accept the latter so supported PulseAudio installations on older Linux
+    // distributions do not lose replay audio solely due to client age.
+    let output = Command::new(pactl)
+        .arg("info")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > 64 * 1024 {
         return None;
     }
-    parse_pactl_default_sink_name(&output.stdout)
+    parse_pactl_info_default_sink_name(&output.stdout)
 }
 
 fn parse_default_sink_name(output: &[u8]) -> Option<String> {
@@ -194,7 +235,22 @@ fn parse_default_sink_name(output: &[u8]) -> Option<String> {
 }
 
 fn parse_pactl_default_sink_name(output: &[u8]) -> Option<String> {
-    let value = std::str::from_utf8(output).ok()?.trim();
+    valid_sink_name(std::str::from_utf8(output).ok()?.trim())
+}
+
+fn parse_pactl_info_default_sink_name(output: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(output).ok()?;
+    let value = text.lines().find_map(|line| {
+        let (label, value) = line.split_once(':')?;
+        label
+            .trim()
+            .eq_ignore_ascii_case("Default Sink")
+            .then_some(value.trim())
+    })?;
+    valid_sink_name(value)
+}
+
+fn valid_sink_name(value: &str) -> Option<String> {
     if value.is_empty()
         || value.len() > 256
         || value.contains(char::is_whitespace)
@@ -217,7 +273,7 @@ fn system_utility(preferred: &str, name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-pub struct PipeWireGameAudioCapture {
+pub struct SystemAudioCapture {
     child: Child,
     stdout: ChildStdout,
     encoder: OpusEncoder,
@@ -228,46 +284,22 @@ pub struct PipeWireGameAudioCapture {
     next_timestamp_ns: Option<u64>,
 }
 
-impl PipeWireGameAudioCapture {
-    /// Start one long-lived raw `PipeWire` capture stream for an exact node.
+impl SystemAudioCapture {
+    /// Start one long-lived raw capture stream for the selected system route.
     ///
     /// # Errors
     ///
-    /// Returns [`AudioCaptureError`] when `pw-cat`, its pipe, or `libopus`
-    /// cannot be initialized. Node discovery may supply the output-monitor
-    /// fallback when no game-owned stream can be identified.
+    /// Returns [`AudioCaptureError`] when the selected capture utility, its
+    /// pipe, or `libopus` cannot be initialized.
     pub fn start(
-        node: &GameAudioNode,
+        source: &AudioCaptureSource,
         timeline_timestamp_ns: u64,
         timeline_started: Instant,
     ) -> Result<Self, AudioCaptureError> {
-        let Some(pw_cat) = system_utility(PW_CAT_PATH, "pw-cat") else {
-            return Err(AudioCaptureError::new(
-                "PipeWire audio capture utility is unavailable",
-            ));
-        };
-        if node.serial == 0 {
-            return Err(AudioCaptureError::new("PipeWire audio target is invalid"));
-        }
         let encoder =
             OpusEncoder::open().map_err(|error| AudioCaptureError::new(error.to_string()))?;
-        let mut command = Command::new(pw_cat);
+        let mut command = capture_command(source)?;
         command
-            .args([
-                "--record",
-                "--raw",
-                "--rate",
-                &AUDIO_SAMPLE_RATE.to_string(),
-                "--channels",
-                &AUDIO_CHANNELS.to_string(),
-                "--format",
-                "s16",
-                "--latency",
-                "20ms",
-                "--target",
-                &node.serial.to_string(),
-                "-",
-            ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -383,31 +415,73 @@ impl PipeWireGameAudioCapture {
     }
 }
 
-impl Drop for PipeWireGameAudioCapture {
+impl Drop for SystemAudioCapture {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-fn stat_parent_pid(stat: &str) -> Option<u32> {
-    let end = stat.rfind(')')?;
-    stat.get(end + 1..)?.split_whitespace().nth(1)?.parse().ok()
+fn capture_command(source: &AudioCaptureSource) -> Result<Command, AudioCaptureError> {
+    match source {
+        AudioCaptureSource::PipeWire(node) => {
+            let Some(pw_cat) = system_utility(PW_CAT_PATH, "pw-cat") else {
+                return Err(AudioCaptureError::new(
+                    "PipeWire audio capture utility is unavailable",
+                ));
+            };
+            if node.serial == 0 {
+                return Err(AudioCaptureError::new("PipeWire audio target is invalid"));
+            }
+            let mut command = Command::new(pw_cat);
+            command.args([
+                "--record",
+                "--raw",
+                "--rate",
+                &AUDIO_SAMPLE_RATE.to_string(),
+                "--channels",
+                &AUDIO_CHANNELS.to_string(),
+                "--format",
+                "s16",
+                "--latency",
+                "20ms",
+                "--target",
+                &node.serial.to_string(),
+                "-",
+            ]);
+            Ok(command)
+        }
+        AudioCaptureSource::PulseAudio { .. } => {
+            let Some(parec) = system_utility(PAREC_PATH, "parec") else {
+                return Err(AudioCaptureError::new(
+                    "PulseAudio capture utility is unavailable",
+                ));
+            };
+            let AudioCaptureSource::PulseAudio { sink_name } = source else {
+                unreachable!();
+            };
+            let monitor_name = format!("{sink_name}.monitor");
+            let mut command = Command::new(parec);
+            command.args([
+                "--record",
+                "--raw",
+                &format!("--rate={AUDIO_SAMPLE_RATE}"),
+                &format!("--channels={AUDIO_CHANNELS}"),
+                "--format=s16le",
+                "--latency-msec=20",
+                "--process-time-msec=20",
+                &format!("--device={monitor_name}"),
+                "--client-name=Redunar",
+                "--stream-name=Instant Replay",
+            ]);
+            Ok(command)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stat_parser_handles_spaces_inside_process_name() {
-        assert_eq!(stat_parent_pid("42 (game name) S 17 0 0"), Some(17));
-    }
-
-    #[test]
-    fn process_tree_always_contains_the_requested_root() {
-        assert!(process_tree(std::process::id()).contains(&std::process::id()));
-    }
 
     #[test]
     fn default_sink_parser_accepts_wpctl_node_name() {
@@ -427,6 +501,35 @@ mod tests {
             parse_pactl_default_sink_name(b"alsa_output.pci-0000_0f_00.4.analog-stereo\n")
                 .as_deref(),
             Some("alsa_output.pci-0000_0f_00.4.analog-stereo")
+        );
+    }
+
+    #[test]
+    fn pulse_capture_targets_the_resolved_default_sink_monitor() {
+        let source = AudioCaptureSource::PulseAudio {
+            sink_name: "alsa_output.test".to_owned(),
+        };
+        let command = capture_command(&source).expect("PulseAudio capture command");
+        let arguments = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            arguments
+                .iter()
+                .any(|value| value == "--device=alsa_output.test.monitor")
+        );
+        assert!(arguments.iter().any(|value| value == "--rate=48000"));
+        assert!(arguments.iter().any(|value| value == "--channels=2"));
+    }
+
+    #[test]
+    fn default_sink_parser_accepts_legacy_pactl_info() {
+        let output =
+            b"Server String: /run/user/1000/pulse/native\nDefault Sink: alsa_output.test\n";
+        assert_eq!(
+            parse_pactl_info_default_sink_name(output).as_deref(),
+            Some("alsa_output.test")
         );
     }
 }

@@ -131,31 +131,14 @@ test('final settings surface omits internal runtime and diagnostics panels',()=>
  assert.doesNotMatch(settingsSource,/Runtime connections/);
  assert.doesNotMatch(settingsSource,/diagnosticsCard\(\)/);
 });
-test('native replay menu uses the production overlay language and opaque control surface',()=>{
+test('obsolete desktop replay preview is absent',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
- const menuSource=readFileSync(new URL('../ui/replay-menu-view.mjs',import.meta.url),'utf8');
- assert.match(menuSource,/Save replay/);
- assert.match(menuSource,/Buffering replay/);
- assert.match(menuSource,/Ready to save/);
- assert.match(menuSource,/const options=\[15,30,60,120\]/);
- assert.doesNotMatch(menuSource,/Tauri build|local Redunar build/);
- assert.doesNotMatch(source,/local Redunar build|Tauri build/);
- assert.match(menuSource,/id=\"replay-menu-status-card\"/);
- assert.match(menuSource,/id=\"replay-menu-status-title\"/);
- assert.match(menuSource,/id=\"replay-menu-status-detail\"/);
- assert.match(source,/function updateReplayMenuStatus\(\)/);
- assert.match(source,/updateReplayMenuStatus\(\);/);
- assert.doesNotMatch(source,/Start this game from Redunar with Instant Replay enabled/);
+ const html=readFileSync(new URL('../ui/index.html',import.meta.url),'utf8');
+ assert.doesNotMatch(source,/Preview replay menu|preview-replay-menu|replay-preview|function replayMenu\(\)/);
+ assert.doesNotMatch(html,/replay-preview/);
+ assert.doesNotMatch(source,/capture-explainer|Local replay buffer|Replay controls/);
 });
-test('replay menu styles the enlarged panel without a page background and the desktop host is retired',()=>{
- const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
- assert.match(css,/html:has\(body\[data-page="replay-menu"\]\).*background:transparent!important/);
- assert.match(css,/body\[data-page="replay-menu"\] \.app-shell,body\[data-page="replay-menu"\] #workspace\{background:transparent!important\}/);
- assert.match(css,/:is\(body\[data-page="replay-menu"\],#replay-preview\) \.replay-menu-panel\{width:min\(680px/);
- assert.match(css,/:is\(body\[data-page="replay-menu"\],#replay-preview\) \.replay-menu-panel\{[^}]*background:#0c0b0e[^}]*box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none/);
- assert.match(css,/\.replay-menu-status-card\{[^}]*background:#121014\}/);
- // The hotkey menu is rendered into the captured game by the Vulkan layer,
- // so no desktop menu window or dedicated entry document may come back.
+test('desktop replay menu host remains retired',()=>{
  assert.throws(()=>readFileSync(new URL('../src-tauri/src/replay_menu_window.rs',import.meta.url),'utf8'));
  assert.throws(()=>readFileSync(new URL('../ui/replay-menu.html',import.meta.url),'utf8'));
  const hotkeys=readFileSync(new URL('../src-tauri/src/hotkeys.rs',import.meta.url),'utf8');
@@ -302,7 +285,6 @@ test('Tauri replay settings do not expose a total storage quota',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const replaySettings=source.slice(source.indexOf('function globalReplay()'),source.indexOf('function frameRateControl()',source.indexOf('function globalReplay()')));
  assert.doesNotMatch(replaySettings,/Saved clip storage/);
- assert.match(source,/filesystem safety reserve prevents another save/);
  assert.match(source,/storageValue=unlimited\?/);
 });
 test('Replay storage usage uses human-readable units without the verbose safety note',()=>{

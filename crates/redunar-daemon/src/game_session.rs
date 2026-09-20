@@ -28,6 +28,8 @@ const REPLAY_REARM_BACKOFF_MAX: Duration = Duration::from_secs(10);
 /// Consecutive frame-source failures tolerated before the running recorder
 /// is failed over so the reported health reflects the missing source.
 const REPLAY_SOURCE_ERROR_LIMIT: u32 = 10;
+const AUDIO_CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(3);
+const AUDIO_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 
 /// One bounded, daemon-owned view of all work attached to a running game.
 ///
@@ -903,16 +905,12 @@ fn run_replay_export_pump(
                 frame_dimensions.0, frame_dimensions.1
             );
             publish_replay_component(&coordinator, GameSessionComponentState::Active);
-            // One audio worker serves the whole game session. It survives
-            // recorder re-arms, so re-arming never spawns a second PipeWire
-            // consumer for the same game node.
+            // One default-output audio worker serves the whole game session.
+            // It survives recorder re-arms, so re-arming never spawns a second
+            // system-audio consumer.
             if audio_worker.is_none() {
-                audio_worker = start_game_audio_worker(
-                    Arc::clone(&stop),
-                    replay.clone(),
-                    coordinator.clone(),
-                    frame.timestamp_ns,
-                );
+                audio_worker =
+                    start_game_audio_worker(Arc::clone(&stop), replay.clone(), frame.timestamp_ns);
             }
         } else if dimensions != Some(frame_dimensions) {
             let Ok(replacement) = backend_factory(&frame) else {
@@ -1014,20 +1012,13 @@ fn enter_replay_recovery(
 fn start_game_audio_worker(
     stop: Arc<AtomicBool>,
     replay: ProductionReplayRuntime,
-    coordinator: Weak<CoordinatorInner>,
     timeline_timestamp_ns: u64,
 ) -> Option<JoinHandle<()>> {
     let timeline_started = Instant::now();
     thread::Builder::new()
         .name("redunar-replay-audio".to_owned())
         .spawn(move || {
-            run_game_audio_worker(
-                &stop,
-                &replay,
-                &coordinator,
-                timeline_timestamp_ns,
-                timeline_started,
-            );
+            run_game_audio_worker(&stop, &replay, timeline_timestamp_ns, timeline_started);
         })
         .map_err(|error| eprintln!("Redunar Replay: could not start game audio worker: {error}"))
         .ok()
@@ -1036,59 +1027,54 @@ fn start_game_audio_worker(
 fn run_game_audio_worker(
     stop: &AtomicBool,
     replay: &ProductionReplayRuntime,
-    coordinator: &Weak<CoordinatorInner>,
     timeline_timestamp_ns: u64,
     timeline_started: Instant,
 ) {
-    // Audio initialization can legitimately lag video (many games create
-    // their PipeWire stream only after the first rendered frames). Keep the
-    // worker alive and reconnect after transient PipeWire/device failures so
-    // audio does not silently disappear for the rest of the session.
+    // Keep the worker alive and reconnect after route or sound-server failures
+    // so audio does not silently disappear for the rest of the session.
+    let mut backend_attempt = 0_usize;
     while !stop.load(Ordering::Acquire) {
-        let Some(root_pid) = replay_game_process_id(coordinator) else {
-            thread::sleep(Duration::from_millis(250));
-            continue;
-        };
-        let process_ids = redunar_capture_audio::process_tree(root_pid);
-        let node = match redunar_capture_audio::discover_pipewire_game_node(&process_ids) {
-            Ok(Some(found)) => found,
-            Ok(None) => {
-                thread::sleep(Duration::from_secs(1));
-                continue;
-            }
+        let sources = match redunar_capture_audio::discover_system_audio_sources() {
+            Ok(found) => found,
             Err(error) => {
                 eprintln!("Redunar Replay: game audio discovery failed; retrying: {error}");
                 thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
-        let mut capture = match redunar_capture_audio::PipeWireGameAudioCapture::start(
-            &node,
+        let source = sources[backend_attempt % sources.len()].clone();
+        let mut capture = match redunar_capture_audio::SystemAudioCapture::start(
+            &source,
             timeline_timestamp_ns,
             timeline_started,
         ) {
             Ok(capture) => capture,
             Err(error) => {
                 eprintln!("Redunar Replay: game audio capture unavailable; retrying: {error}");
+                backend_attempt = backend_attempt.saturating_add(1);
                 thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
-        let source_label = if node.process_id == 0 {
-            "default output monitor"
-        } else {
-            "game-owned stream"
-        };
         eprintln!(
-            "Redunar Replay: audio capture active from {source_label} ({})",
-            node.node_name
+            "Redunar Replay: audio capture active from the default output via {} ({})",
+            source.backend_name(),
+            source.name()
         );
         let mut reconnect = false;
+        let mut backend_failed = false;
         let mut recorder_pause_logged = false;
+        let mut last_packet_at = Instant::now();
+        let mut received_packet = false;
         let mut rediscover_at = Instant::now() + Duration::from_secs(2);
         while !stop.load(Ordering::Acquire) {
             match capture.next_packet(Duration::from_millis(100)) {
                 Ok(Some(packet)) => {
+                    if !received_packet {
+                        backend_attempt = 0;
+                        received_packet = true;
+                    }
+                    last_packet_at = Instant::now();
                     if let Err(error) = replay.submit_audio(packet) {
                         if matches!(
                             replay.status().phase,
@@ -1102,7 +1088,7 @@ fn run_game_audio_worker(
                         }
                         // The recorder itself is stopped (failed, re-arming,
                         // or inactive), which is not a broken audio
-                        // transport. Keep this PipeWire consumer attached and
+                        // transport. Keep this audio consumer attached and
                         // drop packets until the pump re-arms a pipeline;
                         // reconnecting here would respawn the capture helper
                         // about once per second for the rest of the session.
@@ -1116,27 +1102,35 @@ fn run_game_audio_worker(
                         recorder_pause_logged = false;
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    if last_packet_at.elapsed() > AUDIO_CAPTURE_STALL_TIMEOUT {
+                        eprintln!(
+                            "Redunar Replay: audio capture stopped producing samples; reconnecting"
+                        );
+                        reconnect = true;
+                        backend_failed = true;
+                        break;
+                    }
+                }
                 Err(error) => {
                     eprintln!("Redunar Replay: game audio capture stopped; retrying: {error}");
                     reconnect = true;
+                    backend_failed = true;
                     break;
                 }
             }
             if Instant::now() >= rediscover_at {
                 rediscover_at = Instant::now() + Duration::from_secs(2);
-                let Some(root_pid) = replay_game_process_id(coordinator) else {
-                    reconnect = true;
-                    break;
-                };
-                let process_ids = redunar_capture_audio::process_tree(root_pid);
-                if let Ok(Some(updated)) =
-                    redunar_capture_audio::discover_pipewire_game_node(&process_ids)
-                    && updated.serial != node.serial
+                if let Ok(updated) = redunar_capture_audio::discover_system_audio_sources()
+                    && let Some(updated) = updated
+                        .into_iter()
+                        .find(|candidate| candidate.backend_name() == source.backend_name())
+                    && updated != source
                 {
                     eprintln!(
                         "Redunar Replay: audio output changed from {} to {}; reconnecting",
-                        node.node_name, updated.node_name
+                        source.name(),
+                        updated.name()
                     );
                     reconnect = true;
                     break;
@@ -1144,17 +1138,14 @@ fn run_game_audio_worker(
             }
         }
         if reconnect {
-            thread::sleep(Duration::from_secs(1));
+            // Try the next discovered backend after a transport failure. A
+            // default-device change reconnects the same backend instead.
+            if backend_failed {
+                backend_attempt = backend_attempt.saturating_add(1);
+            }
+            thread::sleep(AUDIO_RECONNECT_DELAY);
         }
     }
-}
-
-fn replay_game_process_id(coordinator: &Weak<CoordinatorInner>) -> Option<u32> {
-    let coordinator = coordinator.upgrade()?;
-    lock_unpoisoned(&coordinator.state)
-        .capture
-        .as_ref()
-        .and_then(|capture| capture.snapshot().producer_process_id)
 }
 
 fn release_runtime_completions(

@@ -10,8 +10,9 @@ depends=(
   'gst-libav'
   'gtk3'
   'libdrm'
+  'libpulse'
   'opus'
-  'pipewire-audio'
+  'pulse-native-provider'
   'systemd'
   'webkit2gtk-4.1'
 )

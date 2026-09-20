@@ -16,7 +16,8 @@ const MINIMUM_TRIM_SECONDS: f64 = 0.1;
 const MAXIMUM_TRIM_SECONDS: f64 = 24.0 * 60.0 * 60.0;
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const EXPORT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const OUTPUT_SIZE_ALLOWANCE: u64 = 4 * 1024 * 1024;
+const OUTPUT_SIZE_ALLOWANCE: u64 = 64 * 1024 * 1024;
+const OUTPUT_SIZE_MULTIPLIER: u64 = 2;
 static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Default)]
@@ -227,9 +228,7 @@ fn render_trim(
     job: &ExportJob,
     output: &Path,
 ) -> Result<(), String> {
-    let max_output_bytes = source_bytes
-        .checked_add(OUTPUT_SIZE_ALLOWANCE.max(source_bytes / 20))
-        .ok_or("The source clip is too large to export safely")?;
+    let max_output_bytes = temporary_output_limit(source_bytes)?;
     let mut child = crate::media_tools::ffmpeg(Some("libx264"))?
         .args([
             "-hide_banner",
@@ -351,6 +350,13 @@ fn render_trim(
     }
     job.progress_thousandths.store(950, Ordering::Release);
     Ok(())
+}
+
+fn temporary_output_limit(source_bytes: u64) -> Result<u64, String> {
+    source_bytes
+        .checked_mul(OUTPUT_SIZE_MULTIPLIER)
+        .and_then(|bytes| bytes.checked_add(OUTPUT_SIZE_ALLOWANCE))
+        .ok_or_else(|| "The source clip is too large to export safely".into())
 }
 
 fn read_ffmpeg_progress(
@@ -505,5 +511,14 @@ mod tests {
         );
         assert_eq!(progress.load(Ordering::Acquire), 950);
         assert_eq!(diagnostics, "encoder failed");
+    }
+
+    #[test]
+    fn temporary_export_allows_reencoding_overhead_without_becoming_unbounded() {
+        assert_eq!(
+            temporary_output_limit(8 * 1024 * 1024).unwrap(),
+            80 * 1024 * 1024
+        );
+        assert!(temporary_output_limit(u64::MAX).is_err());
     }
 }

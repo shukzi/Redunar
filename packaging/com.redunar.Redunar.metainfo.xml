@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.2" date="2026-09-20">
+      <description>
+        <p>Records the active system output through PulseAudio or PipeWire with automatic recovery, adds optional in-game overlay branding, removes the obsolete desktop Replay preview, and fixes bounded trimmed-clip exports.</p>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-09-20">
       <description>
         <p>Improves Instant Replay audio routing and retention, preserves clip game names during immediate refreshes, cancels obsolete playback preparation, protects game imports and launch edits from stale UI state, and fixes overlay preview palette borders.</p>

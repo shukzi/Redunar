@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.1
+Version:        0.1.2
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -9,7 +9,8 @@ BuildArch:      x86_64
 Requires:       gtk3
 Requires:       libwebkit2gtk-4_1-0
 Requires:       libdrm2
-Requires:       pipewire-tools
+Requires:       /usr/bin/parec
+Requires:       /usr/bin/pactl
 Requires:       libopus0
 Requires:       /usr/bin/ffmpeg
 Requires:       /usr/bin/ffprobe
@@ -19,7 +20,8 @@ Requires:       udev
 Requires:       gtk3
 Requires:       webkit2gtk4.1
 Requires:       libdrm
-Requires:       pipewire-utils
+Requires:       /usr/bin/parec
+Requires:       /usr/bin/pactl
 Requires:       opus
 # File/capability dependencies accept ffmpeg or ffmpeg-free, including RPM
 # Fusion's standalone freeworld codec library or its full ffmpeg-libs provider.
@@ -93,9 +95,16 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Sun Sep 20 2026 Redunar <local@redunar.invalid> - 0.1.2-1.local
+- Record the active system output through PulseAudio or PipeWire and recover
+  automatically from route changes, stalled capture, and backend failures
+- Add live and persisted control over in-game overlay branding
+- Remove the obsolete desktop Replay preview and controls card
+- Allow bounded re-encoding overhead when exporting trimmed clips
+
 * Sun Sep 20 2026 Redunar <local@redunar.invalid> - 0.1.1-1.local
-- Follow the active PipeWire output, retain full-duration Replay audio, and
-  expose audio readiness in the Instant Replay workspace
+- Record the active system output through PulseAudio or PipeWire, reconnect
+  stalled streams, and expose audio readiness in the Instant Replay workspace
 - Preserve clip game attribution, cancel stale playback preparation, and guard
   game discovery and launch edits against stale UI state
 - Correct overlay preview palette borders and remove obsolete generated assets

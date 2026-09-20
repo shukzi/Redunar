@@ -438,7 +438,7 @@ impl CaptureSessionHandle {
             overlay_telemetry_path,
             overlay_telemetry_file,
             overlay_telemetry_revision: AtomicU64::new(2),
-            overlay_config: AtomicU64::new(pack_overlay_config(0, 0, 1, 50, 100, 0, 0)),
+            overlay_config: AtomicU64::new(pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true)),
             overlay_replay_saved_revision: AtomicU16::new(0),
             launch_started_at: Instant::now(),
             lifecycle: CaptureLaunchLifecycle::new(),
@@ -638,6 +638,7 @@ impl CaptureSessionHandle {
                         effective.overlay_opacity,
                     )
                     .with_style(effective.overlay_layout, effective.overlay_palette)
+                    .with_branding(effective.overlay_branding)
                     .with_metrics(effective.overlay_metrics),
             )
             .with_replay_transfer_config(replay_transfer_launch_config(effective, true));
@@ -697,6 +698,7 @@ impl CaptureSessionHandle {
             effective.overlay_metrics,
         )
         .with_overlay_style(effective.overlay_layout, effective.overlay_palette)
+        .with_overlay_branding(effective.overlay_branding)
         .with_replay_requested(effective.instant_replay)
         .with_replay_frame_rate(effective.replay.frame_rate);
         environment = environment
@@ -832,6 +834,7 @@ impl CaptureSessionHandle {
             profile.overlay_scale.percent(),
             overlay_layout_code(profile.overlay_layout),
             overlay_palette_code(profile.overlay_palette),
+            profile.overlay_branding,
         );
         let packed = packed
             | ((if profile.overlay_visible {
@@ -1587,6 +1590,7 @@ fn create_overlay_telemetry_file(directory: &Path) -> io::Result<(PathBuf, File)
         scale_percent: 100,
         replay_saved_revision: 0,
         metrics_visible: None,
+        branding_visible: true,
         cpu_utilization_tenths: None,
         cpu_temperature_tenths_celsius: None,
         gpu_utilization_tenths: None,
@@ -1648,10 +1652,11 @@ fn write_overlay_hardware(
         scale_percent: ((packed_config >> 40) & 0xff) as u8,
         replay_saved_revision,
         metrics_visible: match (packed_config >> 48) & 0xff {
-            1 => Some(true),
-            2 => Some(false),
+            value if value & 0x03 == 1 => Some(true),
+            value if value & 0x03 == 2 => Some(false),
             _ => None,
         },
+        branding_visible: ((packed_config >> 48) & 0x04) != 0,
         cpu_utilization_tenths: hardware
             .and_then(|snapshot| snapshot.cpu.utilization_percent)
             .and_then(|value| metric_tenths(value, 1_000)),
@@ -1679,12 +1684,14 @@ fn pack_overlay_config(
     scale: u8,
     layout: u8,
     palette: u8,
+    branding_visible: bool,
 ) -> u64 {
     u64::from(corner)
         | (u64::from(preset) << 8)
         | (u64::from(metrics) << 16)
         | (u64::from(opacity) << 32)
         | (u64::from(scale) << 40)
+        | (u64::from(branding_visible) << 50)
         | (u64::from(layout & 0x0f) << 56)
         | (u64::from(palette & 0x0f) << 60)
 }
@@ -1994,7 +2001,7 @@ mod tests {
             &file,
             &revision,
             Some(&hardware),
-            pack_overlay_config(0, 0, 1, 50, 100, 0, 0),
+            pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true),
             0,
         )
         .expect("write telemetry");
@@ -2019,7 +2026,7 @@ mod tests {
             &file,
             &revision,
             None,
-            pack_overlay_config(0, 0, 1, 50, 100, 0, 0),
+            pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true),
             9,
         )
         .expect("clear telemetry");

@@ -42,7 +42,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Redunar Project <maintainers@redunar.invalid>
 Installed-Size: $installed_size
-Depends: libgtk-3-0t64 | libgtk-3-0, libwebkit2gtk-4.1-0, libdrm2, pipewire-bin, libopus0, ffmpeg, gstreamer1.0-libav, udev
+Depends: libgtk-3-0t64 | libgtk-3-0, libwebkit2gtk-4.1-0, libdrm2, pulseaudio-utils, libopus0, ffmpeg, gstreamer1.0-libav, udev
 Conflicts: redunar, redunar-tauri
 Replaces: redunar, redunar-tauri
 Description: Local-first Linux gaming metrics and instant replay

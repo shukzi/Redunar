@@ -26,7 +26,7 @@ function artworkFixture(width,height,label,mime='image/png'){const canvas=docume
 const posterFixture=artworkFixture(300,450,'Poster');
 const bannerFixture=artworkFixture(1200,350,'Landscape banner');
 const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
-const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
+const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
 const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/fixture/game',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',launch_revision:'launch-1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',launch_revision:'launch-2',overrides:{overlay:false}}];
 window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
  bridge.calls.push({command,args:structuredClone(args)});
@@ -36,7 +36,7 @@ window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
  if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
  if(command==='session_status')return {phase:'Running',game:games[0].name,can_end:true,launch_locked:true,elapsed_seconds:1938,captures_saved:3,profile_label:'Session profile',feature_summary:'Metrics enabled · replay enabled',restoration:'NotRequired',history_revision:1,measurements:{revision:bridge.revision,average_fps:141,frame_time_ms:7.1,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000+Math.round(Math.sin(bridge.revision)*700000)],phase:'Live'}};
  if(command==='replay_runtime_status'&&bridge.replayInactive)return {phase:'Inactive',can_save:false,buffered_seconds:0};
- if(command==='replay_runtime_status')return {phase:'Buffering',can_save:true,buffered_seconds:30,received_frame_count:600,encoded_packet_count:600,audio_packet_count:1500,audio_byte_count:4500,completed_save_revision:1};
+ if(command==='replay_runtime_status')return {phase:'Buffering',can_save:true,buffered_seconds:30,received_frame_count:600,encoded_packet_count:600,audio_packet_count:1500,audio_byte_count:4500,audio_active:true,completed_save_revision:1};
  if(command==='module_statuses')return structuredClone(bridge.modules);
  if(command==='discover_games')return structuredClone(bridge.discovered||[]);
  if(command==='import_discovered_games')return structuredClone(games);
@@ -51,7 +51,7 @@ window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
  if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};
  if(command==='set_close_to_tray')return {close_to_tray:args.enabled,automatic_updates:bridge.automaticUpdates};
  if(command==='set_automatic_updates'){bridge.automaticUpdates=args.enabled;return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};}
- if(command==='check_for_updates')return {current_version:'0.1.1',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
+ if(command==='check_for_updates')return {current_version:'0.1.2',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
  if(command==='global_settings')return {values:structuredClone(values),revision:'1'};
  if(command==='save_global_settings'){if(bridge.conflict)throw new Error('Saved defaults changed elsewhere. Reload before saving.');Object.assign(values,args.input);return {values:structuredClone(values),revision:'2'};}
  if(command==='save_game_profile'){games.find(g=>g.id===args.gameId).overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));return {games:structuredClone(games),liveNotice:'Game settings saved. The running game overlay was updated.'};}
@@ -144,6 +144,7 @@ try:
     test('Telemetry and Rose produce the dense preview',"const layout=q('[data-global=layout]');layout.value='Telemetry';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Rose';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('#hud').dataset.layout==='Telemetry','telemetry preview');check(q('.hud-telemetry-row'),'dense metric row');check(q('#hud').style.getPropertyValue('--hud-accent')==='#ff82ad','rose accent');")
     snap('global-overlay-telemetry-rose')
     js("const layout=q('[data-global=layout]');layout.value='Grid';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Redunar';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('.settings-save-bar').hidden,'restored style is clean')")
+    test('Branding can be hidden without hiding metrics',"const branding=q('[data-global=branding]');branding.click();check(!q('#hud').textContent.includes('REDUNAR'),'branding removed from preview');check(q('.hud-native-frame'),'metrics remain visible');branding.click();check(q('#hud').textContent.includes('REDUNAR'),'branding restored');check(q('.settings-save-bar').hidden,'restored branding is clean');")
     test('Global toggles preserve booleans across input and change',"q('[data-global=overlay]').click();click('[data-action=save-global]')")
     pump()
     test('Boolean persisted through native payload',"const save=bridge.calls.findLast(c=>c.command==='save_global_settings');check(save.args.input.overlay===false,'boolean false persisted');check(save.args.expectedRevision==='1','optimistic revision preserved');check(q('#hud').hidden,'overlay off preview');check(q('[data-global=overlay]').getAttribute('aria-label')==='Show in-game overlay','clear visibility label');check(q('.settings-save-bar').hidden,'save hides bar');q('[data-global=overlay]').click();")
@@ -152,7 +153,7 @@ try:
     test('Conflict feedback and retry state',"check(q('#toast').textContent.includes('changed elsewhere'),'conflict surfaced');check(!q('[data-action=save-global]').disabled,'draft preserved');bridge.conflict=false;click('[data-action=discard-global]');check(!q('[data-global=overlay]').checked,'discard uses saved false');check(q('.settings-save-bar').hidden,'discard hides bar');")
     test('Preset and range update native preview',"const preset=q('[data-global=preset]');preset.value='Custom';preset.dispatchEvent(new Event('change',{bubbles:true}));check(!q('[data-metric=FPS]').disabled,'custom metrics enabled');const range=q('[data-global=scale]');range.value='150';range.dispatchEvent(new Event('input',{bubbles:true}));check(q('#hud').style.getPropertyValue('--hud-scale')==='1.5','native geometry scale');check(range.style.getPropertyValue('--range-fill')!=='','precision fill');")
     js("click('[data-global-tab=replay]')");pump()
-    test('Draft survives global tab switch and 120 FPS is gated',"check(!q('[data-action=save-global]').disabled,'draft retained across tabs');check(q('[data-global=fps] option[value=\"120\"]').disabled,'unsupported capture rate gated');const a=q('.replay-pref-actions').getBoundingClientRect(),above=q('.replay-pref-actions').previousElementSibling.getBoundingClientRect();check(a.top-above.bottom>=15,'folder action divider spacing')")
+    test('Draft survives global tab switch and 120 FPS is gated',"check(!q('[data-action=save-global]').disabled,'draft retained across tabs');check(q('[data-global=fps] option[value=\"120\"]').disabled,'unsupported capture rate gated');check(!q('.global-grid'),'removed replay card leaves no empty grid column');const a=q('.replay-pref-actions').getBoundingClientRect(),above=q('.replay-pref-actions').previousElementSibling.getBoundingClientRect();check(a.top-above.bottom>=15,'folder action divider spacing')")
     test('Global draft actions remain at viewport bottom while scrolling',"const bar=q('.settings-save-bar');check(!bar.hidden,'dirty bar shown');scrollTo(0,document.documentElement.scrollHeight);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed while scrolled');scrollTo(0,0);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed at page start');")
     snap('global-replay')
     js("click('[data-global-tab=shortcuts]')");pump()
@@ -248,33 +249,7 @@ try:
     snap('settings-updates')
     route('replay');snap('replay-loading')
     test('Replay cards lead with the recording game',"const first=q('[data-clip]');check(first.querySelector('.clip-game').textContent===games[0].name,'game is primary label');check(first.querySelector('.clip-file').textContent.includes('redunar-replay'),'filename remains available');check(q('.native-video-caption strong').textContent===games[0].name,'selected player names game');")
-    js("bridge.replayInactive=true;click('[data-action=preview-replay-menu]')");pump(1600)
-    test('Desktop replay preview has no surrounding native window or shell',"const preview=q('#replay-preview'),panel=q('#replay-preview .replay-menu-panel');check(preview.open,'preview opens');check(!preview.querySelector('.sidebar,.topbar,.brand'),'preview contains only menu');check(!bridge.calls.some(c=>c.command==='preview_replay_menu'),'no separate transparent native surface');check(preview.getBoundingClientRect().height===panel.getBoundingClientRect().height,'no outer bars');check(preview.getBoundingClientRect().width===panel.getBoundingClientRect().width,'no side bars');check(q('#replay-menu-status-title').textContent==='Replay inactive','observed inactive state');check([...preview.querySelectorAll('[data-menu-duration]')].every(b=>b.disabled),'inactive durations disabled');check(!q('#replay-menu-feedback').textContent.includes('buffering'),'inactive does not claim buffering');check(document.activeElement===preview.querySelector('h1'),'neutral title focus');")
-    snap('replay-preview-in-app')
-    window.resize(640,720);pump(200)
-    test('Replay preview fits a narrow window',"const bounds=q('#replay-preview').getBoundingClientRect();check(bounds.left>=0&&bounds.right<=innerWidth,'fits width');check(bounds.top>=0&&bounds.bottom<=innerHeight,'fits height');check(q('#replay-preview').scrollWidth<=q('#replay-preview').clientWidth,'no horizontal scrollbar');")
-    snap('replay-preview-narrow')
-    js("click('#replay-preview [data-action=hide-replay-menu]')");pump(200)
-    test('Preview dismissal retains the replay page and returns button focus',"check(!q('#replay-preview').open,'dismissed');check(location.hash==='#replay','route unchanged');check(document.activeElement===q('[data-action=preview-replay-menu]'),'focus returned');bridge.replayInactive=false;")
-    window.resize(1440,1000);pump(200)
-    js("click('[data-action=preview-replay-menu]')");pump(300)
-    test('Preview uses the existing save command when replay is ready',"check(q('#replay-menu-status-title').textContent==='Ready to save','ready state refreshed on open');check(!q('#replay-preview [data-menu-duration]').disabled,'ready save enabled');click('#replay-preview [data-menu-duration=\"30\"]');")
-    pump(200)
-    test('Preview save requests the selected duration and keeps the menu usable',"check(bridge.calls.some(c=>c.command==='save_replay'&&c.args.durationSeconds===30),'native save duration');check(q('#replay-preview').open,'save leaves feedback visible');check(q('#replay-menu-feedback').textContent.includes('save requested'),'request feedback');click('#replay-preview [data-action=hide-replay-menu]');")
-    pump(200)
-    test('Delete dialog uses spaced actions and neutral initial focus',"click('[data-action=delete-selected-clip]');const buttons=q('#delete-clip-form').querySelectorAll('button');check(buttons[1].getBoundingClientRect().left-buttons[0].getBoundingClientRect().right>=12,'button spacing');check(document.activeElement===q('#dialog-title'),'initial focus on title');")
-    snap('delete-dialog');js("click('#dialog [data-close]')")
-    route('replay-menu');snap('replay-menu');test('Replay menu presents real readiness and duration controls',"check(document.querySelectorAll('[data-menu-duration]').length===4,'native menu durations');check(!q('[data-menu-duration]').disabled,'ready save');")
-    window.resize(760,520);pump()
-    test('Replay preview canvas is transparent and contains only the menu',"check(getComputedStyle(document.documentElement).backgroundColor==='rgba(0, 0, 0, 0)','transparent root');check(getComputedStyle(document.body).backgroundColor==='rgba(0, 0, 0, 0)','transparent body');check(getComputedStyle(q('.sidebar')).display==='none','no sidebar');check(getComputedStyle(q('.topbar')).display==='none','no header');check(document.documentElement.scrollHeight<=innerHeight,'no black overflow region');check(q('.replay-menu-panel').getBoundingClientRect().bottom<=innerHeight,'menu fits');")
-    snap('replay-menu-native-size')
-    pixels=GdkPixbuf.Pixbuf.new_from_file(str(ARTIFACTS/'replay-menu-native-size.png'))
-    assert pixels.get_has_alpha(), 'Replay preview snapshot must retain alpha'
-    data=pixels.get_pixels();stride=pixels.get_rowstride();channels=pixels.get_n_channels()
-    for x,y in [(0,0),(10,260),(380,5),(380,515)]:
-        assert data[y*stride+x*channels+3]==0, 'Opaque pixel outside replay menu'
-    checks.append('Replay preview pixels outside panel are fully transparent')
-    window.resize(1440,1000);pump()
+    test('Obsolete replay preview controls are absent',"check(!q('[data-action=preview-replay-menu]'),'no preview action');check(!q('#replay-preview'),'no preview dialog');")
     route('overview');js('bridge.unavailable=true');pump(1400);test('Unavailable RAM never displays stale measurements',"check(q('#ram-used').textContent==='—','RAM cleared');check(q('#ram-meter').style.width==='0%','unavailable meter cleared');bridge.unavailable=false;")
     window.resize(1040,900);pump();route('history');js("q('#toast').hidden=true;q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-compact')
     test('History remains readable at compact width',"check(document.documentElement.scrollWidth<=innerWidth+1,'history overflow');check(q('.history-timeline-chart svg').getBoundingClientRect().width>200,'plot remains visible');")

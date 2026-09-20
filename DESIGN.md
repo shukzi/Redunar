@@ -87,8 +87,10 @@ nonempty. Grid, Ribbon, and Telemetry change the structure independently of the
 information preset and Custom metric selection. The bounded palettes are
 Redunar, Glacier, Ember, Mint, Mono, Amethyst, Solar, and Rose. The preview must
 use the same palette roles, rounded panel bounds, and layout dimensions as the
-in-game renderer. Renderer ABI details belong in architecture/component
-documentation.
+in-game renderer. Redunar branding is an optional global appearance setting;
+its saved value updates a prepared running overlay through the same live path
+as palette and layout changes. Renderer ABI details belong in
+architecture/component documentation.
 
 Automatic replay has no global/per-game Off selector. Recording configuration
 is locked until the owned game closes; this must not block an otherwise valid
@@ -120,9 +122,9 @@ Export selection. The export dialog shows In, Out, and Duration in separated
 columns and explains that the original remains. Saving/exporting reports success
 only after native completion; loading failures offer a useful retry/error state.
 
-Preview replay menu is an in-app dialog. The shortcut-opened menu is a separate
-transparent native document: neither may show black exterior bars, scrollbars,
-or the desktop sidebar behind the menu. See REPLAY for compositor limitations.
+The shortcut-opened Replay menu is rendered inside the game. No desktop or in-app
+preview is exposed because it cannot represent the production Vulkan presentation.
+See REPLAY for compositor limitations.
 Successful in-game saves use the bottom-left Moment saved pill with saved length
 and Local library, even when the metrics display is hidden.
 

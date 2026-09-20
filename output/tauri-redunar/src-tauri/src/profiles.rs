@@ -8,6 +8,8 @@ pub struct GlobalSettingsInput {
     preset: String,
     layout: String,
     palette: String,
+    #[serde(default = "default_branding_input")]
+    branding: bool,
     position: String,
     scale: u8,
     opacity: u8,
@@ -23,6 +25,10 @@ pub struct GlobalSettingsInput {
     #[serde(default = "default_storage_limit_input")]
     storage_limit: String,
     shortcuts: std::collections::HashMap<String, String>,
+}
+
+fn default_branding_input() -> bool {
+    true
 }
 
 fn replay_duration(seconds: u16) -> Result<redunar_core::ReplayDuration, String> {
@@ -118,6 +124,7 @@ fn global_profile_from_input(
         overlay_preset: preset,
         overlay_layout: layout,
         overlay_palette: palette,
+        overlay_branding: input.branding,
         overlay_metrics: metrics,
         overlay_corner: corner,
         overlay_opacity: opacity,
@@ -189,6 +196,7 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
                 A::Rose => "Rose",
             }
             .into(),
+            branding: profile.overlay_branding,
             position: match profile.overlay_corner {
                 C::TopLeft => "Top left",
                 C::TopRight => "Top right",
@@ -320,6 +328,7 @@ mod tests {
             preset: "Custom".into(),
             layout: "Telemetry".into(),
             palette: "Glacier".into(),
+            branding: true,
             position: "Top right".into(),
             scale: 100,
             opacity: 50,

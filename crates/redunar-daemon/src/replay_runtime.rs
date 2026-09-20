@@ -17,6 +17,7 @@ const MAX_COMPLETED_EXPORTS: usize = 8;
 /// session-history fallback in the clip inventory, never to a lost clip.
 const MAX_COMMITTED_CLIP_NAMES: usize = 32;
 const RECORDER_STALL_TIMEOUT: Duration = Duration::from_secs(5);
+const AUDIO_STALL_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct ProductionReplayRuntime {
@@ -35,6 +36,8 @@ struct RuntimeState {
     received_frame_count: u64,
     observed_packet_count: u64,
     last_encoded_progress: Option<Instant>,
+    observed_audio_packet_count: u64,
+    last_audio_progress: Option<Instant>,
     output_format: ReplayOutputFormat,
 }
 
@@ -72,6 +75,8 @@ impl ProductionReplayRuntime {
                 received_frame_count: 0,
                 observed_packet_count: 0,
                 last_encoded_progress: None,
+                observed_audio_packet_count: 0,
+                last_audio_progress: None,
                 output_format: ReplayOutputFormat::Matroska,
             })),
         }
@@ -94,6 +99,14 @@ impl ProductionReplayRuntime {
         status.encoded_packet_count = spool_stats.map_or(0, |stats| stats.accepted_packets);
         status.audio_packet_count = audio_stats.0;
         status.audio_byte_count = audio_stats.1;
+        if status.audio_packet_count > state.observed_audio_packet_count {
+            state.observed_audio_packet_count = status.audio_packet_count;
+            state.last_audio_progress = Some(Instant::now());
+        }
+        status.audio_active = audio_is_active(
+            status.phase,
+            state.last_audio_progress.map(|progress| progress.elapsed()),
+        );
         if status.encoded_packet_count > state.observed_packet_count {
             state.observed_packet_count = status.encoded_packet_count;
             state.last_encoded_progress = Some(Instant::now());
@@ -177,6 +190,7 @@ impl ProductionReplayRuntime {
             encoded_packet_count: 0,
             audio_packet_count: 0,
             audio_byte_count: 0,
+            audio_active: false,
             recorder_health: ReplayRecorderHealth::Starting,
             settings,
             budget: ReplayBudget::from_settings(settings),
@@ -184,6 +198,8 @@ impl ProductionReplayRuntime {
         state.received_frame_count = 0;
         state.observed_packet_count = 0;
         state.last_encoded_progress = None;
+        state.observed_audio_packet_count = 0;
+        state.last_audio_progress = None;
         state.pipeline = Some(pipeline);
         Ok(())
     }
@@ -513,6 +529,11 @@ fn recorder_health(
     }
 }
 
+fn audio_is_active(phase: ReplayPhase, progress_age: Option<Duration>) -> bool {
+    matches!(phase, ReplayPhase::Buffering | ReplayPhase::Saving)
+        && progress_age.is_some_and(|age| age <= AUDIO_STALL_TIMEOUT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,5 +586,22 @@ mod tests {
             ),
             ReplayRecorderHealth::Stalled
         );
+    }
+
+    #[test]
+    fn audio_activity_requires_recent_packet_progress() {
+        assert!(!audio_is_active(ReplayPhase::Buffering, None));
+        assert!(audio_is_active(
+            ReplayPhase::Buffering,
+            Some(AUDIO_STALL_TIMEOUT)
+        ));
+        assert!(!audio_is_active(
+            ReplayPhase::Buffering,
+            Some(AUDIO_STALL_TIMEOUT + Duration::from_millis(1))
+        ));
+        assert!(!audio_is_active(
+            ReplayPhase::Inactive,
+            Some(Duration::ZERO)
+        ));
     }
 }

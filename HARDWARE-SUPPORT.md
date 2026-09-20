@@ -22,7 +22,7 @@ not establish support across every game or driver.
 | Swapchains | Implemented 8-bit RGBA/BGRA and packed 10-bit conversion paths; actual usage flags, queues, format, resolution, and encoder limits govern acceptance. |
 | Overlay | Compact, FPS only, Detailed, Custom; four corners, bounded scale/opacity, live visibility and independent saved feedback. |
 | Replay menu | Dedicated transparent Tauri desktop window; focus, layering and transparency remain compositor-dependent. App preview is a separate dialog. |
-| Audio | PipeWire plus Opus; approved output-monitor fallback can include other applications. See REPLAY. |
+| Audio | Default-output monitor through PulseAudio or PipeWire plus Opus; the mixed output can include other applications. Pure ALSA output capture is not supported. See REPLAY. |
 | Shortcuts/tray | Same-user evdev helper and optional tray provider. No permission/provider must produce a usable, honest fallback. Empty shortcuts and tray-disabled startup are supported. |
 | Packaging | Debian 12/glibc 2.36 baseline binaries, Fedora/openSUSE RPMs, a DEB, native Arch package, portable payload, signed checksums, and a distro-detecting installer template build locally. Installed-runtime evidence remains Fedora 44 only; no published release, verified second distribution, immutable-system package, or ARM build is implied. |
 
@@ -58,7 +58,7 @@ and [ROADMAP.md](ROADMAP.md) own the remaining work.
 - A validated Flatpak capture bridge or broad non-Steam launcher integration.
 - NVIDIA encoding/monitoring parity, ARM/aarch64, or a cross-driver guarantee.
 - Firmware, voltage, or automatic hardware-policy changes.
-- Guaranteed game-only audio while output fallback remains in the implementation.
+- Game-only audio isolation; Replay records the active mixed system output.
 - A claim that all fullscreen/compositor configurations support the replay menu.
 
 Missing optional integrations must not break unrelated read-only monitoring.
