@@ -1,8 +1,9 @@
 use redunar_core::{
     EffectiveGameProfile, GameCatalog, GameId, GameLaunchConfig, GameMatchRule, GameProcess,
-    GameRecord, GameResolution, GlobalGameProfile, Inheritable, OverlayCorner, OverlayMetricSet,
-    OverlayOpacity, OverlayPreset, OverlayScale, PerGameProfile, ReplayDuration, ReplayFrameRate,
-    ReplayQuality, ReplaySettings, ReplayStorageLimit, resolve_game,
+    GameRecord, GameResolution, GlobalGameProfile, Inheritable, OverlayCorner, OverlayLayout,
+    OverlayMetricSet, OverlayOpacity, OverlayPalette, OverlayPreset, OverlayScale, PerGameProfile,
+    ReplayDuration, ReplayFrameRate, ReplayQuality, ReplaySettings, ReplayStorageLimit,
+    resolve_game,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
@@ -28,6 +29,7 @@ const CATALOG_HEADER_V7: &str = "redunar-games-v7";
 const CATALOG_HEADER_V8: &str = "redunar-games-v8";
 const CATALOG_HEADER_V9: &str = "redunar-games-v9";
 const CATALOG_HEADER_V10: &str = "redunar-games-v10";
+const CATALOG_HEADER_V11: &str = "redunar-games-v11";
 const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
 const MAX_GAMES: usize = 256;
 const MAX_IMPORT_GAMES: usize = 64;
@@ -719,12 +721,12 @@ fn validate_stored(stored: &StoredCatalog) -> Result<(), GameCatalogError> {
 
 fn serialize(stored: &StoredCatalog) -> String {
     let catalog = &stored.catalog;
-    let mut output = String::from(CATALOG_HEADER_V10);
+    let mut output = String::from(CATALOG_HEADER_V11);
     output.push('\n');
     writeln!(output, "next\t{}", stored.next_id).expect("write to string");
     writeln!(
         output,
-        "global\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "global\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         bool_token(catalog.global_profile.capture_metrics),
         bool_token(catalog.global_profile.overlay_visible),
         overlay_preset_token(catalog.global_profile.overlay_preset),
@@ -732,6 +734,8 @@ fn serialize(stored: &StoredCatalog) -> String {
         overlay_corner_token(catalog.global_profile.overlay_corner),
         catalog.global_profile.overlay_opacity.percent(),
         catalog.global_profile.overlay_scale.percent(),
+        overlay_layout_token(catalog.global_profile.overlay_layout),
+        overlay_palette_token(catalog.global_profile.overlay_palette),
         bool_token(catalog.global_profile.gamescope_enabled),
         bool_token(catalog.global_profile.gamemode_enabled),
         replay_duration_token(catalog.global_profile.replay.duration),
@@ -789,6 +793,7 @@ fn parse(contents: &str) -> Result<StoredCatalog, GameCatalogError> {
         Some(CATALOG_HEADER_V8) => 8,
         Some(CATALOG_HEADER_V9) => 9,
         Some(CATALOG_HEADER_V10) => 10,
+        Some(CATALOG_HEADER_V11) => 11,
         _ => {
             return Err(GameCatalogError::new(
                 "catalog header or version is invalid",
@@ -837,7 +842,9 @@ fn parse(contents: &str) -> Result<StoredCatalog, GameCatalogError> {
 )]
 fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, GameCatalogError> {
     let fields = line.split('\t').collect::<Vec<_>>();
-    let expected_fields = if version >= 10 {
+    let expected_fields = if version >= 11 {
+        17
+    } else if version >= 10 {
         15
     } else if version >= 9 {
         16
@@ -901,13 +908,23 @@ fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, Ga
                 .and_then(OverlayScale::new)
                 .ok_or_else(|| GameCatalogError::new("catalog overlay scale is invalid"))?
         },
+        overlay_layout: if version < 11 {
+            OverlayLayout::default()
+        } else {
+            parse_overlay_layout(fields[8])?
+        },
+        overlay_palette: if version < 11 {
+            OverlayPalette::default()
+        } else {
+            parse_overlay_palette(fields[9])?
+        },
         gamescope_enabled: if version >= 8 {
-            parse_bool(fields[8])?
+            parse_bool(fields[8 + 2 * usize::from(version >= 11)])?
         } else {
             false
         },
         gamemode_enabled: if version >= 9 {
-            parse_bool(fields[9])?
+            parse_bool(fields[9 + 2 * usize::from(version >= 11)])?
         } else {
             false
         },
@@ -919,25 +936,29 @@ fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, Ga
                     fields[7
                         + usize::from(version >= 7)
                         + usize::from(version >= 8)
-                        + usize::from(version >= 9)],
+                        + usize::from(version >= 9)
+                        + 2 * usize::from(version >= 11)],
                 )?,
                 frame_rate: parse_replay_frame_rate(
                     fields[8
                         + usize::from(version >= 7)
                         + usize::from(version >= 8)
-                        + usize::from(version >= 9)],
+                        + usize::from(version >= 9)
+                        + 2 * usize::from(version >= 11)],
                 )?,
                 quality: parse_replay_quality(
                     fields[9
                         + usize::from(version >= 7)
                         + usize::from(version >= 8)
-                        + usize::from(version >= 9)],
+                        + usize::from(version >= 9)
+                        + 2 * usize::from(version >= 11)],
                 )?,
                 storage_limit: parse_replay_storage(
                     fields[10
                         + usize::from(version >= 7)
                         + usize::from(version >= 8)
-                        + usize::from(version >= 9)],
+                        + usize::from(version >= 9)
+                        + 2 * usize::from(version >= 11)],
                 )?,
             }
         },
@@ -945,7 +966,8 @@ fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, Ga
             fields[11
                 + usize::from(version >= 7)
                 + usize::from(version >= 8)
-                + usize::from(version >= 9)]
+                + usize::from(version >= 9)
+                + 2 * usize::from(version >= 11)]
         } else if version >= 4 {
             fields[usize::from(version >= 5) + 6]
         } else {
@@ -1036,6 +1058,50 @@ fn parse_overlay_preset(value: &str) -> Result<OverlayPreset, GameCatalogError> 
         "detailed" => Ok(OverlayPreset::Detailed),
         "custom" => Ok(OverlayPreset::Custom),
         _ => Err(GameCatalogError::new("catalog overlay preset is invalid")),
+    }
+}
+
+const fn overlay_layout_token(value: OverlayLayout) -> &'static str {
+    match value {
+        OverlayLayout::Grid => "grid",
+        OverlayLayout::Ribbon => "ribbon",
+        OverlayLayout::Telemetry => "telemetry",
+    }
+}
+
+fn parse_overlay_layout(value: &str) -> Result<OverlayLayout, GameCatalogError> {
+    match value {
+        "grid" => Ok(OverlayLayout::Grid),
+        "ribbon" => Ok(OverlayLayout::Ribbon),
+        "telemetry" => Ok(OverlayLayout::Telemetry),
+        _ => Err(GameCatalogError::new("catalog overlay layout is invalid")),
+    }
+}
+
+const fn overlay_palette_token(value: OverlayPalette) -> &'static str {
+    match value {
+        OverlayPalette::Redunar => "redunar",
+        OverlayPalette::Glacier => "glacier",
+        OverlayPalette::Ember => "ember",
+        OverlayPalette::Mint => "mint",
+        OverlayPalette::Mono => "mono",
+        OverlayPalette::Amethyst => "amethyst",
+        OverlayPalette::Solar => "solar",
+        OverlayPalette::Rose => "rose",
+    }
+}
+
+fn parse_overlay_palette(value: &str) -> Result<OverlayPalette, GameCatalogError> {
+    match value {
+        "redunar" => Ok(OverlayPalette::Redunar),
+        "glacier" => Ok(OverlayPalette::Glacier),
+        "ember" => Ok(OverlayPalette::Ember),
+        "mint" => Ok(OverlayPalette::Mint),
+        "mono" => Ok(OverlayPalette::Mono),
+        "amethyst" => Ok(OverlayPalette::Amethyst),
+        "solar" => Ok(OverlayPalette::Solar),
+        "rose" => Ok(OverlayPalette::Rose),
+        _ => Err(GameCatalogError::new("catalog overlay palette is invalid")),
     }
 }
 
@@ -1682,7 +1748,7 @@ mod tests {
             .expect("migrate legacy catalog on mutation");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V10));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
         assert_eq!(
             load(&fixture.root).expect("reload migrated catalog").games[0],
             loaded.games[0]
@@ -1724,7 +1790,7 @@ mod tests {
             .expect("migrate v2 catalog on mutation");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V10));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
         assert_eq!(load(&fixture.root).expect("reload v3 catalog"), loaded);
     }
 
@@ -1749,7 +1815,7 @@ mod tests {
         update_global_profile(&fixture.root, loaded.global_profile).expect("migrate v3 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V10));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
     }
 
     #[test]
@@ -1786,7 +1852,7 @@ mod tests {
         update_global_profile(&fixture.root, loaded.global_profile).expect("migrate v4 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V10));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
     }
 
     #[test]
@@ -1814,7 +1880,7 @@ mod tests {
         update_global_profile(&fixture.root, loaded.global_profile).expect("migrate v5 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V10));
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
     }
 
     #[test]
@@ -1835,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn version_nine_discards_removed_profile_fields_and_writes_version_ten() {
+    fn version_nine_discards_removed_profile_fields_and_writes_current_version() {
         let fixture = Fixture::new();
         let direct_rules = match_rules_for(&fixture.executable);
         let contents = format!(
@@ -1866,8 +1932,11 @@ mod tests {
             .expect("migrate v9 catalog");
         let migrated =
             fs::read_to_string(fixture.root.join(CATALOG_FILE)).expect("read migrated catalog");
-        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V10));
-        assert_eq!(load(&fixture.root).expect("reload v10 catalog"), loaded);
+        assert_eq!(migrated.lines().next(), Some(CATALOG_HEADER_V11));
+        assert_eq!(
+            load(&fixture.root).expect("reload migrated catalog"),
+            loaded
+        );
     }
 
     #[test]
@@ -1978,6 +2047,8 @@ mod tests {
             capture_metrics: false,
             overlay_visible: true,
             overlay_preset: OverlayPreset::FpsOnly,
+            overlay_layout: OverlayLayout::Ribbon,
+            overlay_palette: OverlayPalette::Glacier,
             overlay_metrics: OverlayMetricSet::DETAILED,
             overlay_corner: OverlayCorner::BottomRight,
             overlay_opacity: OverlayOpacity::new(65).expect("opacity"),

@@ -24,7 +24,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
-use std::os::unix::fs::{FileExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::OwnedFd;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
@@ -185,6 +185,53 @@ impl CaptureSessionConfig {
     #[must_use]
     pub fn runtime_root(&self) -> &Path {
         &self.runtime_root
+    }
+
+    /// Sweep capture-session directories left behind by a previous Redunar
+    /// instance that crashed or was killed before its cleanup ran. Callers
+    /// must confirm that no other live instance owns the backend session
+    /// first; every directory matching our exact private naming is then
+    /// stale by definition. Foreign names, non-directories, and entries
+    /// owned by another uid are never touched, and unlinking a socket still
+    /// held open by a surviving game only removes the path. Returns the
+    /// number of directories removed; never fails a launch over leftovers.
+    #[must_use]
+    pub fn sweep_stale_session_directories(&self) -> usize {
+        let current_uid = process_uid();
+        // The runtime root's owner is the session user; refuse to sweep a
+        // directory we do not own.
+        let root_owner = fs::metadata(&self.runtime_root).ok().map(|metadata| metadata.uid());
+        if root_owner != Some(current_uid) {
+            return 0;
+        }
+        let Ok(entries) = fs::read_dir(&self.runtime_root) else {
+            return 0;
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let Some(hex) = file_name
+                .to_str()
+                .and_then(|name| name.strip_prefix("capture-"))
+            else {
+                continue;
+            };
+            if hex.len() != 32 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !metadata.is_dir() || metadata.uid() != current_uid {
+                continue;
+            }
+            cleanup_session_directory(&path);
+            if !path.exists() {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     #[must_use]
@@ -389,7 +436,7 @@ impl CaptureSessionHandle {
             overlay_telemetry_path,
             overlay_telemetry_file,
             overlay_telemetry_revision: AtomicU64::new(2),
-            overlay_config: AtomicU64::new(pack_overlay_config(0, 0, 1, 50, 100)),
+            overlay_config: AtomicU64::new(pack_overlay_config(0, 0, 1, 50, 100, 0, 0)),
             overlay_replay_saved_revision: AtomicU16::new(0),
             launch_started_at: Instant::now(),
             lifecycle: CaptureLaunchLifecycle::new(),
@@ -588,6 +635,7 @@ impl CaptureSessionHandle {
                         effective.overlay_corner,
                         effective.overlay_opacity,
                     )
+                    .with_style(effective.overlay_layout, effective.overlay_palette)
                     .with_metrics(effective.overlay_metrics),
             )
             .with_replay_transfer_config(replay_transfer_launch_config(effective, true));
@@ -646,6 +694,7 @@ impl CaptureSessionHandle {
             effective.overlay_opacity,
             effective.overlay_metrics,
         )
+        .with_overlay_style(effective.overlay_layout, effective.overlay_palette)
         .with_replay_requested(effective.instant_replay)
         .with_replay_frame_rate(effective.replay.frame_rate);
         environment = environment
@@ -779,6 +828,8 @@ impl CaptureSessionHandle {
             profile.overlay_metrics.bits(),
             profile.overlay_opacity.percent(),
             profile.overlay_scale.percent(),
+            overlay_layout_code(profile.overlay_layout),
+            overlay_palette_code(profile.overlay_palette),
         );
         let packed = packed
             | ((if profile.overlay_visible {
@@ -1527,6 +1578,8 @@ fn create_overlay_telemetry_file(directory: &Path) -> io::Result<(PathBuf, File)
         revision: 2,
         corner: 0,
         preset: 0,
+        layout: 0,
+        palette: 0,
         metrics: 1,
         opacity_percent: 50,
         scale_percent: 100,
@@ -1586,6 +1639,8 @@ fn write_overlay_hardware(
         revision: next_revision,
         corner: (packed_config & 0xff) as u8,
         preset: ((packed_config >> 8) & 0xff) as u8,
+        layout: ((packed_config >> 56) & 0x0f) as u8,
+        palette: ((packed_config >> 60) & 0x0f) as u8,
         metrics: ((packed_config >> 16) & 0xffff) as u16,
         opacity_percent: ((packed_config >> 32) & 0xff) as u8,
         scale_percent: ((packed_config >> 40) & 0xff) as u8,
@@ -1614,12 +1669,22 @@ fn write_overlay_hardware(
     file.write_all_at(&bytes, 0)
 }
 
-fn pack_overlay_config(corner: u8, preset: u8, metrics: u16, opacity: u8, scale: u8) -> u64 {
+fn pack_overlay_config(
+    corner: u8,
+    preset: u8,
+    metrics: u16,
+    opacity: u8,
+    scale: u8,
+    layout: u8,
+    palette: u8,
+) -> u64 {
     u64::from(corner)
         | (u64::from(preset) << 8)
         | (u64::from(metrics) << 16)
         | (u64::from(opacity) << 32)
         | (u64::from(scale) << 40)
+        | (u64::from(layout & 0x0f) << 56)
+        | (u64::from(palette & 0x0f) << 60)
 }
 
 const fn overlay_corner_code(value: redunar_core::OverlayCorner) -> u8 {
@@ -1636,6 +1701,27 @@ const fn overlay_preset_code(value: redunar_core::OverlayPreset) -> u8 {
         redunar_core::OverlayPreset::Detailed => 1,
         redunar_core::OverlayPreset::FpsOnly => 2,
         redunar_core::OverlayPreset::Custom => 3,
+    }
+}
+
+const fn overlay_layout_code(value: redunar_core::OverlayLayout) -> u8 {
+    match value {
+        redunar_core::OverlayLayout::Grid => 0,
+        redunar_core::OverlayLayout::Ribbon => 1,
+        redunar_core::OverlayLayout::Telemetry => 2,
+    }
+}
+
+const fn overlay_palette_code(value: redunar_core::OverlayPalette) -> u8 {
+    match value {
+        redunar_core::OverlayPalette::Redunar => 0,
+        redunar_core::OverlayPalette::Glacier => 1,
+        redunar_core::OverlayPalette::Ember => 2,
+        redunar_core::OverlayPalette::Mint => 3,
+        redunar_core::OverlayPalette::Mono => 4,
+        redunar_core::OverlayPalette::Amethyst => 5,
+        redunar_core::OverlayPalette::Solar => 6,
+        redunar_core::OverlayPalette::Rose => 7,
     }
 }
 
@@ -1660,6 +1746,11 @@ fn metric_tenths(value: f64, maximum: u16) -> Option<u16> {
 }
 
 fn cleanup_session_directory(directory: &Path) {
+    // The known files are removed explicitly first, then the private
+    // directory is swept: the in-game Vulkan layer binds additional
+    // per-process reply sockets (r-<pid>.sock) that this daemon never
+    // names, and an unlinked-but-open reply socket stays usable because
+    // the game already holds its connected file descriptor.
     for file in [
         CAPTURE_SOCKET_FILE,
         OVERLAY_TELEMETRY_FILE,
@@ -1667,7 +1758,26 @@ fn cleanup_session_directory(directory: &Path) {
     ] {
         let _ = fs::remove_file(directory.join(file));
     }
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let is_dir = entry
+                .file_type()
+                .is_ok_and(|file_type| file_type.is_dir());
+            if is_dir {
+                let _ = fs::remove_dir(entry.path());
+            } else {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
     let _ = fs::remove_dir(directory);
+}
+
+/// Resolve the current uid from /proc/self, matching the ownership checks
+/// the Steam activation bridge uses for the same runtime directory.
+fn process_uid() -> u32 {
+    fs::metadata("/proc/self")
+        .map_or(u32::MAX, |metadata| metadata.uid())
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -1885,7 +1995,7 @@ mod tests {
             &file,
             &revision,
             Some(&hardware),
-            pack_overlay_config(0, 0, 1, 50, 100),
+            pack_overlay_config(0, 0, 1, 50, 100, 0, 0),
             0,
         )
         .expect("write telemetry");
@@ -1910,7 +2020,7 @@ mod tests {
             &file,
             &revision,
             None,
-            pack_overlay_config(0, 0, 1, 50, 100),
+            pack_overlay_config(0, 0, 1, 50, 100, 0, 0),
             9,
         )
         .expect("clear telemetry");
@@ -2319,5 +2429,56 @@ mod tests {
             Some("capture process exited without a goodbye")
         );
         assert!(!session_directory.exists());
+    }
+
+    #[test]
+    fn cleanup_removes_reply_sockets_the_daemon_never_named() {
+        // The in-game layer binds extra r-<pid>.sock replies in the session
+        // directory. A cleanup that only unlinks the three known names lets
+        // remove_dir fail and leaks the whole directory on every launch.
+        let fixture = Fixture::new();
+        let directory = fixture.root.join("capture-leak-check");
+        fs::create_dir(&directory).expect("create session dir");
+        fs::write(directory.join(CAPTURE_SOCKET_FILE), b"")
+            .expect("write capture socket stand-in");
+        fs::write(directory.join("r-4242.sock"), b"")
+            .expect("write reply socket stand-in");
+        fs::create_dir(directory.join("empty-subdir")).expect("create subdir");
+        cleanup_session_directory(&directory);
+        assert!(
+            !directory.exists(),
+            "a directory holding unnamed reply sockets must be removed"
+        );
+    }
+
+    #[test]
+    fn stale_sweep_removes_only_our_private_capture_directories() {
+        let fixture = Fixture::new();
+        let config = CaptureSessionConfig::new(&fixture.root, &fixture.library);
+        let stale = fixture
+            .root
+            .join("capture-0123456789abcdef0123456789abcdef");
+        fs::create_dir(&stale).expect("create stale dir");
+        fs::write(stale.join("r-77.sock"), b"").expect("write stray socket");
+        // Look-alikes that must survive: wrong prefix, wrong name shape, and
+        // a matching-name plain file rather than a directory.
+        let foreign_prefix = fixture.root.join("replay-0123456789abcdef0123456789abcdef");
+        let malformed = fixture
+            .root
+            .join("capture-0123456789abcdef0123456789abcde");
+        let not_a_dir = fixture
+            .root
+            .join("capture-0123456789abcdef0123456789abcdef0");
+        fs::create_dir(&foreign_prefix).expect("create foreign prefix dir");
+        fs::create_dir(&malformed).expect("create malformed dir");
+        fs::write(&not_a_dir, b"").expect("create look-alike file");
+        assert_eq!(config.sweep_stale_session_directories(), 1);
+        assert!(!stale.exists());
+        assert!(foreign_prefix.exists());
+        assert!(malformed.exists());
+        assert!(not_a_dir.exists());
+        // A second sweep is a no-op, and the fixture root itself survives.
+        assert_eq!(config.sweep_stale_session_directories(), 0);
+        assert!(fixture.root.exists());
     }
 }

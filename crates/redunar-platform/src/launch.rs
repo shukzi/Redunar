@@ -1,6 +1,7 @@
 use redunar_capture::{CaptureSessionId, PROTOCOL_VERSION};
 use redunar_core::{
-    OverlayCorner, OverlayMetricSet, OverlayOpacity, OverlayPreset, ReplayFrameRate,
+    OverlayCorner, OverlayLayout, OverlayMetricSet, OverlayOpacity, OverlayPalette, OverlayPreset,
+    ReplayFrameRate,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -19,6 +20,8 @@ pub const VULKAN_CAPTURE_MANIFEST_FILE: &str = "VkLayer_REDUNAR_capture.json";
 pub const REDUNAR_OVERLAY_VISIBLE_ENV: &str = "REDUNAR_OVERLAY_VISIBLE";
 pub const REDUNAR_OVERLAY_TELEMETRY_ENV: &str = "REDUNAR_OVERLAY_TELEMETRY";
 pub const REDUNAR_OVERLAY_PRESET_ENV: &str = "REDUNAR_OVERLAY_PRESET";
+pub const REDUNAR_OVERLAY_LAYOUT_ENV: &str = "REDUNAR_OVERLAY_LAYOUT";
+pub const REDUNAR_OVERLAY_PALETTE_ENV: &str = "REDUNAR_OVERLAY_PALETTE";
 pub const REDUNAR_OVERLAY_CORNER_ENV: &str = "REDUNAR_OVERLAY_CORNER";
 pub const REDUNAR_OVERLAY_OPACITY_ENV: &str = "REDUNAR_OVERLAY_OPACITY_PERCENT";
 pub const REDUNAR_OVERLAY_METRICS_ENV: &str = "REDUNAR_OVERLAY_METRICS";
@@ -90,6 +93,8 @@ pub enum GameLaunchProcessOwnership {
 pub struct OverlayLaunchConfig {
     visible: bool,
     preset: OverlayPreset,
+    layout: OverlayLayout,
+    palette: OverlayPalette,
     corner: OverlayCorner,
     opacity: OverlayOpacity,
     metrics: OverlayMetricSet,
@@ -101,6 +106,8 @@ impl OverlayLaunchConfig {
         Self {
             visible,
             preset: OverlayPreset::Compact,
+            layout: OverlayLayout::default(),
+            palette: OverlayPalette::default(),
             corner: OverlayCorner::TopLeft,
             opacity: OverlayOpacity::default(),
             metrics: OverlayMetricSet::default(),
@@ -128,6 +135,13 @@ impl OverlayLaunchConfig {
     #[must_use]
     pub const fn with_metrics(mut self, metrics: OverlayMetricSet) -> Self {
         self.metrics = metrics;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_style(mut self, layout: OverlayLayout, palette: OverlayPalette) -> Self {
+        self.layout = layout;
+        self.palette = palette;
         self
     }
 }
@@ -402,6 +416,27 @@ impl CaptureLaunchPlan {
                 OverlayPreset::FpsOnly => "fps-only",
                 OverlayPreset::Detailed => "detailed",
                 OverlayPreset::Custom => "custom",
+            }),
+        );
+        self.environment.insert(
+            OsString::from(REDUNAR_OVERLAY_LAYOUT_ENV),
+            OsString::from(match config.layout {
+                OverlayLayout::Grid => "grid",
+                OverlayLayout::Ribbon => "ribbon",
+                OverlayLayout::Telemetry => "telemetry",
+            }),
+        );
+        self.environment.insert(
+            OsString::from(REDUNAR_OVERLAY_PALETTE_ENV),
+            OsString::from(match config.palette {
+                OverlayPalette::Redunar => "redunar",
+                OverlayPalette::Glacier => "glacier",
+                OverlayPalette::Ember => "ember",
+                OverlayPalette::Mint => "mint",
+                OverlayPalette::Mono => "mono",
+                OverlayPalette::Amethyst => "amethyst",
+                OverlayPalette::Solar => "solar",
+                OverlayPalette::Rose => "rose",
             }),
         );
         self.environment.insert(
@@ -851,6 +886,32 @@ mod tests {
             inherited.get(OsStr::new(REDUNAR_OVERLAY_VISIBLE_ENV)),
             Some(&OsString::from("untrusted-inherited-value")),
             "constructing a child plan must not mutate the inherited snapshot"
+        );
+    }
+
+    #[test]
+    fn overlay_style_has_exact_child_environment_tokens() {
+        let plan = CaptureLaunchPlan::new(
+            "/usr/bin/game",
+            [],
+            "/opt/redunar/layers",
+            "/run/user/1000/redunar/capture.sock",
+            session_id(),
+            &BTreeMap::new(),
+        )
+        .expect("launch plan")
+        .with_overlay_config(
+            OverlayLaunchConfig::new(true).with_style(OverlayLayout::Ribbon, OverlayPalette::Mint),
+        );
+        assert_eq!(
+            plan.environment()
+                .get(OsStr::new(REDUNAR_OVERLAY_LAYOUT_ENV)),
+            Some(&OsString::from("ribbon"))
+        );
+        assert_eq!(
+            plan.environment()
+                .get(OsStr::new(REDUNAR_OVERLAY_PALETTE_ENV)),
+            Some(&OsString::from("mint"))
         );
     }
 

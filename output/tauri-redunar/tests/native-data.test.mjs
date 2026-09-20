@@ -118,7 +118,7 @@ test('catalog identifiers retain precision and edits do not mutate backend respo
  assert.equal(game.id,source[0].id);assert.equal(source[0].overrides.overlay,false);
 });
 test('defaults round-trip real backend values, including frame metrics, zero opacity and temperatures',()=>{
- const values={overlay:false,preset:'Custom',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replayEnabled:false,fps:30,quality:'Efficient',format:'MP4',storageLimit:'Unlimited',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
+ const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replayEnabled:false,fps:30,quality:'Efficient',format:'MP4',storageLimit:'Unlimited',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
  const result=profilePayload(mapDefaults({values}),values.shortcuts);
  for(const key of Object.keys(values))assert.deepEqual(result[key],values[key]);
 });
@@ -147,18 +147,19 @@ test('native replay menu uses the production overlay language and opaque control
  assert.match(source,/updateReplayMenuStatus\(\);/);
  assert.doesNotMatch(source,/Start this game from Redunar with Instant Replay enabled/);
 });
-test('replay menu host reserves room for the enlarged panel without a page background',()=>{
+test('replay menu styles the enlarged panel without a page background and the desktop host is retired',()=>{
  const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
- const hotkeys=readFileSync(new URL('../src-tauri/src/replay_menu_window.rs',import.meta.url),'utf8');
  assert.match(css,/html:has\(body\[data-page="replay-menu"\]\).*background:transparent!important/);
  assert.match(css,/body\[data-page="replay-menu"\] \.app-shell,body\[data-page="replay-menu"\] #workspace\{background:transparent!important\}/);
  assert.match(css,/:is\(body\[data-page="replay-menu"\],#replay-preview\) \.replay-menu-panel\{width:min\(680px/);
  assert.match(css,/:is\(body\[data-page="replay-menu"\],#replay-preview\) \.replay-menu-panel\{[^}]*background:#0c0b0e[^}]*box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none/);
  assert.match(css,/\.replay-menu-status-card\{[^}]*background:#121014\}/);
- assert.match(hotkeys,/const REPLAY_MENU_WIDTH: f64 = 760\.0/);
- assert.match(hotkeys,/const REPLAY_MENU_HEIGHT: f64 = 520\.0/);
- assert.match(hotkeys,/\.inner_size\(REPLAY_MENU_WIDTH, REPLAY_MENU_HEIGHT\)/);
- assert.match(hotkeys,/\.shadow\(false\)/);
+ // The hotkey menu is rendered into the captured game by the Vulkan layer,
+ // so no desktop menu window or dedicated entry document may come back.
+ assert.throws(()=>readFileSync(new URL('../src-tauri/src/replay_menu_window.rs',import.meta.url),'utf8'));
+ assert.throws(()=>readFileSync(new URL('../ui/replay-menu.html',import.meta.url),'utf8'));
+ const hotkeys=readFileSync(new URL('../src-tauri/src/hotkeys.rs',import.meta.url),'utf8');
+ assert.doesNotMatch(hotkeys,/WebviewWindowBuilder|replay_menu_window/);
 });
 test('global overlay preview includes the native metric hierarchy',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
@@ -221,10 +222,12 @@ test('core navigation remains available and retired module writes are not expose
 });
 
 test('dirty-state helpers distinguish saved settings from meaningful edits',()=>{
- const saved={overlay:true,preset:'Custom',position:'Top left',scale:100,opacity:80,metrics:['FPS','GPU'],captureMetrics:true,replay:true,fps:60,quality:'Balanced',format:'MKV',storage:'10 GiB'};
+ const saved={overlay:true,preset:'Custom',layout:'Grid',palette:'Redunar',position:'Top left',scale:100,opacity:80,metrics:['FPS','GPU'],captureMetrics:true,replay:true,fps:60,quality:'Balanced',format:'MKV',storage:'10 GiB'};
  assert.equal(profileDraftChanged(structuredClone(saved),saved),false);
  assert.equal(profileDraftChanged({...saved,metrics:['GPU','FPS']},saved),false,'metric order is not a setting change');
  assert.equal(profileDraftChanged({...saved,opacity:70},saved),true);
+ assert.equal(profileDraftChanged({...saved,layout:'Ribbon'},saved),true);
+ assert.equal(profileDraftChanged({...saved,palette:'Mint'},saved),true);
  assert.equal(shortcutDraftChanged(['Shift+F8','F8'],['Shift+F8','F8']),false);
  assert.equal(shortcutDraftChanged(['Shift+F8','F9'],['Shift+F8','F8']),true);
  assert.equal(overrideDraftChanged({overlay:true},{overlay:true}),false);

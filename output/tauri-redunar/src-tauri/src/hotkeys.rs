@@ -6,7 +6,6 @@
 use serde::Serialize;
 use std::env;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -58,10 +57,12 @@ impl Default for ShortcutMonitor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 enum HelperEvent {
     Ready,
-    Overlay,
+    MenuOpened,
+    MenuOpenedWithoutPointer,
+    MenuClosed,
     Activated(u16),
     Stopped,
     Rejected(String),
@@ -254,26 +255,23 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
                 state.state = "Active".into();
                 state.message = None;
             }
-            HelperEvent::Overlay => {
-                if !instant_replay_enabled() {
-                    state.last_action = Some("Replay menu is unavailable".into());
-                    continue;
-                }
-                match toggle_replay_menu() {
-                    Ok(response) => {
-                        state.last_action = Some(format!("Replay menu: {}", response.trim()));
-                        if let Some(app_handle) = app_handle {
-                            let result = apply_menu_response(app_handle, &response);
-                            if let Err(error) = result {
-                                crate::backend::service()
-                                    .game_session_coordinator()
-                                    .close_replay_menu();
-                                state.message = Some(error);
-                            }
-                        }
-                    }
-                    Err(error) => state.message = Some(error),
-                }
+            HelperEvent::MenuOpened => {
+                // The helper owns the whole in-game menu session: it toggles
+                // the daemon state, captures mice, and streams pointer events.
+                // The panel is rendered into the captured game by the Vulkan
+                // layer, so there is no desktop window to open here.
+                state.last_action = Some("Replay menu opened".into());
+                state.message = None;
+            }
+            HelperEvent::MenuOpenedWithoutPointer => {
+                state.last_action = Some("Replay menu opened · View only".into());
+                state.message = Some(
+                    "Pointer control is unavailable for this session. Shift+F8 closes the menu; Replay save shortcuts remain active."
+                        .into(),
+                );
+            }
+            HelperEvent::MenuClosed => {
+                state.last_action = Some("Replay menu closed".into());
             }
             HelperEvent::Activated(seconds) => {
                 state.last_action = Some(format!("Saved replay · {seconds}s"));
@@ -314,18 +312,6 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
     }
 }
 
-/// Apply the coordinator's result; a close response must never reopen the menu.
-pub(crate) fn apply_menu_response(app: &tauri::AppHandle, response: &str) -> Result<(), String> {
-    match response.trim() {
-        "OK GRAB" => crate::replay_menu_window::show(app),
-        "OK RELEASE" => app
-            .get_webview_window("replay-menu")
-            .map(|window| window.hide().map_err(|error| error.to_string()))
-            .unwrap_or(Ok(())),
-        _ => Err("Replay menu returned an invalid response".into()),
-    }
-}
-
 fn stop_locked(state: &mut State) {
     state.input.take();
     if let Some(mut child) = state.child.take() {
@@ -356,22 +342,7 @@ fn spawn_reader(
 ) {
     std::thread::spawn(move || {
         for line in BufReader::new(output).lines().map_while(Result::ok) {
-            let event = if errors {
-                HelperEvent::Error(line)
-            } else if line.starts_with("READY ") {
-                HelperEvent::Ready
-            } else if line == "OVERLAY" {
-                HelperEvent::Overlay
-            } else if let Some(seconds) = line
-                .strip_prefix("ACTIVATED ")
-                .and_then(|value| value.parse::<u16>().ok())
-            {
-                HelperEvent::Activated(seconds)
-            } else if let Some(error) = line.strip_prefix("REJECTED ") {
-                HelperEvent::Rejected(error.to_owned())
-            } else {
-                HelperEvent::Error(line)
-            };
+            let event = parse_helper_event(line, errors);
             if sender.send(event).is_err() {
                 break;
             }
@@ -381,6 +352,29 @@ fn spawn_reader(
             wake_dispatcher(app.as_ref(), &pending);
         }
     });
+}
+
+fn parse_helper_event(line: String, errors: bool) -> HelperEvent {
+    if errors {
+        HelperEvent::Error(line)
+    } else if line.starts_with("READY ") {
+        HelperEvent::Ready
+    } else if line == "MENU OPENED" {
+        HelperEvent::MenuOpened
+    } else if line == "MENU OPENED VIEW ONLY" {
+        HelperEvent::MenuOpenedWithoutPointer
+    } else if line == "MENU CLOSED" {
+        HelperEvent::MenuClosed
+    } else if let Some(seconds) = line
+        .strip_prefix("ACTIVATED ")
+        .and_then(|value| value.parse::<u16>().ok())
+    {
+        HelperEvent::Activated(seconds)
+    } else if let Some(error) = line.strip_prefix("REJECTED ") {
+        HelperEvent::Rejected(error.to_owned())
+    } else {
+        HelperEvent::Error(line)
+    }
 }
 
 fn wake_dispatcher(app: Option<&tauri::AppHandle>, pending: &Arc<AtomicBool>) {
@@ -405,39 +399,9 @@ fn wake_dispatcher(app: Option<&tauri::AppHandle>, pending: &Arc<AtomicBool>) {
     }
 }
 
-fn toggle_replay_menu() -> Result<String, String> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or("Replay control runtime is unavailable")?;
-    let path = runtime.join("redunar/replay-control-v1.sock");
-    let mut socket = UnixStream::connect(path)
-        .map_err(|error| format!("Replay menu could not open: {error}"))?;
-    socket
-        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
-        .map_err(|error| error.to_string())?;
-    socket
-        .set_write_timeout(Some(std::time::Duration::from_millis(500)))
-        .map_err(|error| error.to_string())?;
-    socket
-        .write_all(b"MENU TOGGLE\n")
-        .map_err(|error| format!("Replay menu request failed: {error}"))?;
-    let mut response = String::new();
-    BufReader::new(socket)
-        .read_line(&mut response)
-        .map_err(|error| format!("Replay menu response failed: {error}"))?;
-    Ok(response)
-}
-
-fn instant_replay_enabled() -> bool {
-    crate::backend::service()
-        .module_status(redunar_daemon::AppModule::InstantReplay)
-        .allows_runtime()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{write_bindings, ShortcutMonitor};
+    use super::{parse_helper_event, write_bindings, HelperEvent, ShortcutMonitor};
 
     #[test]
     fn diagnostic_snapshot_is_inactive_without_starting_the_helper() {
@@ -496,5 +460,17 @@ mod tests {
             reason: "not supported".into(),
         }
         .allows_runtime());
+    }
+
+    #[test]
+    fn helper_reports_the_view_only_menu_fallback_separately() {
+        assert_eq!(
+            parse_helper_event("MENU OPENED VIEW ONLY".into(), false),
+            HelperEvent::MenuOpenedWithoutPointer
+        );
+        assert_eq!(
+            parse_helper_event("MENU OPENED".into(), false),
+            HelperEvent::MenuOpened
+        );
     }
 }

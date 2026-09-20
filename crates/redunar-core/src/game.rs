@@ -77,6 +77,31 @@ pub enum OverlayPreset {
     Custom,
 }
 
+/// Bounded visual structures for the in-game metric overlay. Metric selection
+/// remains independent so every layout can honor the same Custom set.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OverlayLayout {
+    #[default]
+    Grid,
+    Ribbon,
+    Telemetry,
+}
+
+/// Closed color palettes keep the injected renderer deterministic and avoid
+/// accepting arbitrary color data through a game process environment.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OverlayPalette {
+    #[default]
+    Redunar,
+    Glacier,
+    Ember,
+    Mint,
+    Mono,
+    Amethyst,
+    Solar,
+    Rose,
+}
+
 /// Bounded metric-selection bits used only by the Custom overlay preset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverlayMetricSet(u16);
@@ -366,6 +391,8 @@ pub struct GlobalGameProfile {
     /// is available. Frame collection remains an independent setting.
     pub overlay_visible: bool,
     pub overlay_preset: OverlayPreset,
+    pub overlay_layout: OverlayLayout,
+    pub overlay_palette: OverlayPalette,
     pub overlay_metrics: OverlayMetricSet,
     pub overlay_corner: OverlayCorner,
     pub overlay_opacity: OverlayOpacity,
@@ -382,6 +409,8 @@ impl Default for GlobalGameProfile {
             capture_metrics: true,
             overlay_visible: false,
             overlay_preset: OverlayPreset::default(),
+            overlay_layout: OverlayLayout::default(),
+            overlay_palette: OverlayPalette::default(),
             overlay_metrics: OverlayMetricSet::default(),
             overlay_corner: OverlayCorner::default(),
             overlay_opacity: OverlayOpacity::default(),
@@ -418,6 +447,8 @@ impl PerGameProfile {
             capture_metrics: self.capture_metrics.resolve(global.capture_metrics),
             overlay_visible: self.overlay_visible.resolve(global.overlay_visible),
             overlay_preset: global.overlay_preset,
+            overlay_layout: global.overlay_layout,
+            overlay_palette: global.overlay_palette,
             overlay_metrics: global.overlay_metrics,
             overlay_corner: global.overlay_corner,
             overlay_opacity: global.overlay_opacity,
@@ -446,6 +477,8 @@ pub struct EffectiveGameProfile {
     pub capture_metrics: bool,
     pub overlay_visible: bool,
     pub overlay_preset: OverlayPreset,
+    pub overlay_layout: OverlayLayout,
+    pub overlay_palette: OverlayPalette,
     pub overlay_metrics: OverlayMetricSet,
     pub overlay_corner: OverlayCorner,
     pub overlay_opacity: OverlayOpacity,
@@ -694,6 +727,8 @@ mod tests {
                 capture_metrics: true,
                 overlay_visible: true,
                 overlay_preset: OverlayPreset::Compact,
+                overlay_layout: OverlayLayout::Grid,
+                overlay_palette: OverlayPalette::Redunar,
                 overlay_metrics: OverlayMetricSet::COMPACT,
                 overlay_corner: OverlayCorner::TopLeft,
                 overlay_opacity: OverlayOpacity::default(),
@@ -717,6 +752,8 @@ mod tests {
                 capture_metrics: false,
                 overlay_visible: false,
                 overlay_preset: OverlayPreset::Compact,
+                overlay_layout: OverlayLayout::Grid,
+                overlay_palette: OverlayPalette::Redunar,
                 overlay_metrics: OverlayMetricSet::COMPACT,
                 overlay_corner: OverlayCorner::TopLeft,
                 overlay_opacity: OverlayOpacity::default(),

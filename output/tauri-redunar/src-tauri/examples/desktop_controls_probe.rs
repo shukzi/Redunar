@@ -3,8 +3,6 @@
 #![allow(dead_code)]
 #[path = "../src/hotkeys.rs"]
 mod hotkeys;
-#[path = "../src/replay_menu_window.rs"]
-mod replay_menu_window;
 #[path = "../src/tray.rs"]
 mod tray;
 
@@ -76,14 +74,10 @@ fn main() {
                     assert_eq!(indicator_status(), "Passive", "native icon must be hidden");
                     wait_for(|| main.is_visible().unwrap());
                 }
-                hotkeys::apply_menu_response(&handle, "OK RELEASE\n").unwrap();
-                assert!(handle.get_webview_window("replay-menu").is_none());
-                hotkeys::apply_menu_response(&handle, "OK GRAB\n").unwrap();
-                let menu = handle.get_webview_window("replay-menu").unwrap();
-                wait_for(|| menu.is_visible().unwrap());
-                hotkeys::apply_menu_response(&handle, "OK RELEASE\n").unwrap();
-                wait_for(|| !menu.is_visible().unwrap());
-                assert!(hotkeys::apply_menu_response(&handle, "ERR fixture").is_err());
+            // The in-game menu is owned by the helper and the Vulkan layer;
+            // the app only mirrors its open/close reports. No desktop menu
+            // window may exist for any reason anymore.
+            assert!(handle.get_webview_window("replay-menu").is_none());
                 backend::service()
                     .set_replay_hotkeys(String::new(), Vec::new())
                     .unwrap();
@@ -103,7 +97,7 @@ fn main() {
         "native probe did not complete"
     );
     std::fs::remove_dir_all(directory).unwrap();
-    println!("PASS: hidden native shortcut dispatch, menu open/close, empty shortcuts, tray startup and three native Active/Passive cycles");
+    println!("PASS: hidden native shortcut dispatch, no legacy menu window, empty shortcuts, tray startup and three native Active/Passive cycles");
 }
 
 fn wait_for(mut condition: impl FnMut() -> bool) {

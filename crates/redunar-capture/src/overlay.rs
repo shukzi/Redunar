@@ -5,7 +5,7 @@ pub const OVERLAY_HARDWARE_TELEMETRY_BYTES: usize = 48;
 pub const REPLAY_MENU_TELEMETRY_BYTES: usize = 48;
 
 const MAGIC: [u8; 8] = *b"RDOVL001";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 const CPU_UTILIZATION_PRESENT: u16 = 1 << 0;
 const CPU_TEMPERATURE_PRESENT: u16 = 1 << 1;
 const GPU_UTILIZATION_PRESENT: u16 = 1 << 2;
@@ -180,6 +180,8 @@ pub struct OverlayHardwareTelemetry {
     pub revision: u64,
     pub corner: u8,
     pub preset: u8,
+    pub layout: u8,
+    pub palette: u8,
     pub metrics: u16,
     pub opacity_percent: u8,
     pub scale_percent: u8,
@@ -256,6 +258,8 @@ pub fn encode_overlay_hardware_telemetry(
         Some(true) => 1,
         Some(false) => 2,
     };
+    output[37] = telemetry.layout;
+    output[38] = telemetry.palette;
     write_u64(output, 16, telemetry.revision);
     write_u64(output, 40, telemetry.revision);
     Ok(OVERLAY_HARDWARE_TELEMETRY_BYTES)
@@ -301,6 +305,8 @@ pub fn decode_overlay_hardware_telemetry(
         revision,
         corner: input[12],
         preset: input[13],
+        layout: input[37],
+        palette: input[38],
         metrics: read_u16(input, 14),
         opacity_percent: input[32],
         scale_percent: input[33],
@@ -328,6 +334,8 @@ fn validate(telemetry: &OverlayHardwareTelemetry) -> Result<(), OverlayTelemetry
     }
     if telemetry.corner > 3
         || telemetry.preset > 3
+        || telemetry.layout > 2
+        || telemetry.palette > 7
         || telemetry.metrics == 0
         || telemetry.opacity_percent > 100
         || !(50..=200).contains(&telemetry.scale_percent)
@@ -427,6 +435,8 @@ mod tests {
             revision: 2,
             corner: 0,
             preset: 0,
+            layout: 0,
+            palette: 0,
             metrics: 1,
             opacity_percent: 50,
             scale_percent: 100,
@@ -468,6 +478,8 @@ mod tests {
             revision: 4,
             corner: 1,
             preset: 2,
+            layout: 2,
+            palette: 7,
             metrics: 3,
             opacity_percent: 75,
             scale_percent: 125,

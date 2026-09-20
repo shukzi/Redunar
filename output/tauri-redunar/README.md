@@ -73,8 +73,9 @@ as part of a read-only review.
 - Native supervision and shortcuts continue with the webview hidden. End session
   releases resources without killing the game and retains its launch lock until
   the owned process exits. Quit/exit must clean up once.
-- The replay menu has its own transparent `ui/replay-menu.html` document. The
-  in-app preview is a separate dialog; neither loads the desktop shell as backdrop.
+- The Replay menu shortcut renders the menu inside the captured game through the
+  Vulkan layer; there is no desktop menu window. The in-app preview dialog is
+  only for configuration checks and never loads the desktop shell as backdrop.
 - Close to tray immediately controls icon visibility. Missing tray support must
   not strand an invisible window. Empty shortcut configurations remain valid.
 - The service does not expose arbitrary privileged commands. The package

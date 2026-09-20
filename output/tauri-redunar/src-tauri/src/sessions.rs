@@ -374,6 +374,8 @@ impl Engine {
             profile.overlay_visible = game.profile.resolve(*global).overlay_visible;
         }
         profile.overlay_preset = global.overlay_preset;
+        profile.overlay_layout = global.overlay_layout;
+        profile.overlay_palette = global.overlay_palette;
         profile.overlay_metrics = global.overlay_metrics;
         profile.overlay_corner = global.overlay_corner;
         profile.overlay_opacity = global.overlay_opacity;

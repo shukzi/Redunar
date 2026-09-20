@@ -9,7 +9,7 @@ export function visibleSession(status) {
   return status && status.phase === 'Ended' && !status.can_end && !status.launch_locked ? null : status ?? null;
 }
 
-const profileDraftKeys = ['overlay','preset','position','scale','opacity','metrics','captureMetrics','replay','fps','quality','format'];
+const profileDraftKeys = ['overlay','preset','layout','palette','position','scale','opacity','metrics','captureMetrics','replay','fps','quality','format'];
 const normalizedMetrics = value => [...(Array.isArray(value)?value:[])].sort();
 export function profileDraftChanged(current,saved) {
   return profileDraftKeys.some(key=>key==='metrics'
@@ -39,7 +39,7 @@ export function mapSessions(records) {
 }
 export function mapDefaults(workspace) {
   const s=workspace.values;
-  return {overlay:s.overlay,preset:s.preset,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:s.replayEnabled,fps:s.fps,quality:s.quality,format:s.format};
+  return {overlay:s.overlay,preset:s.preset,layout:s.layout,palette:s.palette,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:s.replayEnabled,fps:s.fps,quality:s.quality,format:s.format};
 }
 export function profilePayload(draft, shortcuts) {
   return {...draft,replayEnabled:draft.replay,storageLimit:'Unlimited',shortcuts};

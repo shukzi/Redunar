@@ -56,6 +56,7 @@ set -e
 if [ -x /usr/bin/udevadm ]; then
   /usr/bin/udevadm control --reload-rules >/dev/null 2>&1 || :
   /usr/bin/udevadm trigger --subsystem-match=input --sysname-match='event*' --property-match=ID_INPUT_KEYBOARD=1 --action=change >/dev/null 2>&1 || :
+  /usr/bin/udevadm trigger --subsystem-match=input --sysname-match='event*' --property-match=ID_INPUT_MOUSE=1 --action=change >/dev/null 2>&1 || :
 fi
 exit 0
 EOF

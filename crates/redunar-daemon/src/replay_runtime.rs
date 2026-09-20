@@ -12,6 +12,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_COMPLETED_EXPORTS: usize = 8;
+/// Clip names kept between the save worker and the next game-session poll.
+/// The bound only guards pathological bursts; an overflow degrades to the
+/// session-history fallback in the clip inventory, never to a lost clip.
+const MAX_COMMITTED_CLIP_NAMES: usize = 32;
 const RECORDER_STALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -24,6 +28,10 @@ struct RuntimeState {
     pipeline: Option<ReplayHardwarePipeline>,
     completed_exports: VecDeque<u64>,
     save_worker: Option<thread::JoinHandle<()>>,
+    /// File names of clips durably committed since the coordinator last
+    /// drained them. The save worker pushes under the same mutex that bumps
+    /// the completed-save revision, so the two always move together.
+    committed_clips: VecDeque<String>,
     received_frame_count: u64,
     observed_packet_count: u64,
     last_encoded_progress: Option<Instant>,
@@ -60,6 +68,7 @@ impl ProductionReplayRuntime {
                 pipeline: None,
                 completed_exports: VecDeque::with_capacity(MAX_COMPLETED_EXPORTS),
                 save_worker: None,
+                committed_clips: VecDeque::new(),
                 received_frame_count: 0,
                 observed_packet_count: 0,
                 last_encoded_progress: None,
@@ -136,6 +145,16 @@ impl ProductionReplayRuntime {
         if state.pipeline.is_some() {
             return Err(ReplayRuntimeError::new(
                 "an Instant Replay backend is already active",
+            ));
+        }
+        // A terminal failure normally clears the pipeline and reports Failed,
+        // which the export worker may re-arm within the same game session.
+        // While a clip assembly is still finishing, replacing the pipeline
+        // would let a second save race the pending completion worker, so the
+        // retry waits for that worker to restore the recording phase.
+        if state.status.phase == ReplayPhase::Saving {
+            return Err(ReplayRuntimeError::new(
+                "an Instant Replay clip is still being saved",
             ));
         }
         if !pipeline.has_spool() {
@@ -265,6 +284,16 @@ impl ProductionReplayRuntime {
             .collect()
     }
 
+    /// Take the clip file names committed since the previous drain, oldest
+    /// first. Pairs with changes in the completed-save revision so the game
+    /// session can attribute each saved clip to the game that recorded it.
+    pub(crate) fn take_committed_clip_names(&self) -> Vec<String> {
+        lock_unpoisoned(&self.inner)
+            .committed_clips
+            .drain(..)
+            .collect()
+    }
+
     /// Hand one duration-selected save to the isolated spool assembler.
     /// Recording continues while the worker commits the clip.
     ///
@@ -333,7 +362,19 @@ impl ProductionReplayRuntime {
                 let result = job.join();
                 let mut state = lock_unpoisoned(&runtime.inner);
                 match result {
-                    Ok(_) if state.status.phase == ReplayPhase::Saving => {
+                    Ok(stored) if state.status.phase == ReplayPhase::Saving => {
+                        // Remember the committed file name beside the revision
+                        // bump so the game-session coordinator can attribute
+                        // the clip to the game that recorded it. Only the name
+                        // is kept; the clip itself is already durable.
+                        if let Some(name) =
+                            stored.path.file_name().and_then(|name| name.to_str())
+                        {
+                            if state.committed_clips.len() >= MAX_COMMITTED_CLIP_NAMES {
+                                state.committed_clips.pop_front();
+                            }
+                            state.committed_clips.push_back(name.to_owned());
+                        }
                         state.status.phase = ReplayPhase::Buffering;
                         state.status.last_failure = None;
                         state.status.completed_save_revision =

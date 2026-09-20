@@ -6,6 +6,8 @@ use std::collections::HashMap;
 pub struct GlobalSettingsInput {
     overlay: bool,
     preset: String,
+    layout: String,
+    palette: String,
     position: String,
     scale: u8,
     opacity: u8,
@@ -42,8 +44,8 @@ fn global_profile_from_input(
     current: redunar_core::GlobalGameProfile,
 ) -> Result<redunar_core::GlobalGameProfile, String> {
     use redunar_core::{
-        OverlayCorner, OverlayMetricSet, OverlayOpacity, OverlayPreset, OverlayScale,
-        ReplayFrameRate, ReplayQuality,
+        OverlayCorner, OverlayLayout, OverlayMetricSet, OverlayOpacity, OverlayPalette,
+        OverlayPreset, OverlayScale, ReplayFrameRate, ReplayQuality,
     };
     let preset = match input.preset.as_str() {
         "Compact" => OverlayPreset::Compact,
@@ -58,6 +60,23 @@ fn global_profile_from_input(
         "Bottom left" => OverlayCorner::BottomLeft,
         "Bottom right" => OverlayCorner::BottomRight,
         value => return Err(format!("Unsupported overlay position: {value}")),
+    };
+    let layout = match input.layout.as_str() {
+        "Grid" => OverlayLayout::Grid,
+        "Ribbon" => OverlayLayout::Ribbon,
+        "Telemetry" => OverlayLayout::Telemetry,
+        value => return Err(format!("Unsupported overlay layout: {value}")),
+    };
+    let palette = match input.palette.as_str() {
+        "Redunar" => OverlayPalette::Redunar,
+        "Glacier" => OverlayPalette::Glacier,
+        "Ember" => OverlayPalette::Ember,
+        "Mint" => OverlayPalette::Mint,
+        "Mono" => OverlayPalette::Mono,
+        "Amethyst" => OverlayPalette::Amethyst,
+        "Solar" => OverlayPalette::Solar,
+        "Rose" => OverlayPalette::Rose,
+        value => return Err(format!("Unsupported overlay palette: {value}")),
     };
     let mut bits = 0u16;
     for metric in &input.metrics {
@@ -97,6 +116,8 @@ fn global_profile_from_input(
         capture_metrics: input.capture_metrics,
         overlay_visible: input.overlay,
         overlay_preset: preset,
+        overlay_layout: layout,
+        overlay_palette: palette,
         overlay_metrics: metrics,
         overlay_corner: corner,
         overlay_opacity: opacity,
@@ -125,7 +146,8 @@ pub struct GlobalWorkspace {
 
 fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
     use redunar_core::{
-        OverlayCorner as C, OverlayMetricSet as M, OverlayPreset as P, ReplayQuality as Q,
+        OverlayCorner as C, OverlayLayout as L, OverlayMetricSet as M, OverlayPalette as A,
+        OverlayPreset as P, ReplayQuality as Q,
     };
     let profile = service
         .load_game_catalog()
@@ -148,6 +170,23 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
                 P::FpsOnly => "FPS only",
                 P::Detailed => "Detailed",
                 P::Custom => "Custom",
+            }
+            .into(),
+            layout: match profile.overlay_layout {
+                L::Grid => "Grid",
+                L::Ribbon => "Ribbon",
+                L::Telemetry => "Telemetry",
+            }
+            .into(),
+            palette: match profile.overlay_palette {
+                A::Redunar => "Redunar",
+                A::Glacier => "Glacier",
+                A::Ember => "Ember",
+                A::Mint => "Mint",
+                A::Mono => "Mono",
+                A::Amethyst => "Amethyst",
+                A::Solar => "Solar",
+                A::Rose => "Rose",
             }
             .into(),
             position: match profile.overlay_corner {
@@ -279,6 +318,8 @@ mod tests {
         GlobalSettingsInput {
             overlay: true,
             preset: "Custom".into(),
+            layout: "Telemetry".into(),
+            palette: "Glacier".into(),
             position: "Top right".into(),
             scale: 100,
             opacity: 50,
@@ -302,12 +343,24 @@ mod tests {
         let result = global_profile_from_input(&input(), current).unwrap();
         assert!(result.gamemode_enabled);
         assert!(result.capture_metrics);
-        assert!(result
-            .overlay_metrics
-            .contains(redunar_core::OverlayMetricSet::CPU_TEMPERATURE));
-        assert!(!result
-            .overlay_metrics
-            .contains(redunar_core::OverlayMetricSet::CPU_LOAD));
+        assert_eq!(
+            result.overlay_layout,
+            redunar_core::OverlayLayout::Telemetry
+        );
+        assert_eq!(
+            result.overlay_palette,
+            redunar_core::OverlayPalette::Glacier
+        );
+        assert!(
+            result
+                .overlay_metrics
+                .contains(redunar_core::OverlayMetricSet::CPU_TEMPERATURE)
+        );
+        assert!(
+            !result
+                .overlay_metrics
+                .contains(redunar_core::OverlayMetricSet::CPU_LOAD)
+        );
     }
     #[test]
     fn overlay_save_during_a_game_preserves_unedited_recording_settings() {
@@ -354,9 +407,11 @@ mod tests {
         }
         let mut recording_change = current;
         recording_change.replay.frame_rate = ReplayFrameRate::Fps30;
-        assert!(service
-            .save_global_workspace(current, recording_change, format, format)
-            .is_err());
+        assert!(
+            service
+                .save_global_workspace(current, recording_change, format, format)
+                .is_err()
+        );
         assert_eq!(service.load_game_catalog().unwrap().global_profile, current);
         drop(coordinator);
         drop(service);

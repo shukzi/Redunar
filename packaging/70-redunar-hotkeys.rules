@@ -1,4 +1,6 @@
-# Redunar monitors the physical keyboard directly for its local Replay
-# shortcuts. Grant the active graphical session access through logind's
-# uaccess ACL without changing the input group or running the app as root.
+# Redunar monitors the physical keyboard for local Replay shortcuts and, while
+# the in-game menu is open, reads and temporarily grabs physical mice. Grant
+# the active graphical session access through logind's uaccess ACL without
+# changing the input group or running the app as root.
 SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"

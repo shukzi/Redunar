@@ -53,6 +53,10 @@ pub struct ReplayClipEntry {
     pub path: PathBuf,
     pub bytes: u64,
     pub modified_unix_ns: u128,
+    /// Game that recorded this clip, when local attribution can resolve it.
+    /// This is labeling data for the Recent captures view; a missing value
+    /// never affects playback, export, or deletion.
+    pub game_name: Option<String>,
 }
 
 /// Read-only inventory of the dedicated replay directory.
@@ -395,6 +399,9 @@ impl ReplayClipStore {
                     path: clip.path,
                     bytes: clip.bytes,
                     modified_unix_ns,
+                    // The store itself does not own attribution; the service
+                    // joins persisted game evidence when listing clips.
+                    game_name: None,
                 })
             })
             .collect()
@@ -436,6 +443,7 @@ impl ReplayClipStore {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos(),
+            game_name: None,
         };
         fs::remove_file(path)
             .map_err(|error| io_error("could not delete Redunar replay clip", &error))?;
@@ -1007,7 +1015,7 @@ fn scan_owned_clips(directory: &Path) -> Result<Vec<OwnedClip>, ReplayStoreError
     Ok(clips)
 }
 
-fn is_owned_clip_name(name: &OsStr) -> bool {
+pub(crate) fn is_owned_clip_name(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };

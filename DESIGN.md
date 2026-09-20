@@ -1,6 +1,6 @@
 # Redunar interface contract
 
-Current Tauri design, reconciled September 13, 2026. This file owns approved
+Current Tauri design, reconciled September 20, 2026. This file owns approved
 visual and interaction rules. Source is in `output/tauri-redunar/ui/`.
 
 ## Shell and visual language
@@ -83,7 +83,12 @@ its inherited/custom setting; hiding must not remove the runtime.
 Overlay preview reflects the real renderer's layout, metric order, scale, and
 background-only opacity over a soft gradient. Compact, FPS only, Detailed, and
 Custom previews show their actual geometry. Custom selections remain valid and
-nonempty. Renderer ABI details belong in architecture/component documentation.
+nonempty. Grid, Ribbon, and Telemetry change the structure independently of the
+information preset and Custom metric selection. The bounded palettes are
+Redunar, Glacier, Ember, Mint, Mono, Amethyst, Solar, and Rose. The preview must
+use the same palette roles, rounded panel bounds, and layout dimensions as the
+in-game renderer. Renderer ABI details belong in architecture/component
+documentation.
 
 Automatic replay has no global/per-game Off selector. Recording configuration
 is locked until the owned game closes; this must not block an otherwise valid

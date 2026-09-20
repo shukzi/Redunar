@@ -6,9 +6,9 @@ pub mod overlay_font;
 pub use game::{
     EffectiveGameProfile, GameCatalog, GameId, GameIdentityError, GameLaunchConfig, GameMatchRule,
     GameProcess, GameRecord, GameResolution, GlobalGameProfile, Inheritable, OverlayCorner,
-    OverlayMetricSet, OverlayMetricSetError, OverlayOpacity, OverlayOpacityError, OverlayPreset,
-    OverlayScale, PerGameProfile, ReplayDuration, ReplayFrameRate, ReplayQuality, ReplaySettings,
-    ReplayStorageLimit, resolve_game,
+    OverlayLayout, OverlayMetricSet, OverlayMetricSetError, OverlayOpacity, OverlayOpacityError,
+    OverlayPalette, OverlayPreset, OverlayScale, PerGameProfile, ReplayDuration, ReplayFrameRate,
+    ReplayQuality, ReplaySettings, ReplayStorageLimit, resolve_game,
 };
 
 use std::error::Error;

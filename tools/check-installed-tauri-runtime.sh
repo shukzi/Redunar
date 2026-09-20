@@ -56,13 +56,13 @@ check_component application-icon \
   /usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg || status=1
 
 if [[ ! -f /usr/lib/udev/rules.d/70-redunar-hotkeys.rules ]]; then
-  printf 'Installed component missing: keyboard uaccess rule (/usr/lib/udev/rules.d/70-redunar-hotkeys.rules)\n' >&2
+  printf 'Installed component missing: input uaccess rule (/usr/lib/udev/rules.d/70-redunar-hotkeys.rules)\n' >&2
   status=1
 elif [[ "$(sha256sum "$payload_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules" | cut -d' ' -f1)" != "$(sha256sum /usr/lib/udev/rules.d/70-redunar-hotkeys.rules | cut -d' ' -f1)" ]]; then
-  printf 'Installed component is outdated: keyboard uaccess rule\n' >&2
+  printf 'Installed component is outdated: input uaccess rule\n' >&2
   status=1
 else
-  printf 'Current: keyboard uaccess rule\n'
+  printf 'Current: input uaccess rule\n'
 fi
 
 if ((status != 0)); then

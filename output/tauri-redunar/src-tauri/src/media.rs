@@ -15,6 +15,9 @@ pub struct Clip {
     title: String,
     bytes: u64,
     modified_unix_ns: String,
+    /// Game that recorded the clip, when local evidence resolves it. The UI
+    /// falls back to "Game not recorded" only when this is null.
+    game_name: Option<String>,
 }
 #[tauri::command]
 pub fn replay_clips() -> Result<Vec<Clip>, String> {
@@ -31,6 +34,7 @@ pub fn replay_clips() -> Result<Vec<Clip>, String> {
             file_name: clip.file_name,
             bytes: clip.bytes,
             modified_unix_ns: clip.modified_unix_ns.to_string(),
+            game_name: clip.game_name,
         })
         .collect())
 }
@@ -58,6 +62,9 @@ fn regular_clip_path(directory: &Path, file_name: &str) -> Result<PathBuf, Strin
 pub(crate) struct OpenedClip {
     pub file: File,
     pub bytes: u64,
+    /// Game attribution resolved from the inventory for the source clip, so
+    /// an export can carry it without a second inventory scan.
+    pub game_name: Option<String>,
 }
 
 pub(crate) fn open_inventory_clip(file_name: &str) -> Result<OpenedClip, String> {
@@ -67,6 +74,7 @@ pub(crate) fn open_inventory_clip(file_name: &str) -> Result<OpenedClip, String>
         .iter()
         .find(|clip| clip.file_name == file_name)
         .ok_or("The selected file is not in Redunar's replay inventory")?;
+    let game_name = clip.game_name.clone();
     let path = regular_clip_path(
         clip.path.parent().ok_or("Clip folder is unavailable")?,
         file_name,
@@ -86,6 +94,7 @@ pub(crate) fn open_inventory_clip(file_name: &str) -> Result<OpenedClip, String>
     Ok(OpenedClip {
         file,
         bytes: opened.len(),
+        game_name,
     })
 }
 

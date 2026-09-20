@@ -39,7 +39,7 @@ disk cannot update an already-running process.
   app, resolved into a private per-launch Vulkan/Steam configuration.
 - `/usr/libexec/redunar-hotkey-helper`, running as the logged-in user.
 - `/usr/lib/udev/rules.d/70-redunar-hotkeys.rules`, giving the active graphical
-  session keyboard-event read access through logind `uaccess`.
+  session keyboard and mouse event access through logind `uaccess`.
 - `com.redunar.Redunar.desktop`, matching AppStream metadata, canonical
   Comet R icons, and required notices/licenses.
 

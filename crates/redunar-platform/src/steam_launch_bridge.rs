@@ -7,15 +7,17 @@
 //! inherited environment, and directly `exec`s Steam's original argv.
 
 use crate::launch::{
-    REDUNAR_CAPTURE_REPLY_SOCKET_ENV, REDUNAR_OVERLAY_CORNER_ENV, REDUNAR_OVERLAY_METRICS_ENV,
-    REDUNAR_OVERLAY_OPACITY_ENV, REDUNAR_OVERLAY_PRESET_ENV, REDUNAR_OVERLAY_TELEMETRY_ENV,
-    REDUNAR_OVERLAY_VISIBLE_ENV, REDUNAR_REPLAY_FRAME_RATE_ENV, REDUNAR_REPLAY_PRODUCTION_ENV,
-    REDUNAR_REPLAY_TRANSFER_ENV, ReplayTransferLaunchConfig, VULKAN_CAPTURE_LAYER_NAME,
+    REDUNAR_CAPTURE_REPLY_SOCKET_ENV, REDUNAR_OVERLAY_CORNER_ENV, REDUNAR_OVERLAY_LAYOUT_ENV,
+    REDUNAR_OVERLAY_METRICS_ENV, REDUNAR_OVERLAY_OPACITY_ENV, REDUNAR_OVERLAY_PALETTE_ENV,
+    REDUNAR_OVERLAY_PRESET_ENV, REDUNAR_OVERLAY_TELEMETRY_ENV, REDUNAR_OVERLAY_VISIBLE_ENV,
+    REDUNAR_REPLAY_FRAME_RATE_ENV, REDUNAR_REPLAY_PRODUCTION_ENV, REDUNAR_REPLAY_TRANSFER_ENV,
+    ReplayTransferLaunchConfig, VULKAN_CAPTURE_LAYER_NAME,
 };
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use redunar_capture::{CaptureSessionId, PROTOCOL_VERSION};
 use redunar_core::{
-    OverlayCorner, OverlayMetricSet, OverlayOpacity, OverlayPreset, ReplayFrameRate,
+    OverlayCorner, OverlayLayout, OverlayMetricSet, OverlayOpacity, OverlayPalette, OverlayPreset,
+    ReplayFrameRate,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -34,7 +36,7 @@ use std::time::{Duration, Instant};
 
 const STEAM_BROKER_SOCKET_FILE: &str = "steam-launch-v1.sock";
 const STEAM_WIRE_MAGIC: [u8; 8] = *b"RDSTML01";
-const STEAM_WIRE_VERSION: u16 = 2;
+const STEAM_WIRE_VERSION: u16 = 3;
 const REQUEST_BYTES: usize = 18;
 const MAX_PATH_BYTES: usize = 4_096;
 const MAX_RESPONSE_BYTES: usize = 4 * MAX_PATH_BYTES + 64;
@@ -49,7 +51,7 @@ const PRESSURE_VESSEL_FILESYSTEMS_RW_ENV: &str = "PRESSURE_VESSEL_FILESYSTEMS_RW
 
 pub const DEFAULT_STEAM_ACTIVATION_TTL: Duration = Duration::from_mins(5);
 
-const MANAGED_ENVIRONMENT_NAMES: [&str; 15] = [
+const MANAGED_ENVIRONMENT_NAMES: [&str; 17] = [
     "REDUNAR_CAPTURE_SOCKET",
     REDUNAR_CAPTURE_REPLY_SOCKET_ENV,
     "REDUNAR_CAPTURE_SESSION",
@@ -57,6 +59,8 @@ const MANAGED_ENVIRONMENT_NAMES: [&str; 15] = [
     REDUNAR_OVERLAY_VISIBLE_ENV,
     REDUNAR_OVERLAY_TELEMETRY_ENV,
     REDUNAR_OVERLAY_PRESET_ENV,
+    REDUNAR_OVERLAY_LAYOUT_ENV,
+    REDUNAR_OVERLAY_PALETTE_ENV,
     REDUNAR_OVERLAY_CORNER_ENV,
     REDUNAR_OVERLAY_OPACITY_ENV,
     REDUNAR_OVERLAY_METRICS_ENV,
@@ -94,6 +98,8 @@ pub struct SteamCaptureEnvironment {
     session_id: CaptureSessionId,
     overlay_visible: bool,
     overlay_preset: OverlayPreset,
+    overlay_layout: OverlayLayout,
+    overlay_palette: OverlayPalette,
     overlay_corner: OverlayCorner,
     overlay_opacity: OverlayOpacity,
     overlay_metrics: OverlayMetricSet,
@@ -129,6 +135,8 @@ impl SteamCaptureEnvironment {
             session_id,
             overlay_visible: false,
             overlay_preset: OverlayPreset::Compact,
+            overlay_layout: OverlayLayout::default(),
+            overlay_palette: OverlayPalette::default(),
             overlay_corner: OverlayCorner::TopLeft,
             overlay_opacity: OverlayOpacity::default(),
             overlay_metrics: OverlayMetricSet::default(),
@@ -159,6 +167,17 @@ impl SteamCaptureEnvironment {
     #[must_use]
     pub const fn with_gamescope(mut self, enabled: bool) -> Self {
         self.gamescope = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_overlay_style(
+        mut self,
+        layout: OverlayLayout,
+        palette: OverlayPalette,
+    ) -> Self {
+        self.overlay_layout = layout;
+        self.overlay_palette = palette;
         self
     }
 
@@ -284,6 +303,14 @@ impl SteamCaptureEnvironment {
         updates.insert(
             OsString::from(REDUNAR_OVERLAY_PRESET_ENV),
             OsString::from(overlay_preset_name(self.overlay_preset)),
+        );
+        updates.insert(
+            OsString::from(REDUNAR_OVERLAY_LAYOUT_ENV),
+            OsString::from(overlay_layout_name(self.overlay_layout)),
+        );
+        updates.insert(
+            OsString::from(REDUNAR_OVERLAY_PALETTE_ENV),
+            OsString::from(overlay_palette_name(self.overlay_palette)),
         );
         updates.insert(
             OsString::from(REDUNAR_OVERLAY_CORNER_ENV),
@@ -824,6 +851,8 @@ fn encode_granted(environment: &SteamCaptureEnvironment) -> Result<Vec<u8>, Stea
     bytes.extend_from_slice(&environment.session_id.as_bytes());
     bytes.push(u8::from(environment.overlay_visible));
     bytes.push(overlay_preset_wire(environment.overlay_preset));
+    bytes.push(overlay_layout_wire(environment.overlay_layout));
+    bytes.push(overlay_palette_wire(environment.overlay_palette));
     bytes.push(overlay_corner_wire(environment.overlay_corner));
     bytes.push(environment.overlay_opacity.percent());
     bytes.extend_from_slice(&environment.overlay_metrics.bits().to_le_bytes());
@@ -876,6 +905,8 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
         .map_err(|_| SteamActivationError::new("invalid capture session ID"))?;
     let overlay_visible = take_bool(bytes, &mut cursor)?;
     let overlay_preset = decode_overlay_preset(take_u8(bytes, &mut cursor)?)?;
+    let overlay_layout = decode_overlay_layout(take_u8(bytes, &mut cursor)?)?;
+    let overlay_palette = decode_overlay_palette(take_u8(bytes, &mut cursor)?)?;
     let overlay_corner = decode_overlay_corner(take_u8(bytes, &mut cursor)?)?;
     let overlay_opacity = OverlayOpacity::new(take_u8(bytes, &mut cursor)?)
         .map_err(|_| SteamActivationError::new("invalid overlay opacity"))?;
@@ -904,6 +935,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
                 overlay_opacity,
                 overlay_metrics,
             )
+            .with_overlay_style(overlay_layout, overlay_palette)
             .with_replay_frame_rate(replay_frame_rate)
             .with_replay_requested(replay_requested);
     if let Some(path) = overlay_telemetry_path {
@@ -1098,6 +1130,71 @@ const fn overlay_preset_name(preset: OverlayPreset) -> &'static str {
     }
 }
 
+const fn overlay_layout_wire(layout: OverlayLayout) -> u8 {
+    match layout {
+        OverlayLayout::Grid => 1,
+        OverlayLayout::Ribbon => 2,
+        OverlayLayout::Telemetry => 3,
+    }
+}
+
+fn decode_overlay_layout(value: u8) -> Result<OverlayLayout, SteamActivationError> {
+    match value {
+        1 => Ok(OverlayLayout::Grid),
+        2 => Ok(OverlayLayout::Ribbon),
+        3 => Ok(OverlayLayout::Telemetry),
+        _ => Err(SteamActivationError::new("invalid overlay layout")),
+    }
+}
+
+const fn overlay_layout_name(layout: OverlayLayout) -> &'static str {
+    match layout {
+        OverlayLayout::Grid => "grid",
+        OverlayLayout::Ribbon => "ribbon",
+        OverlayLayout::Telemetry => "telemetry",
+    }
+}
+
+const fn overlay_palette_wire(palette: OverlayPalette) -> u8 {
+    match palette {
+        OverlayPalette::Redunar => 1,
+        OverlayPalette::Glacier => 2,
+        OverlayPalette::Ember => 3,
+        OverlayPalette::Mint => 4,
+        OverlayPalette::Mono => 5,
+        OverlayPalette::Amethyst => 6,
+        OverlayPalette::Solar => 7,
+        OverlayPalette::Rose => 8,
+    }
+}
+
+fn decode_overlay_palette(value: u8) -> Result<OverlayPalette, SteamActivationError> {
+    match value {
+        1 => Ok(OverlayPalette::Redunar),
+        2 => Ok(OverlayPalette::Glacier),
+        3 => Ok(OverlayPalette::Ember),
+        4 => Ok(OverlayPalette::Mint),
+        5 => Ok(OverlayPalette::Mono),
+        6 => Ok(OverlayPalette::Amethyst),
+        7 => Ok(OverlayPalette::Solar),
+        8 => Ok(OverlayPalette::Rose),
+        _ => Err(SteamActivationError::new("invalid overlay palette")),
+    }
+}
+
+const fn overlay_palette_name(palette: OverlayPalette) -> &'static str {
+    match palette {
+        OverlayPalette::Redunar => "redunar",
+        OverlayPalette::Glacier => "glacier",
+        OverlayPalette::Ember => "ember",
+        OverlayPalette::Mint => "mint",
+        OverlayPalette::Mono => "mono",
+        OverlayPalette::Amethyst => "amethyst",
+        OverlayPalette::Solar => "solar",
+        OverlayPalette::Rose => "rose",
+    }
+}
+
 const fn overlay_corner_wire(corner: OverlayCorner) -> u8 {
     match corner {
         OverlayCorner::TopLeft => 1,
@@ -1230,6 +1327,7 @@ mod tests {
             OverlayOpacity::new(75).expect("opacity"),
             OverlayMetricSet::DETAILED,
         )
+        .with_overlay_style(OverlayLayout::Telemetry, OverlayPalette::Amethyst)
         .with_overlay_telemetry_path("/run/user/1000/redunar/capture/overlay.bin")
         .expect("telemetry path")
         .with_replay_requested(true)
@@ -1293,6 +1391,17 @@ mod tests {
             .expect("granted activation");
 
         assert_eq!(decoded, value);
+        let updates = decoded
+            .environment_updates(&BTreeMap::new())
+            .expect("expand child environment");
+        assert_eq!(
+            updates.get(OsStr::new(REDUNAR_OVERLAY_LAYOUT_ENV)),
+            Some(&OsString::from("telemetry"))
+        );
+        assert_eq!(
+            updates.get(OsStr::new(REDUNAR_OVERLAY_PALETTE_ENV)),
+            Some(&OsString::from("amethyst"))
+        );
     }
 
     #[test]

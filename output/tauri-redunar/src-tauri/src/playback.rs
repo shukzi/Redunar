@@ -23,6 +23,11 @@ const PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 const PREPARE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_PREPARE_DIAGNOSTICS: usize = 8192;
 const PREPARE_SIZE_ALLOWANCE: u64 = 4 * 1024 * 1024;
+const PLAYER_TEMP_PREFIX: &str = "redunar-player-";
+// Fresh preparations are actively written by this process; a copy is only
+// swept when it predates this window, which also protects a second
+// instance that is mid-startup before the control socket exists.
+const STALE_PLAYER_COPY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone, Default)]
 pub struct Playback(Arc<Mutex<PlaybackState>>);
@@ -285,6 +290,73 @@ fn private_temporary_directory() -> io::Result<PathBuf> {
         io::ErrorKind::AlreadyExists,
         "Could not create a private playback directory",
     ))
+}
+
+/// Remove playback copies that a previous Redunar process owned but never
+/// deleted because it crashed or was killed mid-playback. Only directories
+/// matching our exact private naming, owned by this uid, and untouched for
+/// longer than STALE_PLAYER_COPY are removed, so a copy this process or a
+/// starting second instance is actively writing is never swept. Failures are
+/// ignored: the copy is bounded, disposable, and startup must not fail
+/// because a foreign directory cannot be removed.
+pub(crate) fn sweep_stale_playback_copies() {
+    sweep_stale_playback_copies_in(Path::new("/var/tmp"));
+}
+
+fn sweep_stale_playback_copies_in(root: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let current_uid = match fs::metadata("/proc/self") {
+        Ok(metadata) => metadata.uid(),
+        Err(_) => return,
+    };
+    let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(age) => age,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(suffix) = name.to_str().and_then(|value| value.strip_prefix(PLAYER_TEMP_PREFIX))
+        else {
+            continue;
+        };
+        // Our tokens are exactly 32 lowercase hex characters from /dev/urandom.
+        if suffix.len() != 32
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.uid() != current_uid {
+            continue;
+        }
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(_) => continue,
+        };
+        let age = now
+            .checked_sub(
+                modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or_default();
+        if age < STALE_PLAYER_COPY {
+            continue;
+        }
+        // The only content is clip.mp4. Unlinking a descriptor that some
+        // survivor still holds open only removes the path, so an in-flight
+        // read keeps working; a fresh directory is protected by its mtime.
+        let _ = fs::remove_file(path.join("clip.mp4"));
+        let _ = fs::remove_dir(&path);
+    }
 }
 
 fn has_mp4_header(path: &Path) -> io::Result<bool> {

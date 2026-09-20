@@ -43,12 +43,30 @@ not request Polkit authorization or edit desktop-global shortcuts. The RPM's
 logind `uaccess` rule supplies access where supported; unavailable permissions
 must be reported honestly. Native dispatch works with the main webview hidden.
 
-The shortcut opens a dedicated transparent Tauri window loading
-`output/tauri-redunar/ui/replay-menu.html`. Its close/Escape/toggle and configured
-outside-click behavior dismiss the menu, not Redunar. The app's Preview replay
-menu is a separate in-app dialog. Exterior black bars, the main app shell, or
-scrollbars are defects. Transparency/focus behavior needs compositor testing;
-this desktop window is not the Vulkan metrics renderer.
+The shortcut opens the Replay menu inside the captured game: the Vulkan layer
+renders the panel into the game's own swapchain, so compositor stacking rules
+and fullscreen focus games cannot hide it behind the game window. There is no
+desktop menu window. The helper owns the pointer: while the menu is open it
+grabs every mouse through the kernel so the game receives no pointer input, and
+streams coalesced `MENU MOVE`/`MENU BUTTON` events over the replay control
+socket; the daemon hit-tests them and answers `OK GRAB`/`OK RELEASE`. Escape,
+any unrelated key (so Alt+Tab is never stranded), the helper's inactivity
+timeout, and the daemon's command watchdog all release the mice and close the
+menu. Some login sessions grant keyboard access without granting raw mouse
+access. In that case the menu still renders in a view-only fallback, the save
+shortcuts remain active, and the shortcuts panel reports that pointer control
+is unavailable; a transient kernel mouse-grab failure uses the same fallback
+instead of cancelling the menu. Composite keyboard interfaces are evaluated in
+one bounded chord window so modifier and function-key reader scheduling cannot
+drop Shift+F8. Shift+F8 or any unrelated key closes it. The menu renders even
+when the metrics overlay is hidden. Its Vulkan surface and bounded control
+outlines use rounded corners, and measured labels are centered within their
+cells so scaling cannot push shortcut or status text across a divider. A replay menu requires a running captured
+session, and without one the helper reports the rejection and the shortcuts
+panel shows it. The app's Preview replay menu
+(the `#replay-menu` route and `#replay-preview` dialog) remains for
+configuration checks and keeps the same look through
+`ui/replay-menu-view.mjs`.
 
 A completed save drives the bottom-left **Moment saved** pill in the game,
 including duration and Local library. It is independent of metrics visibility.
@@ -73,6 +91,13 @@ into a private local MKV or MP4. It requires a healthy populated buffer and
 preserves a 512 MiB filesystem reserve. Store markers, validated names, atomic
 commit, no-overwrite behavior, and owned-file deletion prevent arbitrary access.
 Save success is reported only after native completion and inventory revision.
+Each committed clip name is queued beside the completed-save revision so the
+game-session coordinator can attribute the clip to the recording game. The
+attribution lands in the private bounded ledger
+`replay-clip-games-v1.tsv` in the state directory and is labeling data only:
+ledger failures never affect the save, and clips without a ledger line are
+resolved later by matching the commit time encoded in the clip name against
+exactly one recorded session window.
 
 ## Audio behavior and output fallback
 
@@ -95,7 +120,11 @@ selected and check both game-owned audio and the intended output fallback.
 ## Clip browsing, playback, and export
 
 Native inventory supplies names, sizes, timestamps, and available game/duration
-metadata. Read thumbnail/metadata files only through validated local paths.
+metadata. The game name follows the persisted attribution ledger first and the
+unique-session window fallback otherwise; ambiguous or missing evidence shows
+"Game not recorded" rather than a guess, and a trimmed export inherits its
+source clip's attribution. Read thumbnail/metadata files only through validated
+local paths.
 Selection preserves the clip rail, search, scroll, and focus. One preparation
 runs while a newer pending selection replaces older requests; stale completions
 cannot replace the selected player. Expensive media work runs off the UI thread.
@@ -112,6 +141,11 @@ conversion/storage errors protect the player. Temporary allocation can fall
 back from a constrained default temporary filesystem to a private `/var/tmp`
 directory. Source recordings are unchanged; prepared copies have private access
 and are removed when replaced or on normal shutdown.
+Startup also sweeps leftovers a crash or kill cannot clean itself: private
+`/var/tmp/redunar-player-*` copies older than one hour and stale
+`$XDG_RUNTIME_DIR/redunar/capture-*` session directories (including in-game
+reply sockets) owned by this user. Game-audio `pw-cat` and FFmpeg children get
+`PR_SET_PDEATHSIG`, so a killed Redunar cannot orphan a live recorder.
 
 Playback waits for a decoded frame, not just metadata. The media-load deadline
 is 15 seconds after preparation, with Retry on failure. The player follows the

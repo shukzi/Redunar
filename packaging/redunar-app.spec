@@ -50,13 +50,15 @@ on Linux with AMD hardware.
 mkdir -p %{buildroot}
 cp -a usr %{buildroot}/
 
-# Reload the rule and retrigger existing keyboard devices after installation.
-# This removes the need to unplug/replug a keyboard while keeping the runtime
-# helper unprivileged and avoiding desktop shortcut or Polkit integration.
+# Reload the rule and retrigger existing keyboard and mouse devices after
+# installation. This removes the need to reconnect devices while keeping the
+# runtime helper unprivileged and avoiding desktop shortcut or Polkit
+# integration.
 %post
 if [ -x /usr/bin/udevadm ]; then
     /usr/bin/udevadm control --reload-rules >/dev/null 2>&1 || :
     /usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_KEYBOARD=1 --action=change >/dev/null 2>&1 || :
+    /usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_MOUSE=1 --action=change >/dev/null 2>&1 || :
 fi
 :
 

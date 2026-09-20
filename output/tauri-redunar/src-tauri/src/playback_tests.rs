@@ -287,3 +287,64 @@ fn conversion_diagnostics_drain_large_output_but_retain_only_a_bounded_tail() {
     assert!(details.ends_with("Disk quota exceeded"));
     assert!(run_preparation(&mut Command::new("/bin/true")).is_ok());
 }
+
+fn make_player_dir(root: &Path, name: &str, age: Option<Duration>) -> PathBuf {
+    let dir = root.join(name);
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("clip.mp4"), b"ftyp-stub").unwrap();
+    if let Some(age) = age {
+        let handle = File::open(&dir).unwrap();
+        handle
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+    dir
+}
+
+#[test]
+fn playback_sweep_removes_only_old_private_copies() {
+    let root = std::env::temp_dir().join(format!(
+        "redunar-player-sweep-{}",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let stale = make_player_dir(
+        &root,
+        "redunar-player-0123456789abcdef0123456789abcdef",
+        Some(STALE_PLAYER_COPY * 2),
+    );
+    let fresh = make_player_dir(
+        &root,
+        "redunar-player-fedcba9876543210fedcba9876543210",
+        None,
+    );
+    // Look-alikes that must survive: foreign prefix, uppercase token, short
+    // token, and a matching-name file rather than a directory.
+    let foreign = make_player_dir(
+        &root,
+        "other-player-0123456789abcdef0123456789abcdef",
+        Some(STALE_PLAYER_COPY * 2),
+    );
+    let uppercase = make_player_dir(
+        &root,
+        "redunar-player-0123456789ABCDEF0123456789abcdef",
+        Some(STALE_PLAYER_COPY * 2),
+    );
+    let short = make_player_dir(
+        &root,
+        "redunar-player-0123456789abcdef0123456789abcde",
+        Some(STALE_PLAYER_COPY * 2),
+    );
+    fs::write(
+        root.join("redunar-player-1123456789abcdef0123456789abcdef"),
+        b"",
+    )
+    .unwrap();
+    sweep_stale_playback_copies_in(&root);
+    assert!(!stale.exists(), "old private copy must be removed");
+    assert!(fresh.exists(), "in-progress copy must survive");
+    assert!(foreign.exists());
+    assert!(uppercase.exists());
+    assert!(short.exists());
+    fs::remove_dir_all(&root).unwrap();
+}

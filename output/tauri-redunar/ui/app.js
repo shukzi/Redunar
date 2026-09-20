@@ -24,9 +24,15 @@ const pages = [['overview','Overview'],['library','Library'],['global','Global s
 let games = [], clips = [], sessions = [];
 let savedGameOverrides = new Map();
 const metricNames = ['FPS','Frame time','1% low','0.1% low','GPU','CPU','GPU temperature','CPU temperature'];
+const overlayPalettes = {
+ Redunar:['#e7474f','#0b0b0d','#f4f1ed','#aaa7ad','#303034'], Glacier:['#5ec8e5','#071116','#f4fbfd','#9eb8c0','#294047'],
+ Ember:['#f3a64a','#120d08','#fff8ef','#c2ad94','#46382b'], Mint:['#72d6a0','#07110c','#f3fff8','#9cb9a8','#294234'],
+ Mono:['#e8e8e8','#090909','#f7f7f7','#ababab','#383838'], Amethyst:['#b08cff','#0e0a14','#fbf8ff','#b4a8c5','#3d334a'],
+ Solar:['#f1d45b','#121006','#fffced','#c3b98e','#474229'], Rose:['#ff82ad','#140910','#fff7fa','#c4a4af','#4a303b']
+};
 const presetMetrics = preset => preset==='Compact'?['FPS','Frame time','GPU','CPU','GPU temperature','CPU temperature']:preset==='Detailed'?[...metricNames]:preset==='FPS only'?['FPS']:[];
 const effectiveMetrics = (preset,custom=[]) => preset==='Custom'?[...custom]:presetMetrics(preset||'Compact');
-const initialDefaults = {overlay:null,preset:null,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null,storage:null};
+const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null,storage:null};
 const durations = [15,30,60,120,180,300,600,900];
 let defaults = structuredClone(initialDefaults);
 let draft = structuredClone(defaults);
@@ -121,10 +127,15 @@ function overlayHeight(preset=draft.preset||'Compact',metrics=draft.metrics) {
  const hardware=has('GPU')||has('CPU')||has('GPU temperature')||has('CPU temperature');
  return preset==='FPS only'?24:25+(frame?38:0)+(lows?26:0)+(hardware?26:0);
 }
+function ribbonWidth(preset=draft.preset||'Compact',metrics=draft.metrics) {
+ return 94+effectiveMetrics(preset,metrics).length*89;
+}
 function overlayPreview() {
  const preset=draft.preset||'Compact';
  const height=overlayHeight(preset,draft.metrics);
- return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" style="--hud-scale:${draft.scale/100};--hud-opacity:${draft.opacity/100};--hud-native-height:${height}px">${hudContent()}</div></div><p class="overlay-preview-note">In-game overlay layout · Preview · <span id="overlay-preview-scale">${draft.scale}</span>% scale</p>`;
+ const layout=draft.layout||'Grid';
+ const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
+ return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:${layout==='Ribbon'?.78:1};--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-native-height:${height}px;--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div><p class="overlay-preview-note">In-game overlay layout · <span id="overlay-preview-layout">${escape(layout)}</span> · <span id="overlay-preview-palette">${escape(draft.palette||'Redunar')}</span> palette · <span id="overlay-preview-scale">${draft.scale}</span>% scale</p>`;
 }
 function hudContent() {
  const preset=draft.preset||'Compact';
@@ -134,6 +145,12 @@ function hudContent() {
  const frame=has('FPS')||has('Frame time');
  const lows=has('1% low')||has('0.1% low');
  const hardware=has('GPU')||has('CPU')||has('GPU temperature')||has('CPU temperature');
+ const items=[
+  has('FPS')&&['FPS','144 FPS'],has('Frame time')&&['FRAME TIME','6.9 MS'],has('1% low')&&['1% LOW','118 FPS'],has('0.1% low')&&['0.1% LOW','96 FPS'],
+  has('GPU')&&['GPU LOAD','91%'],has('GPU temperature')&&['GPU TEMP','68°C'],has('CPU')&&['CPU LOAD','38%'],has('CPU temperature')&&['CPU TEMP','62°C']
+ ].filter(Boolean);
+ if(draft.layout==='Ribbon')return `<div class="hud-layout-brand"><span>REDUNAR</span></div>${items.map(([label,value])=>`<div class="hud-ribbon-metric"><small>${label}</small><b>${value}</b></div>`).join('')}`;
+ if(draft.layout==='Telemetry')return `<div class="hud-telemetry-head"><span>REDUNAR</span><small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
  const sections=[];
  if(frame)sections.push(`<div class="hud-native-frame">${has('FPS')?'<b class="hud-native-value hud-native-fps-value">144</b><span class="hud-native-label hud-native-fps-label">FPS</span>':''}${has('Frame time')?'<b class="hud-native-value hud-native-frame-time-value">6.9</b><span class="hud-native-label hud-native-frame-time-label">MS</span>':''}</div>`);
  if(lows)sections.push(`<div class="hud-native-row hud-native-lows">${has('1% low')?'<span class="hud-native-left">1% LOW&nbsp;&nbsp;118</span>':''}${has('0.1% low')?'<span class="hud-native-right">0.1% LOW&nbsp;&nbsp;96</span>':''}</div>`);
@@ -219,7 +236,8 @@ function globalSettings() {
  `<div class="tabbar global-tabs">${[['overlay','In-game metrics'],['replay','Instant replay'],['shortcuts','Keyboard shortcuts']].map(([id,label])=>`<button data-global-tab="${id}" class="${globalTab===id?'active':''}" aria-pressed="${globalTab===id}">${label}</button>`).join('')}</div>${globalTab==='overlay'?globalOverlay():globalTab==='replay'?globalReplay():globalShortcuts()}${saveBar}`;
 }
 function globalOverlay() {
- return `<div class="global-grid"><section class="overlay-preview-panel">${overlayPreview()}<div class="preset-grid">${['FPS only','Compact','Detailed','Custom'].map(name=>`<button data-preset="${name}" aria-pressed="${draft.preset===name}"><span>${name==='Custom'?'+':'144'}${name!=='FPS only'?'<small>Frame metrics</small>':''}</span><strong>${name}</strong></button>`).join('')}</div><h2 class="metrics-title">Displayed metrics</h2><p class="metric-hint">${draft.preset==='Custom'?'Custom layout · choose the metrics shown in the overlay.':'Preset controlled · choose Custom to edit individual metrics.'}</p><p class="metric-validation" id="metric-validation" role="status"></p><div class="metric-toggles">${metricNames.map((name,i)=>`<label><input type="checkbox" data-metric="${name}" ${effectiveMetrics(draft.preset||'Compact',draft.metrics).includes(name)?'checked':''} ${draft.preset==='Custom'?'':'disabled'}><span>${name}</span></label>`).join('')}</div></section><section class="panel controls-panel"><h2>Overlay appearance</h2>${field('Collect frame metrics','Record frame-time data for future sessions',switchControl('captureMetrics','Frame metrics',draft.captureMetrics))}${field('Show in-game overlay',active()?'Shows or hides immediately; keeps the overlay available. Per-game overrides still apply.':'Hides only the metrics display; you can show it again during a game.',switchControl('overlay','Show in-game overlay',draft.overlay))}${field('Layout preset','',selectControl('preset','Layout preset',['Compact','FPS only','Detailed','Custom'],draft.preset))}${field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))}${['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control"><output id="${key}-value">${draft[key]}%</output><input type="range" data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}"></div>`)).join('')}<div class="info-note">Overlay appearance currently applies to all games. Library can override whether metrics are shown and collected.</div></section></div>`;
+ const swatches=Object.entries(overlayPalettes).map(([name,colors])=>`<button type="button" class="overlay-palette" data-palette="${name}" aria-label="${name} palette" aria-pressed="${draft.palette===name}" style="--swatch:${colors[0]}"></button>`).join('');
+ return `<div class="global-grid"><section class="overlay-preview-panel">${overlayPreview()}<div class="layout-grid">${['Grid','Ribbon','Telemetry'].map(name=>`<button data-layout="${name}" aria-pressed="${draft.layout===name}"><strong>${name}</strong><small>${name==='Grid'?'Connected current layout':name==='Ribbon'?'Wide peripheral scan':'Dense technical readout'}</small></button>`).join('')}</div><div class="palette-grid" role="group" aria-label="Overlay palette">${swatches}</div><div class="preset-grid">${['FPS only','Compact','Detailed','Custom'].map(name=>`<button data-preset="${name}" aria-pressed="${draft.preset===name}"><span>${name==='Custom'?'+':'144'}${name!=='FPS only'?'<small>Frame metrics</small>':''}</span><strong>${name}</strong></button>`).join('')}</div><h2 class="metrics-title">Displayed metrics</h2><p class="metric-hint">${draft.preset==='Custom'?'Custom selection · choose the metrics shown in any layout.':'Preset controlled · choose Custom to edit individual metrics.'}</p><p class="metric-validation" id="metric-validation" role="status"></p><div class="metric-toggles">${metricNames.map(name=>`<label><input type="checkbox" data-metric="${name}" ${effectiveMetrics(draft.preset||'Compact',draft.metrics).includes(name)?'checked':''} ${draft.preset==='Custom'?'':'disabled'}><span>${name}</span></label>`).join('')}</div></section><section class="panel controls-panel"><h2>Overlay appearance</h2>${field('Collect frame metrics','Record frame-time data for future sessions',switchControl('captureMetrics','Frame metrics',draft.captureMetrics))}${field('Show in-game overlay',active()?'Shows or hides immediately; keeps the overlay available. Per-game overrides still apply.':'Hides only the metrics display; you can show it again during a game.',switchControl('overlay','Show in-game overlay',draft.overlay))}${field('Information preset','Controls which measurements are shown',selectControl('preset','Information preset',['Compact','FPS only','Detailed','Custom'],draft.preset))}${field('Layout','Changes the structure without changing selected metrics',selectControl('layout','Layout',['Grid','Ribbon','Telemetry'],draft.layout))}${field('Palette','Eight bounded renderer themes',selectControl('palette','Palette',Object.keys(overlayPalettes),draft.palette))}${field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))}${['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control"><output id="${key}-value">${draft[key]}%</output><input type="range" data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}"></div>`)).join('')}<div class="info-note">Layout, palette, position, scale, opacity, and metric selection apply to all games. Library can override whether metrics are shown and collected.</div></section></div>`;
 }
 function globalReplay() {
  const folder=replayPreferences?.resolved_directory||'Loading replay folder…';
@@ -444,8 +462,14 @@ function updateHud() {
  const hint=$('.metric-hint');if(hint)hint.textContent=draft.preset==='Custom'?'Choose the measurements to display.':'Choose Custom to change individual metrics.';
  const hud=$('#hud');
  if(hud){
-  hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';
-  hud.style.setProperty('--hud-native-height',`${overlayHeight()}px`);hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-opacity',draft.opacity/100);
+  const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
+  hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.layout||'Grid';
+  hud.style.setProperty('--hud-native-height',`${overlayHeight()}px`);hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-preview-fit',draft.layout==='Ribbon'?.78:1);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
+  [['--hud-accent',palette[0]],['--hud-panel',palette[1]],['--hud-text',palette[2]],['--hud-muted',palette[3]],['--hud-border',palette[4]]].forEach(([key,value])=>hud.style.setProperty(key,value));
+  document.querySelectorAll('[data-layout]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.layout===draft.layout)));
+  document.querySelectorAll('[data-palette]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.palette===draft.palette)));
+  if($('#overlay-preview-layout'))$('#overlay-preview-layout').textContent=draft.layout||'Grid';
+  if($('#overlay-preview-palette'))$('#overlay-preview-palette').textContent=draft.palette||'Redunar';
   for(const key of ['scale','opacity'])if($(`#${key}-value`))$(`#${key}-value`).textContent=`${draft[key]}%`;
  }
  updateDirtyActionButtons();
@@ -943,6 +967,8 @@ document.addEventListener('click',event=>{
  if(target.dataset.historyView){historyMetric=target.dataset.historyView;render();return;}
  if(target.dataset.action==='history-compare'){historyCompare=!historyCompare;render();return;}
  if(target.dataset.preset){const preset=$('[data-global="preset"]');if(preset){preset.value=target.dataset.preset;preset.dispatchEvent(new Event('change',{bubbles:true}));}return;}
+ if(target.dataset.layout){const layout=$('[data-global="layout"]');if(layout){layout.value=target.dataset.layout;layout.dispatchEvent(new Event('change',{bubbles:true}));}return;}
+ if(target.dataset.palette){const palette=$('[data-global="palette"]');if(palette){palette.value=target.dataset.palette;palette.dispatchEvent(new Event('change',{bubbles:true}));}return;}
  if(target.dataset.globalTab){globalTab=target.dataset.globalTab;if(route()==='global')render();return;}
  if(target.dataset.libraryTab){libraryTab=target.dataset.libraryTab;render();return;}
  if(target.dataset.action==='reset-trim'){if(videoReady&&!exporting){trimStart=0;trimEnd=playerDuration;seekPlayer(0);updatePlayerUi();}return;}

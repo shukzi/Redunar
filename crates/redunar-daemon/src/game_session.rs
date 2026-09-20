@@ -10,6 +10,7 @@ use redunar_core::{GameId, ReplayDuration, ReplaySettings, SystemSnapshot};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
@@ -18,6 +19,15 @@ use std::time::{Duration, Instant};
 mod saved_notice;
 
 const REPLAY_EXPORT_WAIT: Duration = Duration::from_millis(250);
+/// First wait before the pump re-arms a replacement recorder after a
+/// recoverable failure. Each consecutive failed re-arm doubles the wait up
+/// to the maximum so a persistently broken encoder retries slowly instead of
+/// spinning or ending the game session's replay for good.
+const REPLAY_REARM_BACKOFF: Duration = Duration::from_millis(500);
+const REPLAY_REARM_BACKOFF_MAX: Duration = Duration::from_secs(10);
+/// Consecutive frame-source failures tolerated before the running recorder
+/// is failed over so the reported health reflects the missing source.
+const REPLAY_SOURCE_ERROR_LIMIT: u32 = 10;
 
 /// One bounded, daemon-owned view of all work attached to a running game.
 ///
@@ -133,6 +143,8 @@ struct CoordinatorInner {
     replay: ProductionReplayRuntime,
     replay_menu: Mutex<ReplayMenuState>,
     replay_menu_revision: std::sync::atomic::AtomicU64,
+    /// Private state directory holding the clip-to-game attribution ledger.
+    clip_games_state: PathBuf,
 }
 
 #[derive(Default)]
@@ -141,6 +153,8 @@ struct CoordinatorState {
     request: Option<GameSessionRequest>,
     capture: Option<CaptureSessionHandle>,
     noticed_save_revision: u64,
+    /// Completed-save revision last attributed in the clip-games ledger.
+    recorded_save_revision: u64,
     pending_replay_releases: VecDeque<u64>,
     replay_pump: Option<ReplayExportPump>,
 }
@@ -169,9 +183,18 @@ impl ReplayFrameSource for ReplayExportEndpoint {
         let Some(export) = ReplayExportEndpoint::wait_next(self, timeout) else {
             return Ok(None);
         };
-        ReplayExportEndpoint::import(self, export)
-            .map(Some)
-            .map_err(|error| ReplayRuntimeError::new(error.to_string()))
+        let sequence = export.sequence;
+        match ReplayExportEndpoint::import(self, export) {
+            Ok(frame) => Ok(Some(frame)),
+            Err(error) => {
+                // The queue already removed this export, so the pump cannot
+                // release it. Return producer ownership here; otherwise a
+                // rejected export would strand its staging context forever
+                // and silently stall capture after enough rejects.
+                let _ = ReplayExportEndpoint::release(self, sequence);
+                Err(ReplayRuntimeError::new(error.to_string()))
+            }
+        }
     }
 
     fn release(&self, sequence: u64) -> Result<(), ReplayRuntimeError> {
@@ -215,13 +238,14 @@ impl Drop for ReplayExportPump {
 
 impl ProductionGameSessionCoordinator {
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(state_directory: PathBuf) -> Self {
         Self {
             inner: Arc::new(CoordinatorInner {
                 state: Mutex::new(CoordinatorState::default()),
                 replay: ProductionReplayRuntime::unavailable(ReplaySettings::default()),
                 replay_menu: Mutex::new(ReplayMenuState::default()),
                 replay_menu_revision: std::sync::atomic::AtomicU64::new(2),
+                clip_games_state: state_directory,
             }),
         }
     }
@@ -330,6 +354,40 @@ impl ProductionGameSessionCoordinator {
         let telemetry = self.replay_menu_telemetry(revision);
         if let Some(capture) = lock_unpoisoned(&self.inner.state).capture.as_ref() {
             let _ = capture.update_replay_menu(telemetry);
+        }
+    }
+
+    /// Attribute clips committed since the last poll to the live game.
+    ///
+    /// The save worker queues each committed clip name under the same mutex
+    /// as the completed-save revision bump, so draining names here cannot
+    /// race the counter. Attribution is labeling data: any ledger write
+    /// failure is swallowed after one warning and never affects the save or
+    /// the game session. If two saves complete between polls, both names were
+    /// queued, so each clip still gets its own line.
+    fn record_completed_clip_games(&self) {
+        let completed = self.inner.replay.status().completed_save_revision;
+        let game_name = {
+            let mut state = lock_unpoisoned(&self.inner.state);
+            if state.recorded_save_revision >= completed {
+                return;
+            }
+            state.recorded_save_revision = completed;
+            state.status.game_name.clone()
+        };
+        let Some(game_name) = game_name else {
+            // A save outside a named Redunar session stays unattributed in
+            // the ledger; the inventory's session-window fallback still gets
+            // a chance when the session history later records a game.
+            let _ = self.inner.replay.take_committed_clip_names();
+            return;
+        };
+        for name in self.inner.replay.take_committed_clip_names() {
+            if let Err(error) =
+                crate::replay_clip_games::record(&self.inner.clip_games_state, &name, &game_name)
+            {
+                eprintln!("Redunar could not attribute a saved Replay clip: {error}");
+            }
         }
     }
 
@@ -514,6 +572,11 @@ impl ProductionGameSessionCoordinator {
         capture: Option<CaptureSessionHandle>,
         replay: ReplayRuntimeStatus,
     ) -> Result<(), GameSessionError> {
+        // Flush any clip that committed after the end-of-session attribution
+        // pass (a save finishing during shutdown) while the previous game
+        // name is still published, so it cannot be re-attributed to the
+        // session that is about to start.
+        self.record_completed_clip_games();
         if replay.backend_readiness.validation_allowed() {
             self.inner
                 .replay
@@ -535,6 +598,7 @@ impl ProductionGameSessionCoordinator {
         state.request = Some(request.clone());
         state.capture = capture;
         state.noticed_save_revision = replay_status.completed_save_revision;
+        state.recorded_save_revision = replay_status.completed_save_revision;
         state.pending_replay_releases.clear();
         state.status = GameSessionStatus {
             revision: state.status.revision.saturating_add(1),
@@ -639,6 +703,7 @@ impl ProductionGameSessionCoordinator {
         // Observe only committed saves; accepted requests and failures do not
         // emit success, and a telemetry write failure is retried next poll.
         let _ = self.publish_replay_saved_notice();
+        self.record_completed_clip_games();
         let mut state = lock_unpoisoned(&self.inner.state);
         let disposition = state
             .capture
@@ -679,6 +744,10 @@ impl ProductionGameSessionCoordinator {
     ///
     /// Returns [`GameSessionError`] when Replay cleanup cannot complete.
     pub fn end(&self) -> Result<(), GameSessionError> {
+        // One final attribution pass before the session stops so a save that
+        // completed since the last supervisor poll is still labeled with this
+        // game. Later drains fall back to session-history window matching.
+        self.record_completed_clip_games();
         let mut replay_pump = {
             let mut state = lock_unpoisoned(&self.inner.state);
             if matches!(
@@ -747,76 +816,137 @@ fn run_replay_export_pump(
     backend_factory: ReplayBackendFactory,
 ) -> Result<(), ReplayRuntimeError> {
     let mut dimensions = None;
-    let mut failed = false;
+    // One recording failure is recoverable: the pump reports the failure,
+    // releases producer ownership of every in-flight export, and then re-arms
+    // a fresh validated pipeline after a bounded backoff. Failures therefore
+    // cost a short window of disk history instead of the whole game session.
+    let mut rearm_deadline: Option<Instant> = None;
+    let mut rearm_backoff = REPLAY_REARM_BACKOFF;
+    let mut consecutive_source_errors = 0_u32;
     let mut audio_worker = None;
     while !stop.load(Ordering::Acquire) {
         let frame = match source.wait_next(REPLAY_EXPORT_WAIT) {
             Ok(Some(frame)) => frame,
             Ok(None) => continue,
             Err(error) => {
-                eprintln!("Redunar Replay: frame source failed: {error}");
-                replay.fail(ReplayFailure::FrameSourceLost);
-                publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-                failed = true;
+                consecutive_source_errors = consecutive_source_errors.saturating_add(1);
+                eprintln!(
+                    "Redunar Replay: frame source failed ({consecutive_source_errors} consecutive): {error}"
+                );
+                // A single stale or malformed export must not end recording;
+                // a running recorder keeps its last frames and waits for the
+                // next good one. Only a sustained source outage fails the
+                // recorder over so the reported health reflects reality.
+                let limit = if dimensions.is_some() {
+                    REPLAY_SOURCE_ERROR_LIMIT
+                } else {
+                    1
+                };
+                if rearm_deadline.is_none() && consecutive_source_errors >= limit {
+                    enter_replay_recovery(
+                        &replay,
+                        &coordinator,
+                        ReplayFailure::FrameSourceLost,
+                        &mut dimensions,
+                        &mut rearm_deadline,
+                        &mut rearm_backoff,
+                    );
+                }
                 continue;
             }
         };
+        consecutive_source_errors = 0;
         let (sequence, frame) = frame;
-        if failed {
-            let _ = source.release(sequence);
-            continue;
+        if let Some(deadline) = rearm_deadline {
+            if Instant::now() < deadline {
+                let _ = source.release(sequence);
+                continue;
+            }
+            // The backoff elapsed, so this frame attempts the re-arm.
+            rearm_deadline = None;
+            // Retire the failed pipeline's finished GPU fences before the
+            // replacement records, so the producer's staging contexts return.
+            let _ = release_runtime_completions(source.as_ref(), &replay);
         }
         let frame_dimensions = (frame.width, frame.height);
         if dimensions.is_none() {
             let Ok(pipeline) = pipeline_factory(&frame) else {
                 eprintln!("Redunar Replay: hardware encoder pipeline creation failed");
                 let _ = source.release(sequence);
-                replay.fail(ReplayFailure::EncoderFailed);
-                publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-                failed = true;
+                enter_replay_recovery(
+                    &replay,
+                    &coordinator,
+                    ReplayFailure::EncoderFailed,
+                    &mut dimensions,
+                    &mut rearm_deadline,
+                    &mut rearm_backoff,
+                );
                 continue;
             };
             if let Err(error) = replay.start_validated_pipeline(settings, pipeline, readiness) {
                 eprintln!("Redunar Replay: recorder activation failed: {error}");
                 let _ = source.release(sequence);
-                replay.fail(ReplayFailure::EncoderFailed);
-                publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-                failed = true;
+                enter_replay_recovery(
+                    &replay,
+                    &coordinator,
+                    ReplayFailure::EncoderFailed,
+                    &mut dimensions,
+                    &mut rearm_deadline,
+                    &mut rearm_backoff,
+                );
                 continue;
             }
             dimensions = Some(frame_dimensions);
+            rearm_backoff = REPLAY_REARM_BACKOFF;
             eprintln!(
                 "Redunar Replay: rolling recorder active at {}x{}",
                 frame_dimensions.0, frame_dimensions.1
             );
             publish_replay_component(&coordinator, GameSessionComponentState::Active);
-            audio_worker = start_game_audio_worker(
-                Arc::clone(&stop),
-                replay.clone(),
-                coordinator.clone(),
-                frame.timestamp_ns,
-            );
+            // One audio worker serves the whole game session. It survives
+            // recorder re-arms, so re-arming never spawns a second PipeWire
+            // consumer for the same game node.
+            if audio_worker.is_none() {
+                audio_worker = start_game_audio_worker(
+                    Arc::clone(&stop),
+                    replay.clone(),
+                    coordinator.clone(),
+                    frame.timestamp_ns,
+                );
+            }
         } else if dimensions != Some(frame_dimensions) {
             let Ok(replacement) = backend_factory(&frame) else {
                 eprintln!(
                     "Redunar Replay: replacement encoder creation failed after a source resize"
                 );
                 let _ = source.release(sequence);
-                replay.fail(ReplayFailure::EncoderFailed);
                 let _ = release_runtime_completions(source.as_ref(), &replay);
-                publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-                failed = true;
+                enter_replay_recovery(
+                    &replay,
+                    &coordinator,
+                    ReplayFailure::EncoderFailed,
+                    &mut dimensions,
+                    &mut rearm_deadline,
+                    &mut rearm_backoff,
+                );
                 continue;
             };
             if let Err(error) = replay.reset_backend(replacement) {
                 eprintln!("Redunar Replay: recorder reset failed after a source resize: {error}");
                 let _ = source.release(sequence);
                 let _ = release_runtime_completions(source.as_ref(), &replay);
-                publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-                failed = true;
+                enter_replay_recovery(
+                    &replay,
+                    &coordinator,
+                    ReplayFailure::EncoderFailed,
+                    &mut dimensions,
+                    &mut rearm_deadline,
+                    &mut rearm_backoff,
+                );
                 continue;
             }
             dimensions = Some(frame_dimensions);
+            rearm_backoff = REPLAY_REARM_BACKOFF;
             eprintln!(
                 "Redunar Replay: rolling recorder reset for {}x{}",
                 frame_dimensions.0, frame_dimensions.1
@@ -832,14 +962,25 @@ fn run_replay_export_pump(
             for completed_sequence in completed {
                 let _ = source.release(completed_sequence);
             }
-            publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-            failed = true;
+            enter_replay_recovery(
+                &replay,
+                &coordinator,
+                ReplayFailure::EncoderFailed,
+                &mut dimensions,
+                &mut rearm_deadline,
+                &mut rearm_backoff,
+            );
             continue;
         }
         if release_runtime_completions(source.as_ref(), &replay).is_err() {
-            replay.fail(ReplayFailure::EncoderFailed);
-            publish_replay_component(&coordinator, GameSessionComponentState::Failed);
-            failed = true;
+            enter_replay_recovery(
+                &replay,
+                &coordinator,
+                ReplayFailure::EncoderFailed,
+                &mut dimensions,
+                &mut rearm_deadline,
+                &mut rearm_backoff,
+            );
         }
     }
 
@@ -850,6 +991,24 @@ fn run_replay_export_pump(
     let releases = release_runtime_completions(source.as_ref(), &replay);
     source.drain_and_release();
     shutdown.and(releases)
+}
+
+/// Publish one recoverable recorder failure and schedule a re-arm attempt.
+/// The exponential backoff bounds retry churn while a broken encoder or
+/// storage path keeps rejecting new pipelines.
+fn enter_replay_recovery(
+    replay: &ProductionReplayRuntime,
+    coordinator: &Weak<CoordinatorInner>,
+    failure: ReplayFailure,
+    dimensions: &mut Option<(u32, u32)>,
+    rearm_deadline: &mut Option<Instant>,
+    rearm_backoff: &mut Duration,
+) {
+    replay.fail(failure);
+    publish_replay_component(coordinator, GameSessionComponentState::Failed);
+    *dimensions = None;
+    *rearm_deadline = Some(Instant::now() + *rearm_backoff);
+    *rearm_backoff = rearm_backoff.mul_f32(2.0).min(REPLAY_REARM_BACKOFF_MAX);
 }
 
 fn start_game_audio_worker(
@@ -917,15 +1076,35 @@ fn run_game_audio_worker(
         };
         eprintln!("Redunar Replay: game-owned audio capture active");
         let mut reconnect = false;
+        let mut recorder_pause_logged = false;
         while !stop.load(Ordering::Acquire) {
             match capture.next_packet(Duration::from_millis(100)) {
                 Ok(Some(packet)) => {
                     if let Err(error) = replay.submit_audio(packet) {
-                        eprintln!(
-                            "Redunar Replay: game audio buffering stopped; retrying: {error}"
-                        );
-                        reconnect = true;
-                        break;
+                        if matches!(
+                            replay.status().phase,
+                            ReplayPhase::Buffering | ReplayPhase::Saving
+                        ) {
+                            eprintln!(
+                                "Redunar Replay: game audio buffering stopped; retrying: {error}"
+                            );
+                            reconnect = true;
+                            break;
+                        }
+                        // The recorder itself is stopped (failed, re-arming,
+                        // or inactive), which is not a broken audio
+                        // transport. Keep this PipeWire consumer attached and
+                        // drop packets until the pump re-arms a pipeline;
+                        // reconnecting here would respawn the capture helper
+                        // about once per second for the rest of the session.
+                        if !recorder_pause_logged {
+                            eprintln!(
+                                "Redunar Replay: game audio paused with the recorder: {error}"
+                            );
+                            recorder_pause_logged = true;
+                        }
+                    } else {
+                        recorder_pause_logged = false;
                     }
                 }
                 Ok(None) => {}

@@ -21,7 +21,8 @@
 use crate::ffi::*;
 use redunar_capture::{
     OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayFailureReason, OverlayHardwareTelemetry,
-    decode_overlay_hardware_telemetry,
+    REPLAY_MENU_TELEMETRY_BYTES, ReplayMenuStatus, ReplayMenuTelemetry,
+    decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
 };
 use redunar_core::overlay_font;
 use std::collections::BTreeMap;
@@ -41,15 +42,20 @@ const REPLAY_PRODUCTION_ENV: &str = "REDUNAR_REPLAY_PRODUCTION";
 const OVERLAY_DIAGNOSTIC_ENV: &str = "REDUNAR_OVERLAY_DIAGNOSTIC";
 const OVERLAY_TELEMETRY_ENV: &str = "REDUNAR_OVERLAY_TELEMETRY";
 const OVERLAY_PRESET_ENV: &str = "REDUNAR_OVERLAY_PRESET";
+const OVERLAY_LAYOUT_ENV: &str = "REDUNAR_OVERLAY_LAYOUT";
+const OVERLAY_PALETTE_ENV: &str = "REDUNAR_OVERLAY_PALETTE";
 const OVERLAY_CORNER_ENV: &str = "REDUNAR_OVERLAY_CORNER";
 const OVERLAY_METRICS_ENV: &str = "REDUNAR_OVERLAY_METRICS";
 const OVERLAY_OPACITY_ENV: &str = "REDUNAR_OVERLAY_OPACITY_PERCENT";
 // Poll the tiny cached telemetry block at 4 Hz so session visibility controls
 // respond promptly. Unchanged revisions never rebuild the rendering plan.
 const TELEMETRY_INTERVAL_NS: u64 = 250_000_000;
+// Poll the Replay menu block at 20 Hz while it is closed. Opening the menu is
+// detected within one poll; once visible or animating, the reader switches to
+// per-presentation polling so the drawn pointer tracks the daemon revision.
+const MENU_POLL_IDLE_NS: u64 = 50_000_000;
 const FRAME_HISTORY_CAPACITY: usize = 240;
 const SUMMARY_INTERVAL_NS: u64 = 250_000_000;
-#[cfg(test)]
 const REPLAY_MENU_ANIMATION_NS: u64 = 135_000_000;
 const REPLAY_SAVED_NOTICE_NS: u64 = 3_000_000_000;
 const MAX_REASONABLE_INTERVAL_NS: u64 = 2_000_000_000;
@@ -61,31 +67,28 @@ const MAX_SWAPCHAIN_IMAGES: usize = 16;
 const MAX_PRESENT_SWAPCHAINS: usize = 8;
 const MAX_PRESENT_WAIT_SEMAPHORES: usize = 16;
 const MAX_QUEUE_CONTEXTS: usize = 16;
-const MAX_ACCENT_RECTS: usize = 48;
+const MAX_ACCENT_RECTS: usize = 96;
 const MAX_TEXT_GLYPHS: usize = 384;
 
-#[cfg(test)]
 const REPLAY_MENU_WIDTH: u32 = 690;
-#[cfg(test)]
 const REPLAY_MENU_HEIGHT: u32 = 440;
-#[cfg(test)]
 const REPLAY_MENU_HEADER_HEIGHT: u32 = 64;
-#[cfg(test)]
 const REPLAY_MENU_FACTS_HEIGHT: u32 = 74;
-#[cfg(test)]
 const REPLAY_MENU_BODY_SPLIT_X: i32 = 452;
-#[cfg(test)]
 const REPLAY_MENU_DURATION_X: i32 = 28;
-#[cfg(test)]
 const REPLAY_MENU_DURATION_Y: i32 = 238;
-#[cfg(test)]
 const REPLAY_MENU_DURATION_WIDTH: u32 = 396;
-#[cfg(test)]
 const REPLAY_MENU_DURATION_HEIGHT: u32 = 86;
-#[cfg(test)]
 const REPLAY_MENU_SAVE_Y: i32 = 338;
-#[cfg(test)]
 const REPLAY_MENU_SAVE_HEIGHT: u32 = 48;
+const REPLAY_MENU_CORNER_RADIUS: u8 = 12;
+const REPLAY_MENU_CONTROL_RADIUS: u32 = 6;
+const METRIC_PANEL_RADIUS: u8 = 4;
+const RIBBON_BRAND_WIDTH: u32 = 94;
+const RIBBON_METRIC_WIDTH: u32 = 89;
+const RIBBON_HEIGHT: u32 = 44;
+const TELEMETRY_WIDTH: u32 = 300;
+const TELEMETRY_ROW_HEIGHT: u32 = 24;
 
 const MIN_OVERLAY_WIDTH: u32 = PANEL_WIDTH + 24;
 const MIN_OVERLAY_HEIGHT: u32 = DETAILED_PANEL_HEIGHT + 24;
@@ -167,7 +170,7 @@ struct AlignedShader<const N: usize>([u8; N]);
 
 static PANEL_VERTEX_SHADER: AlignedShader<1164> =
     AlignedShader(*include_bytes!("shaders/panel.vert.spv"));
-static PANEL_FRAGMENT_SHADER: AlignedShader<420> =
+static PANEL_FRAGMENT_SHADER: AlignedShader<3972> =
     AlignedShader(*include_bytes!("shaders/panel.frag.spv"));
 static GLYPH_VERTEX_SHADER: AlignedShader<1448> =
     AlignedShader(*include_bytes!("shaders/glyph.vert.spv"));
@@ -427,6 +430,33 @@ struct GlyphPushConstants {
     words: [u32; overlay_font::COVERAGE_WORDS],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PanelPushConstants {
+    bounds: [f32; 4],
+    radius: f32,
+    palette: u32,
+}
+
+impl PanelPushConstants {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "bounded swapchain panel coordinates are exactly representable as Vulkan push-constant floats"
+    )]
+    fn from_rect(rect: VkRect2d, radius: u32, palette: OverlayPalette) -> Self {
+        Self {
+            bounds: [
+                rect.offset.x as f32,
+                rect.offset.y as f32,
+                rect.extent.width as f32,
+                rect.extent.height as f32,
+            ],
+            radius: radius as f32,
+            palette: palette.code(),
+        }
+    }
+}
+
 impl GlyphPushConstants {
     const fn from_raster(raster: [u32; overlay_font::COVERAGE_WORDS]) -> Self {
         Self { words: raster }
@@ -477,6 +507,7 @@ impl GlyphBatch {
 #[derive(Clone, Copy)]
 struct OverlayPlan {
     panel: Option<VkClearRect>,
+    panel_radius: u8,
     logo_base: RectBatch,
     logo_dark_red: RectBatch,
     accent: RectBatch,
@@ -496,6 +527,7 @@ struct OverlayPlan {
     placement: OverlayPlacement,
     animation_progress: u16,
     dim_percent: u8,
+    palette: OverlayPalette,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -506,7 +538,6 @@ enum OverlayPlacement {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg(test)]
 struct ReplayMenuView {
     animation_progress: u16,
     status: u8,
@@ -521,10 +552,38 @@ struct ReplayMenuView {
     save_enabled: bool,
 }
 
+impl ReplayMenuView {
+    /// Map one decoded daemon snapshot onto the bounded menu geometry. The
+    /// status byte keeps the protocol numbering; the renderer's label match
+    /// treats Buffering as the active replay state.
+    fn from_telemetry(menu: ReplayMenuTelemetry, animation_progress: u16) -> Self {
+        Self {
+            animation_progress,
+            status: match menu.status {
+                ReplayMenuStatus::Unavailable => 0,
+                ReplayMenuStatus::Inactive => 1,
+                ReplayMenuStatus::Buffering => 2,
+                ReplayMenuStatus::Saving => 3,
+                ReplayMenuStatus::Failed => 4,
+            },
+            available_seconds: menu.available_seconds,
+            capture_fps: u16::from(menu.frame_rate),
+            quality: menu.quality,
+            format: menu.output_format,
+            selected_duration: menu.selected_duration_index,
+            hover_target: menu.hover_target,
+            cursor_x: menu.cursor_x,
+            cursor_y: menu.cursor_y,
+            save_enabled: menu.save_enabled,
+        }
+    }
+}
+
 impl OverlayPlan {
     fn hidden() -> Self {
         Self {
             panel: None,
+            panel_radius: METRIC_PANEL_RADIUS,
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -544,6 +603,7 @@ impl OverlayPlan {
             placement: OverlayPlacement::Corner,
             animation_progress: 0,
             dim_percent: 0,
+            palette: OverlayPalette::Redunar,
         }
     }
 
@@ -577,6 +637,7 @@ impl OverlayPlan {
             push_text_scaled(&mut accent_glyphs, row.as_bytes(), 0, 0, 2);
             return Self {
                 panel: None,
+                panel_radius: 0,
                 logo_base: RectBatch::default(),
                 logo_dark_red: RectBatch::default(),
                 accent,
@@ -596,6 +657,7 @@ impl OverlayPlan {
                 placement: OverlayPlacement::Corner,
                 animation_progress: u16::MAX,
                 dim_percent: 0,
+                palette: config.palette,
             };
         }
 
@@ -625,6 +687,11 @@ impl OverlayPlan {
         let hardware_row = metrics
             & (METRIC_CPU_LOAD | METRIC_CPU_TEMPERATURE | METRIC_GPU_LOAD | METRIC_GPU_TEMPERATURE)
             != 0;
+        match config.layout {
+            OverlayLayout::Ribbon => return Self::ribbon(snapshot, metrics, config),
+            OverlayLayout::Telemetry => return Self::telemetry(snapshot, metrics, config),
+            OverlayLayout::Grid => {}
+        }
         let panel_height = PANEL_BASE_HEIGHT
             .saturating_add(u32::from(frame_row).saturating_mul(PRIMARY_ROW_HEIGHT))
             .saturating_add(
@@ -632,6 +699,7 @@ impl OverlayPlan {
             );
         let mut plan = Self {
             panel: Some(clear_rect(0, 0, PANEL_WIDTH, panel_height)),
+            panel_radius: METRIC_PANEL_RADIUS,
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -651,6 +719,7 @@ impl OverlayPlan {
             placement: OverlayPlacement::Corner,
             animation_progress: u16::MAX,
             dim_percent: 0,
+            palette: config.palette,
         };
         plan.accent.push(0, 0, 3, panel_height);
         push_panel_grid(&mut plan.dividers, panel_height);
@@ -687,10 +756,111 @@ impl OverlayPlan {
         plan
     }
 
-    #[cfg(test)]
+    fn metric_panel(width: u32, height: u32, config: OverlayConfig) -> Self {
+        let mut plan = Self {
+            panel: Some(clear_rect(0, 0, width, height)),
+            panel_radius: METRIC_PANEL_RADIUS,
+            logo_base: RectBatch::default(),
+            logo_dark_red: RectBatch::default(),
+            accent: RectBatch::default(),
+            dividers: RectBatch::default(),
+            cursor_shadow: RectBatch::default(),
+            cursor: RectBatch::default(),
+            pointer_shadow: None,
+            pointer: None,
+            accent_glyphs: GlyphBatch::default(),
+            muted_glyphs: GlyphBatch::default(),
+            text_glyphs: GlyphBatch::default(),
+            width,
+            height,
+            corner: config.corner,
+            opacity_percent: config.opacity_percent,
+            scale_percent: config.scale_percent,
+            placement: OverlayPlacement::Corner,
+            animation_progress: u16::MAX,
+            dim_percent: 0,
+            palette: config.palette,
+        };
+        plan.accent.push(0, 0, 3, height);
+        plan
+    }
+
+    fn ribbon(snapshot: OverlaySnapshot, metrics: u16, config: OverlayConfig) -> Self {
+        let metric_count = u32::try_from(
+            metric_labels()
+                .into_iter()
+                .filter(|(bit, _)| metrics & *bit != 0)
+                .count(),
+        )
+        .unwrap_or(0);
+        let width =
+            RIBBON_BRAND_WIDTH.saturating_add(metric_count.saturating_mul(RIBBON_METRIC_WIDTH));
+        let mut plan = Self::metric_panel(width, RIBBON_HEIGHT, config);
+        push_text(&mut plan.accent_glyphs, b"REDUNAR", 10, 15);
+        let mut index = 0_i32;
+        for (bit, label) in metric_labels() {
+            if metrics & bit == 0 {
+                continue;
+            }
+            let left = i32::try_from(RIBBON_BRAND_WIDTH).unwrap_or(94)
+                + 8
+                + index * i32::try_from(RIBBON_METRIC_WIDTH).unwrap_or(89);
+            plan.dividers.push(left - 8, 6, 1, RIBBON_HEIGHT - 12);
+            push_text(&mut plan.muted_glyphs, label, left, 6);
+            let value = metric_value(snapshot, bit);
+            push_text(&mut plan.text_glyphs, value.as_bytes(), left, 22);
+            index += 1;
+        }
+        plan
+    }
+
+    fn telemetry(snapshot: OverlaySnapshot, metrics: u16, config: OverlayConfig) -> Self {
+        let count = u32::try_from(
+            metric_labels()
+                .into_iter()
+                .filter(|(bit, _)| metrics & *bit != 0)
+                .count(),
+        )
+        .unwrap_or(0);
+        let height = PANEL_BASE_HEIGHT + count.saturating_mul(TELEMETRY_ROW_HEIGHT);
+        let mut plan = Self::metric_panel(TELEMETRY_WIDTH, height, config);
+        push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
+        let mut heading = FixedText::<16>::default();
+        heading.push_bytes(b"FRAME METRICS");
+        let heading_x = i32::try_from(TELEMETRY_WIDTH).unwrap_or(300)
+            - 8
+            - i32::try_from(heading.length).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
+        push_text(&mut plan.muted_glyphs, heading.as_bytes(), heading_x, 6);
+        plan.dividers.push(3, 24, TELEMETRY_WIDTH - 3, 1);
+        let mut row = 0_i32;
+        for (bit, label) in metric_labels() {
+            if metrics & bit == 0 {
+                continue;
+            }
+            let y = 31 + row * i32::try_from(TELEMETRY_ROW_HEIGHT).unwrap_or(24);
+            push_text(&mut plan.muted_glyphs, label, 8, y);
+            let value = metric_value(snapshot, bit);
+            let x = i32::try_from(TELEMETRY_WIDTH).unwrap_or(300)
+                - 8
+                - i32::try_from(value.length).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
+            push_text(&mut plan.text_glyphs, value.as_bytes(), x, y);
+            row += 1;
+            if u32::try_from(row).unwrap_or(0) < count {
+                plan.dividers.push(
+                    8,
+                    y + i32::try_from(TELEMETRY_ROW_HEIGHT).unwrap_or(24) - 7,
+                    TELEMETRY_WIDTH - 16,
+                    1,
+                );
+            }
+        }
+        plan
+    }
+
     fn replay_menu(menu: ReplayMenuView) -> Self {
         let mut plan = Self {
             panel: Some(clear_rect(0, 0, REPLAY_MENU_WIDTH, REPLAY_MENU_HEIGHT)),
+            panel_radius: REPLAY_MENU_CORNER_RADIUS,
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -716,8 +886,9 @@ impl OverlayPlan {
                 u32::from(menu.animation_progress) * 45 / u32::from(u16::MAX),
             )
             .unwrap_or(45),
+            palette: OverlayPalette::Redunar,
         };
-        push_redunar_logo(&mut plan, 20, 16);
+        push_redunar_logo(&mut plan, 14, 8);
         push_replay_menu_grid(&mut plan, menu);
         push_replay_menu_text(&mut plan, menu);
         let cursor_x = normalized_coordinate(menu.cursor_x, REPLAY_MENU_WIDTH);
@@ -727,37 +898,43 @@ impl OverlayPlan {
     }
 }
 
-#[cfg(test)]
 fn push_redunar_logo(plan: &mut OverlayPlan, x: i32, y: i32) {
-    // Original 16x16 Redunar graphite-mask geometry, kept in integer
-    // rectangles so the injected overlay uses the same brand mark without a
-    // texture allocation or external asset lookup.
-    plan.logo_base.push(x, y, 16, 16);
-    plan.dividers.push(x + 2, y + 1, 12, 14);
-    plan.dividers.push(x + 1, y + 2, 14, 12);
-    plan.logo_base.push(x + 2, y + 2, 12, 12);
-
-    plan.logo_dark_red.push(x + 3, y + 4, 4, 7);
-    plan.logo_dark_red.push(x + 7, y + 5, 1, 5);
-    plan.logo_dark_red.push(x + 9, y + 4, 4, 7);
-    plan.logo_dark_red.push(x + 8, y + 5, 1, 5);
-    plan.accent.push(x + 3, y + 3, 4, 7);
-    plan.accent.push(x + 7, y + 4, 1, 5);
-    plan.accent.push(x + 9, y + 3, 4, 7);
-    plan.accent.push(x + 8, y + 4, 1, 5);
-
-    plan.dividers.push(x + 4, y + 5, 3, 4);
-    plan.dividers.push(x + 7, y + 6, 2, 2);
-    plan.dividers.push(x + 9, y + 5, 3, 4);
-    plan.logo_base.push(x + 7, y + 6, 2, 2);
-    plan.dividers.push(x + 5, y + 11, 6, 1);
-    plan.cursor.push(x + 4, y + 4, 2, 1);
-    plan.cursor.push(x + 10, y + 4, 2, 1);
-    plan.cursor.push(x + 5, y + 6, 1, 1);
-    plan.cursor.push(x + 10, y + 6, 1, 1);
+    // Pixel runs sampled from a 32px raster of the shipped Comet R vector. Keeping the small
+    // mark as bounded rectangles avoids texture allocation while preserving
+    // the actual white crescent and red tail used throughout the app.
+    for (offset_y, offset_x, width) in [
+        (7, 14, 5),
+        (8, 10, 12),
+        (9, 8, 15),
+        (10, 7, 1),
+        (10, 19, 5),
+        (11, 20, 4),
+        (12, 21, 4),
+        (13, 21, 4),
+        (14, 21, 4),
+        (15, 20, 4),
+        (16, 19, 5),
+        (17, 19, 4),
+        (18, 20, 2),
+    ] {
+        plan.cursor.push(x + offset_x, y + offset_y, width, 1);
+    }
+    for (offset_y, offset_x, width) in [
+        (15, 8, 7),
+        (16, 9, 8),
+        (17, 10, 8),
+        (18, 11, 8),
+        (19, 12, 7),
+        (20, 13, 7),
+        (21, 14, 7),
+        (22, 15, 7),
+        (23, 16, 7),
+        (24, 17, 7),
+    ] {
+        plan.accent.push(x + offset_x, y + offset_y, width, 1);
+    }
 }
 
-#[cfg(test)]
 fn push_replay_pointer(plan: &mut OverlayPlan, x: i32, y: i32) {
     let pointer = GlyphInstance {
         x,
@@ -773,7 +950,6 @@ fn push_replay_pointer(plan: &mut OverlayPlan, x: i32, y: i32) {
     });
 }
 
-#[cfg(test)]
 fn normalized_coordinate(value: u16, extent: u32) -> i32 {
     i32::try_from(u32::from(value.min(10_000)).saturating_mul(extent) / 10_000).unwrap_or(0)
 }
@@ -801,17 +977,10 @@ fn replay_menu_hit_target(x: i32, y: i32) -> u8 {
     0
 }
 
-#[cfg(test)]
 #[allow(clippy::too_many_lines)]
 fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     let width = REPLAY_MENU_WIDTH;
     let height = REPLAY_MENU_HEIGHT;
-    plan.dividers.push(0, 0, width, 1);
-    plan.dividers
-        .push(0, i32::try_from(height).unwrap_or(1) - 1, width, 1);
-    plan.dividers.push(0, 0, 1, height);
-    plan.dividers
-        .push(i32::try_from(width).unwrap_or(1) - 1, 0, 1, height);
     plan.dividers.push(
         0,
         i32::try_from(REPLAY_MENU_HEADER_HEIGHT).unwrap_or(64),
@@ -832,76 +1001,73 @@ fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     );
     let cell_width = REPLAY_MENU_DURATION_WIDTH / 4;
     let cell_height = REPLAY_MENU_DURATION_HEIGHT / 2;
-    for x in [
+    push_rounded_outline(
+        &mut plan.dividers,
         REPLAY_MENU_DURATION_X,
+        REPLAY_MENU_DURATION_Y,
+        REPLAY_MENU_DURATION_WIDTH,
+        REPLAY_MENU_DURATION_HEIGHT,
+        REPLAY_MENU_CONTROL_RADIUS,
+    );
+    for x in [
         REPLAY_MENU_DURATION_X + 99,
         REPLAY_MENU_DURATION_X + 198,
         REPLAY_MENU_DURATION_X + 297,
-        REPLAY_MENU_DURATION_X + 396,
     ] {
-        plan.dividers
-            .push(x, REPLAY_MENU_DURATION_Y, 1, REPLAY_MENU_DURATION_HEIGHT);
+        plan.dividers.push(
+            x,
+            REPLAY_MENU_DURATION_Y + i32::try_from(REPLAY_MENU_CONTROL_RADIUS).unwrap_or(0),
+            1,
+            REPLAY_MENU_DURATION_HEIGHT - REPLAY_MENU_CONTROL_RADIUS * 2,
+        );
     }
-    for y in [
-        REPLAY_MENU_DURATION_Y,
+    plan.dividers.push(
+        REPLAY_MENU_DURATION_X + i32::try_from(REPLAY_MENU_CONTROL_RADIUS).unwrap_or(0),
         REPLAY_MENU_DURATION_Y + 43,
-        REPLAY_MENU_DURATION_Y + 86,
-    ] {
-        plan.dividers
-            .push(REPLAY_MENU_DURATION_X, y, REPLAY_MENU_DURATION_WIDTH, 1);
-    }
+        REPLAY_MENU_DURATION_WIDTH - REPLAY_MENU_CONTROL_RADIUS * 2,
+        1,
+    );
     let selected = u32::from(menu.selected_duration.min(7));
     let selected_x = REPLAY_MENU_DURATION_X + i32::try_from(selected % 4 * cell_width).unwrap_or(0);
     let selected_y =
         REPLAY_MENU_DURATION_Y + i32::try_from(selected / 4 * cell_height).unwrap_or(0);
-    plan.accent.push(selected_x, selected_y, cell_width, 1);
-    plan.accent.push(selected_x, selected_y + 42, cell_width, 1);
-    plan.accent.push(selected_x, selected_y, 1, cell_height);
-    plan.accent.push(
-        selected_x + i32::try_from(cell_width).unwrap_or(1) - 1,
-        selected_y,
-        1,
-        cell_height,
+    push_rounded_outline(
+        &mut plan.accent,
+        selected_x + 1,
+        selected_y + 1,
+        cell_width - 2,
+        cell_height - 2,
+        4,
     );
-    plan.dividers.push(
+    push_rounded_outline(
+        &mut plan.dividers,
         REPLAY_MENU_DURATION_X,
         REPLAY_MENU_SAVE_Y,
         REPLAY_MENU_DURATION_WIDTH,
-        1,
-    );
-    plan.dividers.push(
-        REPLAY_MENU_DURATION_X,
-        REPLAY_MENU_SAVE_Y + i32::try_from(REPLAY_MENU_SAVE_HEIGHT).unwrap_or(48),
-        REPLAY_MENU_DURATION_WIDTH,
-        1,
-    );
-    plan.dividers.push(
-        REPLAY_MENU_DURATION_X,
-        REPLAY_MENU_SAVE_Y,
-        1,
         REPLAY_MENU_SAVE_HEIGHT,
-    );
-    plan.dividers.push(
-        REPLAY_MENU_DURATION_X + i32::try_from(REPLAY_MENU_DURATION_WIDTH).unwrap_or(396) - 1,
-        REPLAY_MENU_SAVE_Y,
-        1,
-        REPLAY_MENU_SAVE_HEIGHT,
+        REPLAY_MENU_CONTROL_RADIUS,
     );
 
     // The right rail follows the original desktop overlay's connected fields
     // instead of leaving labels floating in an unstructured empty column.
-    for y in [212, 252] {
-        plan.dividers.push(474, y, 188, 1);
-    }
-    for x in [474, 661] {
-        plan.dividers.push(x, 212, 1, 40);
-    }
-    for y in [284, 312, 340] {
-        plan.dividers.push(474, y, 188, 1);
-    }
-    for x in [474, 570, 661] {
-        plan.dividers.push(x, 284, 1, 56);
-    }
+    push_rounded_outline(
+        &mut plan.dividers,
+        474,
+        212,
+        188,
+        40,
+        REPLAY_MENU_CONTROL_RADIUS,
+    );
+    push_rounded_outline(
+        &mut plan.dividers,
+        474,
+        284,
+        188,
+        56,
+        REPLAY_MENU_CONTROL_RADIUS,
+    );
+    plan.dividers.push(474, 312, 188, 1);
+    plan.dividers.push(570, 290, 1, 44);
     if (1..=8).contains(&menu.hover_target) && menu.hover_target != menu.selected_duration + 1 {
         let hover = u32::from(menu.hover_target - 1);
         plan.accent.push(
@@ -914,7 +1080,6 @@ fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     }
 }
 
-#[cfg(test)]
 #[allow(clippy::too_many_lines)]
 fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     push_text_scaled(&mut plan.text_glyphs, b"REDUNAR", 52, 20, 2);
@@ -929,35 +1094,36 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     };
     push_text(&mut plan.muted_glyphs, replay_status, 546, 26);
 
-    for (x, label) in [
-        (18, b"AVAILABLE".as_slice()),
-        (190, b"CAPTURE".as_slice()),
-        (363, b"QUALITY".as_slice()),
-        (535, b"FORMAT".as_slice()),
+    for (left, right, label) in [
+        (0, 172, b"AVAILABLE".as_slice()),
+        (172, 345, b"CAPTURE".as_slice()),
+        (345, 517, b"QUALITY".as_slice()),
+        (517, 690, b"FORMAT".as_slice()),
     ] {
-        push_text(&mut plan.muted_glyphs, label, x, 78);
+        push_text_centered(&mut plan.muted_glyphs, label, left, right, 78);
     }
     let mut available = FixedText::<12>::default();
     available.push_unsigned(menu.available_seconds, 1);
     available.push_bytes(b" SEC");
-    push_ui_text_scaled(&mut plan.text_glyphs, available.as_bytes(), 18, 99, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, available.as_bytes(), 0, 172, 99, 2);
     let capture = match menu.capture_fps {
         30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
         120 => b"120 FPS".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
-    push_ui_text_scaled(&mut plan.text_glyphs, capture, 190, 99, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, capture, 172, 345, 99, 2);
     let quality = match menu.quality {
         0 => b"EFFICIENT".as_slice(),
         1 => b"BALANCED".as_slice(),
         _ => b"HIGH".as_slice(),
     };
-    push_ui_text_scaled(&mut plan.text_glyphs, quality, 363, 99, 2);
-    push_ui_text_scaled(
+    push_ui_text_centered(&mut plan.text_glyphs, quality, 345, 517, 99, 2);
+    push_ui_text_centered(
         &mut plan.text_glyphs,
         if menu.format == 1 { b"MP4" } else { b"MKV" },
-        535,
+        517,
+        690,
         99,
         2,
     );
@@ -974,12 +1140,13 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         b"15 SEC", b"30 SEC", b"1 MIN", b"2 MIN", b"3 MIN", b"5 MIN", b"10 MIN", b"15 MIN",
     ];
     for (index, label) in durations.into_iter().enumerate() {
-        let x = 34 + i32::try_from(index % 4).unwrap_or(0) * 99;
+        let left = REPLAY_MENU_DURATION_X + i32::try_from(index % 4).unwrap_or(0) * 99;
+        let right = left + 99;
         let y = 254 + i32::try_from(index / 4).unwrap_or(0) * 43;
         if index == usize::from(menu.selected_duration.min(7)) {
-            push_text(&mut plan.accent_glyphs, label, x, y);
+            push_text_centered(&mut plan.accent_glyphs, label, left, right, y);
         } else {
-            push_text(&mut plan.text_glyphs, label, x, y);
+            push_text_centered(&mut plan.text_glyphs, label, left, right, y);
         }
     }
     let save_label = match menu.selected_duration.min(7) {
@@ -1007,20 +1174,46 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     );
 
     push_text(&mut plan.muted_glyphs, b"BASIC SETTINGS", 474, 160);
-    push_ui_text(&mut plan.text_glyphs, b"File format", 474, 184);
-    push_ui_text(&mut plan.muted_glyphs, b"Applied to future saves", 474, 202);
-    push_ui_text_scaled(
+    push_ui_text(&mut plan.text_glyphs, b"File format", 474, 180);
+    push_ui_text(&mut plan.muted_glyphs, b"Applied to future saves", 474, 196);
+    push_ui_text_centered(
         &mut plan.text_glyphs,
         if menu.format == 1 { b"MP4" } else { b"MKV" },
         474,
+        662,
         222,
         2,
     );
     push_text(&mut plan.muted_glyphs, b"SHORTCUTS", 474, 268);
-    push_text(&mut plan.text_glyphs, b"SHIFT + TAB", 474, 292);
-    push_ui_text(&mut plan.muted_glyphs, b"Open / close", 582, 292);
-    push_text(&mut plan.text_glyphs, b"F8", 474, 320);
-    push_ui_text(&mut plan.muted_glyphs, b"Save replay", 582, 320);
+    push_ui_text_centered(&mut plan.text_glyphs, b"SHIFT + F8", 474, 570, 292, 1);
+    push_ui_text_centered(&mut plan.muted_glyphs, b"Open / close", 570, 662, 292, 1);
+    push_ui_text_centered(&mut plan.text_glyphs, b"F8", 474, 570, 320, 1);
+    push_ui_text_centered(&mut plan.muted_glyphs, b"Save replay", 570, 662, 320, 1);
+}
+
+fn push_rounded_outline(
+    batch: &mut RectBatch,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    radius: u32,
+) {
+    let radius = radius.min(width / 2).min(height / 2).max(2);
+    let inset = radius.div_ceil(2).max(2);
+    let right = x + i32::try_from(width).unwrap_or(0) - 1;
+    let bottom = y + i32::try_from(height).unwrap_or(0) - 1;
+    let inset_i32 = i32::try_from(inset).unwrap_or(0);
+    let shoulder = inset - 1;
+    let shoulder_i32 = i32::try_from(shoulder).unwrap_or(0);
+    batch.push(x + inset_i32, y, width - inset * 2, 1);
+    batch.push(x + inset_i32, bottom, width - inset * 2, 1);
+    batch.push(x, y + shoulder_i32, 1, height - shoulder * 2);
+    batch.push(right, y + shoulder_i32, 1, height - shoulder * 2);
+    batch.push(x + 1, y + 1, shoulder, 1);
+    batch.push(right - inset_i32 + 1, y + 1, shoulder, 1);
+    batch.push(x + 1, bottom - 1, shoulder, 1);
+    batch.push(right - inset_i32 + 1, bottom - 1, shoulder, 1);
 }
 
 fn push_panel_grid(dividers: &mut RectBatch, panel_height: u32) {
@@ -1070,6 +1263,69 @@ fn push_frame_metrics(
         let label_x = start_x.saturating_add(value_width);
         push_text(labels, b"MS", label_x + 4, y + 9);
     }
+}
+
+fn metric_labels() -> [(u16, &'static [u8]); 8] {
+    [
+        (METRIC_FPS, b"FPS"),
+        (METRIC_FRAME_TIME, b"FRAME TIME"),
+        (METRIC_ONE_PERCENT_LOW, b"1% LOW"),
+        (METRIC_POINT_ONE_PERCENT_LOW, b"0.1% LOW"),
+        (METRIC_GPU_LOAD, b"GPU LOAD"),
+        (METRIC_GPU_TEMPERATURE, b"GPU TEMP"),
+        (METRIC_CPU_LOAD, b"CPU LOAD"),
+        (METRIC_CPU_TEMPERATURE, b"CPU TEMP"),
+    ]
+}
+
+fn metric_value(snapshot: OverlaySnapshot, metric: u16) -> FixedText<16> {
+    let mut value = FixedText::<16>::default();
+    match metric {
+        METRIC_FPS => {
+            value.push_metric_unpadded(snapshot.fps, 3);
+            value.push_bytes(b" FPS");
+        }
+        METRIC_FRAME_TIME => {
+            value.push_tenths(snapshot.frame_time_tenths_ms);
+            value.push_bytes(b" MS");
+        }
+        METRIC_ONE_PERCENT_LOW => {
+            value.push_metric_unpadded(snapshot.one_percent_low_fps, 3);
+            value.push_bytes(b" FPS");
+        }
+        METRIC_POINT_ONE_PERCENT_LOW => {
+            value.push_metric_unpadded(snapshot.point_one_percent_low_fps, 3);
+            value.push_bytes(b" FPS");
+        }
+        METRIC_GPU_LOAD => {
+            value.push_metric_unpadded(snapshot.gpu_percent.map(u16::from), 2);
+            value.push(b'%');
+        }
+        METRIC_GPU_TEMPERATURE => {
+            value.push_metric_unpadded(
+                snapshot
+                    .gpu_temperature_c
+                    .and_then(|v| u16::try_from(v).ok()),
+                2,
+            );
+            value.push_bytes(b"^C");
+        }
+        METRIC_CPU_LOAD => {
+            value.push_metric_unpadded(snapshot.cpu_percent.map(u16::from), 2);
+            value.push(b'%');
+        }
+        METRIC_CPU_TEMPERATURE => {
+            value.push_metric_unpadded(
+                snapshot
+                    .cpu_temperature_c
+                    .and_then(|v| u16::try_from(v).ok()),
+                2,
+            );
+            value.push_bytes(b"^C");
+        }
+        _ => value.push_bytes(b"--"),
+    }
+    value
 }
 
 fn push_low_metrics(glyphs: &mut GlyphBatch, snapshot: OverlaySnapshot, metrics: u16, y: i32) {
@@ -1167,6 +1423,126 @@ enum OverlayPreset {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum OverlayLayout {
+    #[default]
+    Grid,
+    Ribbon,
+    Telemetry,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum OverlayPalette {
+    #[default]
+    Redunar,
+    Glacier,
+    Ember,
+    Mint,
+    Mono,
+    Amethyst,
+    Solar,
+    Rose,
+}
+
+impl OverlayPalette {
+    const fn code(self) -> u32 {
+        match self {
+            Self::Redunar => 0,
+            Self::Glacier => 1,
+            Self::Ember => 2,
+            Self::Mint => 3,
+            Self::Mono => 4,
+            Self::Amethyst => 5,
+            Self::Solar => 6,
+            Self::Rose => 7,
+        }
+    }
+
+    const fn colors(self) -> OverlayColors {
+        match self {
+            Self::Redunar => OverlayColors::new(
+                [0.91, 0.28, 0.31, 1.0],
+                [0.63, 0.63, 0.66, 1.0],
+                [0.95, 0.94, 0.93, 1.0],
+                [0.19, 0.19, 0.21, 1.0],
+            ),
+            Self::Glacier => OverlayColors::new(
+                [0.37, 0.78, 0.90, 1.0],
+                [0.62, 0.72, 0.75, 1.0],
+                [0.96, 0.98, 0.99, 1.0],
+                [0.16, 0.25, 0.28, 1.0],
+            ),
+            Self::Ember => OverlayColors::new(
+                [0.95, 0.65, 0.29, 1.0],
+                [0.76, 0.68, 0.58, 1.0],
+                [1.0, 0.97, 0.94, 1.0],
+                [0.27, 0.22, 0.17, 1.0],
+            ),
+            Self::Mint => OverlayColors::new(
+                [0.45, 0.84, 0.63, 1.0],
+                [0.61, 0.73, 0.66, 1.0],
+                [0.95, 1.0, 0.97, 1.0],
+                [0.16, 0.26, 0.20, 1.0],
+            ),
+            Self::Mono => OverlayColors::new(
+                [0.91, 0.91, 0.91, 1.0],
+                [0.67, 0.67, 0.67, 1.0],
+                [0.97, 0.97, 0.97, 1.0],
+                [0.22, 0.22, 0.22, 1.0],
+            ),
+            Self::Amethyst => OverlayColors::new(
+                [0.69, 0.55, 1.0, 1.0],
+                [0.71, 0.66, 0.77, 1.0],
+                [0.98, 0.97, 1.0, 1.0],
+                [0.24, 0.20, 0.29, 1.0],
+            ),
+            Self::Solar => OverlayColors::new(
+                [0.95, 0.83, 0.36, 1.0],
+                [0.76, 0.72, 0.56, 1.0],
+                [1.0, 0.99, 0.93, 1.0],
+                [0.28, 0.26, 0.16, 1.0],
+            ),
+            Self::Rose => OverlayColors::new(
+                [1.0, 0.51, 0.68, 1.0],
+                [0.77, 0.64, 0.69, 1.0],
+                [1.0, 0.97, 0.98, 1.0],
+                [0.29, 0.19, 0.23, 1.0],
+            ),
+        }
+    }
+
+    const fn panel_color(self) -> [f32; 4] {
+        match self {
+            Self::Redunar | Self::Mono => [0.035, 0.035, 0.035, 1.0],
+            Self::Glacier => [0.027, 0.067, 0.086, 1.0],
+            Self::Ember => [0.071, 0.051, 0.031, 1.0],
+            Self::Mint => [0.027, 0.067, 0.047, 1.0],
+            Self::Amethyst => [0.055, 0.039, 0.078, 1.0],
+            Self::Solar => [0.071, 0.063, 0.024, 1.0],
+            Self::Rose => [0.078, 0.035, 0.063, 1.0],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OverlayColors {
+    accent: [f32; 4],
+    muted: [f32; 4],
+    text: [f32; 4],
+    divider: [f32; 4],
+}
+
+impl OverlayColors {
+    const fn new(accent: [f32; 4], muted: [f32; 4], text: [f32; 4], divider: [f32; 4]) -> Self {
+        Self {
+            accent,
+            muted,
+            text,
+            divider,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum OverlayCorner {
     #[default]
     TopLeft,
@@ -1178,6 +1554,8 @@ enum OverlayCorner {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct OverlayConfig {
     preset: OverlayPreset,
+    layout: OverlayLayout,
+    palette: OverlayPalette,
     corner: OverlayCorner,
     metrics: u16,
     opacity_percent: u8,
@@ -1188,6 +1566,8 @@ impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
             preset: OverlayPreset::default(),
+            layout: OverlayLayout::default(),
+            palette: OverlayPalette::default(),
             corner: OverlayCorner::default(),
             metrics: METRICS_COMPACT,
             opacity_percent: 50,
@@ -1200,6 +1580,8 @@ impl OverlayConfig {
     fn from_environment() -> Self {
         Self {
             preset: parse_overlay_preset(env::var(OVERLAY_PRESET_ENV).ok().as_deref()),
+            layout: parse_overlay_layout(env::var(OVERLAY_LAYOUT_ENV).ok().as_deref()),
+            palette: parse_overlay_palette(env::var(OVERLAY_PALETTE_ENV).ok().as_deref()),
             corner: parse_overlay_corner(env::var(OVERLAY_CORNER_ENV).ok().as_deref()),
             metrics: parse_overlay_metrics(env::var(OVERLAY_METRICS_ENV).ok().as_deref()),
             opacity_percent: parse_overlay_opacity(env::var(OVERLAY_OPACITY_ENV).ok().as_deref()),
@@ -1221,6 +1603,27 @@ fn parse_overlay_preset(value: Option<&str>) -> OverlayPreset {
         Some("detailed") => OverlayPreset::Detailed,
         Some("custom") => OverlayPreset::Custom,
         _ => OverlayPreset::Compact,
+    }
+}
+
+fn parse_overlay_layout(value: Option<&str>) -> OverlayLayout {
+    match value {
+        Some("ribbon") => OverlayLayout::Ribbon,
+        Some("telemetry") => OverlayLayout::Telemetry,
+        _ => OverlayLayout::Grid,
+    }
+}
+
+fn parse_overlay_palette(value: Option<&str>) -> OverlayPalette {
+    match value {
+        Some("glacier") => OverlayPalette::Glacier,
+        Some("ember") => OverlayPalette::Ember,
+        Some("mint") => OverlayPalette::Mint,
+        Some("mono") => OverlayPalette::Mono,
+        Some("amethyst") => OverlayPalette::Amethyst,
+        Some("solar") => OverlayPalette::Solar,
+        Some("rose") => OverlayPalette::Rose,
+        _ => OverlayPalette::Redunar,
     }
 }
 
@@ -1350,6 +1753,14 @@ fn push_text_scaled(batch: &mut GlyphBatch, text: &[u8], start_x: i32, start_y: 
     }
 }
 
+fn push_text_centered(batch: &mut GlyphBatch, text: &[u8], left: i32, right: i32, y: i32) {
+    let width = i32::try_from(text.len())
+        .unwrap_or(i32::MAX)
+        .saturating_mul(overlay_font::GLYPH_ADVANCE);
+    let x = left.saturating_add((right - left - width).max(0) / 2);
+    push_text(batch, text, x, y);
+}
+
 fn push_ui_text(batch: &mut GlyphBatch, text: &[u8], start_x: i32, start_y: i32) {
     push_ui_text_scaled(batch, text, start_x, start_y, 1);
 }
@@ -1374,7 +1785,19 @@ fn push_ui_text_scaled(batch: &mut GlyphBatch, text: &[u8], start_x: i32, start_
     }
 }
 
-#[cfg(test)]
+fn push_ui_text_centered(
+    batch: &mut GlyphBatch,
+    text: &[u8],
+    left: i32,
+    right: i32,
+    y: i32,
+    scale: u8,
+) {
+    let width = ui_text_width(text, scale);
+    let x = left.saturating_add((right - left - width).max(0) / 2);
+    push_ui_text_scaled(batch, text, x, y, scale);
+}
+
 fn ui_text_width(text: &[u8], scale: u8) -> i32 {
     text.iter().fold(0_i32, |width, byte| {
         width.saturating_add(overlay_font::ui_advance_width(*byte).saturating_mul(i32::from(scale)))
@@ -1454,6 +1877,10 @@ struct RendererState {
     history: FrameHistory,
     plan: OverlayPlan,
     saved_notice: OverlayPlan,
+    menu: OverlayPlan,
+    menu_animation: ReplayMenuAnimation,
+    menu_visible: bool,
+    menu_snapshot: Option<ReplayMenuTelemetry>,
     plan_revision: u64,
     config: OverlayConfig,
     telemetry: TelemetryReader,
@@ -1476,6 +1903,10 @@ impl Default for RendererState {
                 OverlayPlan::hidden()
             },
             saved_notice: OverlayPlan::hidden(),
+            menu: OverlayPlan::hidden(),
+            menu_animation: ReplayMenuAnimation::default(),
+            menu_visible: false,
+            menu_snapshot: None,
             plan_revision: 1,
             config,
             telemetry: TelemetryReader::from_environment(),
@@ -1510,14 +1941,12 @@ impl RendererState {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg(test)]
 struct ReplayMenuAnimation {
     progress: u16,
     target: u16,
     last_update_ns: u64,
 }
 
-#[cfg(test)]
 impl ReplayMenuAnimation {
     fn set_visible(&mut self, visible: bool, now_ns: u64) {
         self.advance(now_ns);
@@ -1559,6 +1988,8 @@ struct TelemetryReader {
     file: Option<File>,
     last_read_ns: u64,
     last_revision: u64,
+    last_menu_read_ns: u64,
+    last_menu_revision: u64,
 }
 
 impl TelemetryReader {
@@ -1570,25 +2001,62 @@ impl TelemetryReader {
             file,
             last_read_ns: 0,
             last_revision: 0,
+            last_menu_read_ns: 0,
+            last_menu_revision: 0,
         }
     }
 
-    fn refresh(&mut self, now_ns: u64) -> Option<OverlayHardwareTelemetry> {
-        if self.last_read_ns != 0
-            && now_ns.saturating_sub(self.last_read_ns) < TELEMETRY_INTERVAL_NS
-        {
-            return None;
+    /// Read both telemetry blocks. The hardware block keeps its 4 Hz budget
+    /// because it only feeds slow-moving metric rows. The Replay menu block
+    /// carries pointer motion, so the caller requests eager polling whenever
+    /// the menu is visible or animating; while hidden, a 20 Hz poll bounds
+    /// open detection without adding a read to every presentation.
+    fn refresh(
+        &mut self,
+        now_ns: u64,
+        menu_eager: bool,
+    ) -> (
+        Option<OverlayHardwareTelemetry>,
+        Option<ReplayMenuTelemetry>,
+    ) {
+        let Some(file) = self.file.as_ref() else {
+            return (None, None);
+        };
+        let hardware_due = self.last_read_ns == 0
+            || now_ns.saturating_sub(self.last_read_ns) >= TELEMETRY_INTERVAL_NS;
+        let menu_due = menu_eager
+            || self.last_menu_read_ns == 0
+            || now_ns.saturating_sub(self.last_menu_read_ns) >= MENU_POLL_IDLE_NS;
+        if !hardware_due && !menu_due {
+            return (None, None);
         }
-        self.last_read_ns = now_ns;
-        let file = self.file.as_ref()?;
-        let mut bytes = [0_u8; OVERLAY_HARDWARE_TELEMETRY_BYTES];
-        file.read_exact_at(&mut bytes, 0).ok()?;
-        let telemetry = decode_overlay_hardware_telemetry(&bytes).ok()?;
-        if telemetry.revision == self.last_revision {
-            return None;
+        let mut hardware = None;
+        let mut menu = None;
+        if menu_due {
+            self.last_menu_read_ns = now_ns;
+            let mut bytes = [0_u8; REPLAY_MENU_TELEMETRY_BYTES];
+            if file
+                .read_exact_at(&mut bytes, OVERLAY_HARDWARE_TELEMETRY_BYTES as u64)
+                .is_ok()
+                && let Ok(telemetry) = decode_replay_menu_telemetry(&bytes)
+                && telemetry.revision != self.last_menu_revision
+            {
+                self.last_menu_revision = telemetry.revision;
+                menu = Some(telemetry);
+            }
         }
-        self.last_revision = telemetry.revision;
-        Some(telemetry)
+        if hardware_due {
+            self.last_read_ns = now_ns;
+            let mut bytes = [0_u8; OVERLAY_HARDWARE_TELEMETRY_BYTES];
+            if file.read_exact_at(&mut bytes, 0).is_ok()
+                && let Ok(telemetry) = decode_overlay_hardware_telemetry(&bytes)
+                && telemetry.revision != self.last_revision
+            {
+                self.last_revision = telemetry.revision;
+                hardware = Some(telemetry);
+            }
+        }
+        (hardware, menu)
     }
 }
 
@@ -1844,6 +2312,10 @@ pub(crate) fn swapchain_destroyed(device_key: usize, swapchain: VkSwapchainKhr) 
 /// Prepare one overlay submission and return the semaphore that the forwarded
 /// present must wait on. Any unsupported or busy state returns `None`, leaving
 /// the original `VkPresentInfoKHR` completely unchanged.
+#[expect(
+    clippy::too_many_lines,
+    reason = "presentation preparation keeps queue, swapchain, and cached-plan ownership in one auditable transaction"
+)]
 pub(crate) unsafe fn prepare_present(
     queue: VkQueue,
     present_info: *const VkPresentInfoKhr,
@@ -1879,7 +2351,7 @@ pub(crate) unsafe fn prepare_present(
         diagnostic_prepare("unregistered presentation queue");
         return None;
     };
-    if state.plan.is_empty() && state.saved_notice.is_empty() {
+    if state.plan.is_empty() && state.saved_notice.is_empty() && state.menu.is_empty() {
         return None;
     }
     let plan_revision = state.plan_revision;
@@ -1913,6 +2385,7 @@ pub(crate) unsafe fn prepare_present(
             swapchain,
             image_index,
             render_pass: resources.render_pass,
+            panel_pipeline_layout: resources.panel_pipeline_layout,
             panel_pipeline: resources.panel_pipeline,
             glyph_pipeline_layout: resources.glyph_pipeline_layout,
             glyph_pipeline: resources.glyph_pipeline,
@@ -1930,9 +2403,10 @@ pub(crate) unsafe fn prepare_present(
         queues,
         plan,
         saved_notice,
+        menu,
         ..
     } = &mut *state;
-    let plans = [&*plan, &*saved_notice];
+    let plans = [&*plan, &*saved_notice, &*menu];
     let queue_state = queues.get_mut(&queue_address)?;
     let device_handle = device_address as VkDevice;
     // SAFETY: all handles/functions in these records belong to this queue's
@@ -1965,12 +2439,21 @@ pub(crate) fn presentation_finished(now_ns: u64) {
     let Ok(mut state) = RENDERER.try_lock() else {
         return;
     };
-    let telemetry = state.telemetry.refresh(now_ns);
-    state.update_presentation(telemetry, now_ns);
+    // The menu pointer must not wait for the slow hardware poll while the
+    // panel is on screen or finishing its enter/exit animation.
+    let menu_eager =
+        state.menu_visible || state.menu_animation.progress != state.menu_animation.target;
+    let (telemetry, menu) = state.telemetry.refresh(now_ns, menu_eager);
+    state.update_presentation(telemetry, menu, now_ns);
 }
 
 impl RendererState {
-    fn update_presentation(&mut self, telemetry: Option<OverlayHardwareTelemetry>, now_ns: u64) {
+    fn update_presentation(
+        &mut self,
+        telemetry: Option<OverlayHardwareTelemetry>,
+        menu: Option<ReplayMenuTelemetry>,
+        now_ns: u64,
+    ) {
         if let Some(telemetry) = telemetry {
             let hardware = hardware_snapshot(telemetry);
             self.history.snapshot.cpu_percent = hardware.cpu_percent;
@@ -1990,6 +2473,21 @@ impl RendererState {
                     3 => OverlayPreset::Custom,
                     _ => OverlayPreset::Compact,
                 },
+                layout: match telemetry.layout {
+                    1 => OverlayLayout::Ribbon,
+                    2 => OverlayLayout::Telemetry,
+                    _ => OverlayLayout::Grid,
+                },
+                palette: match telemetry.palette {
+                    1 => OverlayPalette::Glacier,
+                    2 => OverlayPalette::Ember,
+                    3 => OverlayPalette::Mint,
+                    4 => OverlayPalette::Mono,
+                    5 => OverlayPalette::Amethyst,
+                    6 => OverlayPalette::Solar,
+                    7 => OverlayPalette::Rose,
+                    _ => OverlayPalette::Redunar,
+                },
                 metrics: telemetry.metrics,
                 opacity_percent: telemetry.opacity_percent,
                 scale_percent: telemetry.scale_percent,
@@ -2001,7 +2499,12 @@ impl RendererState {
         }
         let replay_notice_changed =
             self.update_saved_notice(telemetry.map(|value| value.replay_saved_revision), now_ns);
-        if self.history.record(now_ns) || telemetry.is_some() || replay_notice_changed {
+        let menu_changed = self.update_replay_menu(menu, now_ns);
+        if self.history.record(now_ns)
+            || telemetry.is_some()
+            || replay_notice_changed
+            || menu_changed
+        {
             self.plan = if self.metrics_visible {
                 OverlayPlan::new(self.history.snapshot, self.config)
             } else {
@@ -2010,6 +2513,37 @@ impl RendererState {
             self.plan_revision = self.plan_revision.saturating_add(1);
         }
     }
+
+    /// Advance the Replay menu state machine for this presentation. The
+    /// daemon publishes one revision per visible change (toggle, pointer,
+    /// hover, readiness), so unchanged periods cost no rebuild and never
+    /// bump the plan revision the recorded command buffers are cached by.
+    fn update_replay_menu(&mut self, menu: Option<ReplayMenuTelemetry>, now_ns: u64) -> bool {
+        if let Some(menu) = menu {
+            self.menu_visible = menu.visible;
+            self.menu_snapshot = Some(menu);
+            self.menu_animation.set_visible(menu.visible, now_ns);
+        }
+        let advanced = self.menu_animation.advance(now_ns);
+        let progress = self.menu_animation.progress;
+        if progress == 0 && !self.menu_visible {
+            // Fully closed: release all menu render work so presentations
+            // with only metrics (or nothing) keep the original fast path.
+            if self.menu.is_empty() {
+                return false;
+            }
+            self.menu = OverlayPlan::hidden();
+            return true;
+        }
+        if menu.is_none() && !advanced {
+            return false;
+        }
+        let Some(snapshot) = self.menu_snapshot else {
+            return false;
+        };
+        self.menu = OverlayPlan::replay_menu(ReplayMenuView::from_telemetry(snapshot, progress));
+        true
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2017,6 +2551,7 @@ struct RenderTarget {
     swapchain: VkSwapchainKhr,
     image_index: u32,
     render_pass: VkRenderPass,
+    panel_pipeline_layout: VkPipelineLayout,
     panel_pipeline: VkPipeline,
     glyph_pipeline_layout: VkPipelineLayout,
     glyph_pipeline: VkPipeline,
@@ -2030,6 +2565,7 @@ impl Default for RenderTarget {
             swapchain: 0,
             image_index: 0,
             render_pass: 0,
+            panel_pipeline_layout: 0,
             panel_pipeline: 0,
             glyph_pipeline_layout: 0,
             glyph_pipeline: 0,
@@ -2484,7 +3020,12 @@ unsafe fn create_overlay_pipeline(
     let push_constant = PushConstantRange {
         stage_flags: VK_SHADER_STAGE_FRAGMENT_BIT,
         offset: 0,
-        size: u32::try_from(mem::size_of::<GlyphPushConstants>()).ok()?,
+        size: u32::try_from(if glyph {
+            mem::size_of::<GlyphPushConstants>()
+        } else {
+            mem::size_of::<PanelPushConstants>()
+        })
+        .ok()?,
     };
     let layout_info = VkPipelineLayoutCreateInfo {
         s_type: VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -2492,12 +3033,8 @@ unsafe fn create_overlay_pipeline(
         flags: 0,
         set_layout_count: 0,
         set_layouts: std::ptr::null(),
-        push_constant_range_count: u32::from(glyph),
-        push_constant_ranges: if glyph {
-            std::ptr::from_ref(&push_constant).cast()
-        } else {
-            std::ptr::null()
-        },
+        push_constant_range_count: 1,
+        push_constant_ranges: std::ptr::from_ref(&push_constant).cast(),
     };
     let mut layout = 0;
     // SAFETY: the descriptor-free layout create info is complete.
@@ -2744,7 +3281,7 @@ unsafe fn submit_overlay(
     queue: &mut QueueState,
     present: &VkPresentInfoKhr,
     targets: &[RenderTarget],
-    plans: &[&OverlayPlan; 2],
+    plans: &[&OverlayPlan; 3],
     plan_revision: u64,
 ) -> Option<VkSemaphore> {
     let primary = targets.first()?;
@@ -2860,7 +3397,7 @@ unsafe fn record_target(
     functions: DeviceFunctions,
     command_buffer: VkCommandBuffer,
     target: RenderTarget,
-    plans: &[&OverlayPlan; 2],
+    plans: &[&OverlayPlan; 3],
 ) {
     let begin = VkRenderPassBeginInfo {
         s_type: VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2882,8 +3419,9 @@ unsafe fn record_target(
             VK_SUBPASS_CONTENTS_INLINE,
         );
     };
-    // Draw both surfaces in one render pass, preserving the game's image and
-    // avoiding extra attachment transitions for a short-lived notification.
+    // Draw metrics, saved-notice, and Replay menu surfaces in one render
+    // pass, preserving the game's image and avoiding extra attachment
+    // transitions for short-lived overlays.
     for plan in plans.iter().filter(|plan| !plan.is_empty()) {
         unsafe { record_plan(functions, command_buffer, target, plan) };
     }
@@ -2900,6 +3438,7 @@ unsafe fn record_plan(
 ) {
     let scale_percent = effective_scale_percent(target.extent, plan);
     let (offset_x, offset_y) = overlay_origin(target.extent, plan, scale_percent);
+    let colors = plan.palette.colors();
     if plan.dim_percent > 0 && target.panel_pipeline != 0 {
         #[expect(
             clippy::cast_precision_loss,
@@ -2919,6 +3458,7 @@ unsafe fn record_plan(
         };
         let opacity = f32::from(plan.dim_percent) / 100.0;
         let blend_constants = [opacity; 4];
+        let push_constants = PanelPushConstants::from_rect(scissor, 0, OverlayPalette::Redunar);
         // SAFETY: the descriptor-free panel pipeline is compatible with the
         // active render pass and the viewport is the current swapchain.
         unsafe {
@@ -2930,12 +3470,20 @@ unsafe fn record_plan(
             (functions.cmd_set_viewport)(command_buffer, 0, 1, &raw const viewport);
             (functions.cmd_set_scissor)(command_buffer, 0, 1, &raw const scissor);
             (functions.cmd_set_blend_constants)(command_buffer, blend_constants.as_ptr());
+            (functions.cmd_push_constants)(
+                command_buffer,
+                target.panel_pipeline_layout,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                u32::try_from(mem::size_of_val(&push_constants)).unwrap_or(0),
+                std::ptr::from_ref(&push_constants).cast(),
+            );
             (functions.cmd_draw)(command_buffer, 3, 1, 0, 0);
         }
     }
     if let Some(panel) = plan.panel {
         let panel = scaled_translated_rect(panel, scale_percent, offset_x, offset_y);
-        if target.panel_pipeline != 0 && plan.opacity_percent < 100 {
+        if target.panel_pipeline != 0 && (plan.opacity_percent < 100 || plan.panel_radius > 0) {
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "Vulkan viewports are f32 while swapchain coordinates are integers; practical image sizes are exactly representable"
@@ -2950,9 +3498,12 @@ unsafe fn record_plan(
             };
             let opacity = f32::from(plan.opacity_percent) / 100.0;
             let blend_constants = [opacity; 4];
+            let radius =
+                u32::from(plan.panel_radius).saturating_mul(u32::from(scale_percent)) / 100;
+            let push_constants = PanelPushConstants::from_rect(panel.rect, radius, plan.palette);
             // SAFETY: the optional pipeline is compatible with this render
             // pass. Dynamic viewport/scissor exactly cover the bounded panel,
-            // and the draw uses no buffers, descriptors, or push constants.
+            // and the small push payload clips only the menu's outer corners.
             unsafe {
                 (functions.cmd_bind_pipeline)(
                     command_buffer,
@@ -2962,12 +3513,20 @@ unsafe fn record_plan(
                 (functions.cmd_set_viewport)(command_buffer, 0, 1, &raw const viewport);
                 (functions.cmd_set_scissor)(command_buffer, 0, 1, &raw const panel.rect);
                 (functions.cmd_set_blend_constants)(command_buffer, blend_constants.as_ptr());
+                (functions.cmd_push_constants)(
+                    command_buffer,
+                    target.panel_pipeline_layout,
+                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    u32::try_from(mem::size_of_val(&push_constants)).unwrap_or(0),
+                    std::ptr::from_ref(&push_constants).cast(),
+                );
                 (functions.cmd_draw)(command_buffer, 3, 1, 0, 0);
             }
         } else {
             // Pipeline creation is optional. A fully opaque clear is the safe
-            // fallback when blending is unavailable or explicitly set to 100%.
-            let background = clear_attachment([0.035, 0.035, 0.035, 1.0]);
+            // fallback when the rounded-panel pipeline is unavailable.
+            let background = clear_attachment(plan.palette.panel_color());
             // SAFETY: one color attachment and one in-bounds clear rectangle.
             unsafe {
                 (functions.cmd_clear_attachments)(
@@ -3002,30 +3561,33 @@ unsafe fn record_plan(
         clear_attachment([0.41, 0.08, 0.13, 1.0]),
         &logo_dark_red,
     );
-    let accent = plan
-        .accent
-        .scaled_translated(scale_percent, offset_x, offset_y);
-    clear_batch(
-        functions,
-        command_buffer,
-        clear_attachment([0.92, 0.16, 0.20, 1.0]),
-        &accent,
-    );
     let dividers = plan
         .dividers
         .scaled_translated(scale_percent, offset_x, offset_y);
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment([0.15, 0.16, 0.19, 1.0]),
+        clear_attachment(colors.divider),
         &dividers,
+    );
+    // Selection and hover outlines share edges with the neutral control grid.
+    // Draw them last so the grid cannot erase the right or lower half of a
+    // selected duration cell.
+    let accent = plan
+        .accent
+        .scaled_translated(scale_percent, offset_x, offset_y);
+    clear_batch(
+        functions,
+        command_buffer,
+        clear_attachment(colors.accent),
+        &accent,
     );
     draw_glyph_batch(
         functions,
         command_buffer,
         target,
         &plan.accent_glyphs,
-        [0.92, 0.16, 0.20, 1.0],
+        colors.accent,
         scale_percent,
         offset_x,
         offset_y,
@@ -3035,7 +3597,7 @@ unsafe fn record_plan(
         command_buffer,
         target,
         &plan.muted_glyphs,
-        [0.52, 0.54, 0.58, 1.0],
+        colors.muted,
         scale_percent,
         offset_x,
         offset_y,
@@ -3045,7 +3607,7 @@ unsafe fn record_plan(
         command_buffer,
         target,
         &plan.text_glyphs,
-        [0.92, 0.94, 0.97, 1.0],
+        colors.text,
         scale_percent,
         offset_x,
         offset_y,
@@ -3344,6 +3906,7 @@ mod tests {
         });
         assert_eq!(plan.width, REPLAY_MENU_WIDTH);
         assert_eq!(plan.height, REPLAY_MENU_HEIGHT);
+        assert_eq!(plan.panel_radius, REPLAY_MENU_CORNER_RADIUS);
         for (index, (x, y)) in [
             (40, 259),
             (139, 259),
@@ -3366,8 +3929,25 @@ mod tests {
         assert_eq!(replay_menu_hit_target(520, 230), 10);
         assert_eq!(replay_menu_hit_target(680, 430), 0);
         assert!(plan.accent.length <= MAX_ACCENT_RECTS);
+        assert!(plan.dividers.length <= MAX_ACCENT_RECTS);
         assert!(plan.text_glyphs.length <= MAX_TEXT_GLYPHS);
         assert!(plan.muted_glyphs.length <= MAX_TEXT_GLYPHS);
+        for glyph in plan
+            .text_glyphs
+            .as_slice()
+            .iter()
+            .chain(plan.muted_glyphs.as_slice())
+            .filter(|glyph| matches!(glyph.y, 292 | 320))
+        {
+            let right_edge = if glyph.x < 570 { 570 } else { 662 };
+            assert!(glyph.x >= 474);
+            assert!(
+                glyph.x
+                    + i32::try_from(overlay_font::GLYPH_WIDTH * u32::from(glyph.scale)).unwrap()
+                    <= right_edge,
+                "shortcut glyph escaped its cell"
+            );
+        }
     }
 
     #[test]
@@ -3378,9 +3958,10 @@ mod tests {
             cursor_y: 5_000,
             ..ReplayMenuView::default()
         });
-        assert!(plan.logo_base.length >= 3);
-        assert_eq!(plan.logo_dark_red.length, 4);
-        assert_eq!(plan.cursor.length, 4);
+        assert_eq!(plan.logo_base.length, 0);
+        assert_eq!(plan.logo_dark_red.length, 0);
+        assert_eq!(plan.cursor.length, 13);
+        assert!(plan.accent.length >= 10);
         assert!(plan.pointer.is_some());
         assert!(plan.pointer_shadow.is_some());
         assert!(
@@ -3453,6 +4034,113 @@ mod tests {
         animation.set_visible(false, start + REPLAY_MENU_ANIMATION_NS * 2);
         assert!(animation.advance(start + REPLAY_MENU_ANIMATION_NS * 3));
         assert_eq!(animation.progress, 0);
+    }
+
+    fn menu_telemetry(revision: u64, visible: bool) -> ReplayMenuTelemetry {
+        ReplayMenuTelemetry {
+            revision,
+            visible,
+            pointer_pressed: false,
+            cursor_x: 5_000,
+            cursor_y: 5_000,
+            hover_target: 0,
+            pressed_target: 0,
+            selected_duration_index: 1,
+            status: ReplayMenuStatus::Buffering,
+            available_seconds: 42,
+            click_revision: 0,
+            frame_rate: 120,
+            quality: 2,
+            output_format: 1,
+            save_enabled: true,
+        }
+    }
+
+    #[test]
+    fn menu_view_maps_the_daemon_snapshot_without_reinterpreting_codes() {
+        let view = ReplayMenuView::from_telemetry(menu_telemetry(2, true), u16::MAX);
+        assert_eq!(view.status, 2);
+        assert_eq!(view.capture_fps, 120);
+        assert_eq!(view.quality, 2);
+        assert_eq!(view.format, 1);
+        assert_eq!(view.selected_duration, 1);
+        assert_eq!(view.available_seconds, 42);
+        assert!(view.save_enabled);
+        assert_eq!(view.animation_progress, u16::MAX);
+    }
+
+    #[test]
+    fn menu_telemetry_changes_render_the_panel_even_with_metrics_hidden() {
+        let mut state = RendererState {
+            metrics_visible: false,
+            ..RendererState::default()
+        };
+        state.update_presentation(None, Some(menu_telemetry(2, true)), 1_000_000);
+        assert!(!state.menu.is_empty(), "visible menu renders at once");
+        assert!(state.plan.is_empty(), "metrics stay hidden");
+        // One full animation window later the panel is fully open, and
+        // unchanged revisions must not bump the cached plan revision.
+        let revision = state.plan_revision;
+        state.update_presentation(None, None, 1_000_000 + REPLAY_MENU_ANIMATION_NS / 2);
+        state.update_presentation(None, None, 1_000_000 + REPLAY_MENU_ANIMATION_NS * 2);
+        assert_eq!(state.menu_animation.progress, u16::MAX);
+        assert!(
+            state.plan_revision > revision,
+            "animation republishes frames"
+        );
+        // Let the frame-summary interval settle so the next call measures
+        // only the menu's rebuild behavior.
+        state.update_presentation(None, None, 1_000_000 + SUMMARY_INTERVAL_NS * 4);
+        let revision = state.plan_revision;
+        state.update_presentation(None, None, 1_000_000 + SUMMARY_INTERVAL_NS * 4 + 10_000_000);
+        assert_eq!(
+            state.plan_revision, revision,
+            "a settled menu never rebuilds the plan"
+        );
+
+        state.update_presentation(None, Some(menu_telemetry(4, false)), 2_000_000_000);
+        assert!(!state.menu.is_empty(), "closing menu animates out first");
+        state.update_presentation(None, None, 2_000_000_000 + REPLAY_MENU_ANIMATION_NS * 2);
+        assert!(
+            state.menu.is_empty(),
+            "the fully closed menu releases render work"
+        );
+    }
+
+    #[test]
+    fn telemetry_reader_decodes_the_menu_block_after_the_hardware_block() {
+        let directory =
+            std::env::temp_dir().join(format!("redunar-overlay-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("telemetry.bin");
+        let mut bytes = vec![0_u8; OVERLAY_HARDWARE_TELEMETRY_BYTES + REPLAY_MENU_TELEMETRY_BYTES];
+        let mut hardware = [0_u8; OVERLAY_HARDWARE_TELEMETRY_BYTES];
+        hardware[..8].copy_from_slice(b"RDOVL001");
+        bytes[..OVERLAY_HARDWARE_TELEMETRY_BYTES].copy_from_slice(&hardware);
+        let mut menu = [0_u8; REPLAY_MENU_TELEMETRY_BYTES];
+        redunar_capture::encode_replay_menu_telemetry(menu_telemetry(2, true), &mut menu).unwrap();
+        bytes[OVERLAY_HARDWARE_TELEMETRY_BYTES..].copy_from_slice(&menu);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut reader = TelemetryReader {
+            file: Some(std::fs::File::open(&path).unwrap()),
+            last_read_ns: 0,
+            last_revision: 0,
+            last_menu_read_ns: 0,
+            last_menu_revision: 0,
+        };
+        let (hardware, menu) = reader.refresh(1_000, true);
+        assert!(
+            hardware.is_none(),
+            "the hardware block is not decodable here"
+        );
+        let menu = menu.expect("the menu block decodes at file offset 48");
+        assert!(menu.visible);
+        assert_eq!(menu.revision, 2);
+        // The same revision never reports again, even under eager polling.
+        let (_, repeated) = reader.refresh(2_000, true);
+        assert!(repeated.is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -3593,6 +4281,94 @@ mod tests {
         assert!(fps_only.width < compact.width);
         assert!(detailed.muted_glyphs.length > compact.muted_glyphs.length);
         assert_eq!(detailed.height, DETAILED_PANEL_HEIGHT);
+    }
+
+    #[test]
+    fn metric_layouts_keep_the_same_selected_metrics_in_distinct_bounded_geometry() {
+        let metrics = OverlaySnapshot {
+            fps: Some(144),
+            frame_time_tenths_ms: Some(69),
+            one_percent_low_fps: Some(121),
+            point_one_percent_low_fps: Some(110),
+            cpu_percent: Some(42),
+            cpu_temperature_c: Some(61),
+            gpu_percent: Some(87),
+            gpu_temperature_c: Some(68),
+        };
+        let grid = OverlayPlan::new(metrics, OverlayConfig::default());
+        let ribbon = OverlayPlan::new(
+            metrics,
+            OverlayConfig {
+                layout: OverlayLayout::Ribbon,
+                ..OverlayConfig::default()
+            },
+        );
+        let telemetry = OverlayPlan::new(
+            metrics,
+            OverlayConfig {
+                layout: OverlayLayout::Telemetry,
+                ..OverlayConfig::default()
+            },
+        );
+
+        assert_eq!(grid.width, PANEL_WIDTH);
+        assert_eq!(ribbon.width, RIBBON_BRAND_WIDTH + 6 * RIBBON_METRIC_WIDTH);
+        assert_eq!(ribbon.height, RIBBON_HEIGHT);
+        assert_eq!(telemetry.width, TELEMETRY_WIDTH);
+        assert!(telemetry.height > ribbon.height);
+        let heading_right = telemetry
+            .muted_glyphs
+            .as_slice()
+            .iter()
+            .filter(|glyph| glyph.y == 6)
+            .map(|glyph| glyph.x + i32::try_from(overlay_font::GLYPH_WIDTH).unwrap_or(0))
+            .max()
+            .expect("telemetry heading glyphs");
+        let first_value_right = telemetry
+            .text_glyphs
+            .as_slice()
+            .iter()
+            .filter(|glyph| glyph.y == 31)
+            .map(|glyph| glyph.x + i32::try_from(overlay_font::GLYPH_WIDTH).unwrap_or(0))
+            .max()
+            .expect("first telemetry value glyphs");
+        assert_eq!(heading_right, first_value_right);
+        for plan in [&grid, &ribbon, &telemetry] {
+            assert!(plan.panel.is_some());
+            assert_eq!(plan.panel_radius, METRIC_PANEL_RADIUS);
+            assert!(plan.text_glyphs.length > 0);
+            assert!(plan.muted_glyphs.length > 0);
+            assert!(plan.text_glyphs.length <= MAX_TEXT_GLYPHS);
+            assert!(plan.muted_glyphs.length <= MAX_TEXT_GLYPHS);
+        }
+
+        let short_ribbon = OverlayPlan::new(
+            metrics,
+            OverlayConfig {
+                preset: OverlayPreset::Custom,
+                layout: OverlayLayout::Ribbon,
+                metrics: METRIC_FPS | METRIC_FRAME_TIME,
+                ..OverlayConfig::default()
+            },
+        );
+        let detailed_ribbon = OverlayPlan::new(
+            metrics,
+            OverlayConfig {
+                preset: OverlayPreset::Detailed,
+                layout: OverlayLayout::Ribbon,
+                ..OverlayConfig::default()
+            },
+        );
+        assert_eq!(
+            short_ribbon.width,
+            RIBBON_BRAND_WIDTH + 2 * RIBBON_METRIC_WIDTH
+        );
+        assert_eq!(
+            detailed_ribbon.width,
+            RIBBON_BRAND_WIDTH + 8 * RIBBON_METRIC_WIDTH
+        );
+        assert!(short_ribbon.width < ribbon.width);
+        assert!(ribbon.width < detailed_ribbon.width);
     }
 
     #[test]
@@ -3749,6 +4525,27 @@ mod tests {
             parse_overlay_corner(Some("bottom-right")),
             OverlayCorner::BottomRight
         );
+        assert_eq!(parse_overlay_layout(Some("unknown")), OverlayLayout::Grid);
+        assert_eq!(parse_overlay_layout(Some("ribbon")), OverlayLayout::Ribbon);
+        assert_eq!(
+            parse_overlay_layout(Some("telemetry")),
+            OverlayLayout::Telemetry
+        );
+        for (token, palette) in [
+            ("glacier", OverlayPalette::Glacier),
+            ("ember", OverlayPalette::Ember),
+            ("mint", OverlayPalette::Mint),
+            ("mono", OverlayPalette::Mono),
+            ("amethyst", OverlayPalette::Amethyst),
+            ("solar", OverlayPalette::Solar),
+            ("rose", OverlayPalette::Rose),
+        ] {
+            assert_eq!(parse_overlay_palette(Some(token)), palette);
+        }
+        assert_eq!(
+            parse_overlay_palette(Some("unknown")),
+            OverlayPalette::Redunar
+        );
         assert_eq!(parse_overlay_metrics(None), METRICS_COMPACT);
         assert_eq!(parse_overlay_metrics(Some("0")), METRICS_COMPACT);
         assert_eq!(parse_overlay_metrics(Some("65535")), METRICS_COMPACT);
@@ -3800,6 +4597,8 @@ mod tests {
             revision: 2,
             corner: 0,
             preset: 0,
+            layout: 0,
+            palette: 0,
             metrics: METRICS_COMPACT,
             opacity_percent: 50,
             scale_percent: 100,
@@ -3866,6 +4665,99 @@ mod tests {
         for index in 0..overlay_font::COVERAGE_WORDS {
             assert!(source.contains(&format!("uint word{index};")));
         }
+    }
+
+    #[test]
+    fn panel_shader_clips_only_the_requested_rounded_bounds() {
+        assert_eq!(mem::size_of::<PanelPushConstants>(), 24);
+        let source = include_str!("shaders/panel.frag");
+        assert!(source.contains("layout(push_constant)"));
+        assert!(source.contains("rounded_distance"));
+        assert!(source.contains("discard"));
+        let pushed = PanelPushConstants::from_rect(
+            VkRect2d {
+                offset: VkOffset2d { x: 10, y: 20 },
+                extent: VkExtent2d {
+                    width: 690,
+                    height: 440,
+                },
+            },
+            12,
+            OverlayPalette::Glacier,
+        );
+        assert_eq!(
+            pushed.bounds.map(f32::to_bits),
+            [10.0_f32, 20.0, 690.0, 440.0].map(f32::to_bits)
+        );
+        assert_eq!(pushed.radius.to_bits(), 12.0_f32.to_bits());
+        assert_eq!(pushed.palette, 1);
+    }
+
+    #[test]
+    fn render_replay_menu_reference() {
+        use std::fmt::Write as _;
+        let Ok(path) = std::env::var("REDUNAR_REPLAY_MENU_REFERENCE") else {
+            return;
+        };
+        let plan = OverlayPlan::replay_menu(ReplayMenuView {
+            animation_progress: u16::MAX,
+            status: 2,
+            available_seconds: 90,
+            capture_fps: 120,
+            quality: 1,
+            format: 1,
+            selected_duration: 1,
+            cursor_x: 8_200,
+            cursor_y: 7_800,
+            save_enabled: true,
+            ..ReplayMenuView::default()
+        });
+        let mut svg = String::from(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='1104' height='704' viewBox='0 0 690 440'><rect width='690' height='440' fill='#151922'/><rect x='0.5' y='0.5' width='689' height='439' rx='11.5' fill='#090909' stroke='#262930'/>",
+        );
+        for (batch, color) in [
+            (&plan.logo_base, "#07080a"),
+            (&plan.logo_dark_red, "#691521"),
+            (&plan.accent, "#eb2933"),
+            (&plan.dividers, "#262930"),
+            (&plan.cursor_shadow, "#050505"),
+            (&plan.cursor, "#f0f2f7"),
+        ] {
+            for rect in batch.as_slice() {
+                let rect = rect.rect;
+                write!(
+                    svg,
+                    "<rect x='{}' y='{}' width='{}' height='{}' fill='{color}'/>",
+                    rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height
+                )
+                .unwrap();
+            }
+        }
+        for (batch, color) in [
+            (&plan.accent_glyphs, "#eb2933"),
+            (&plan.muted_glyphs, "#858a94"),
+            (&plan.text_glyphs, "#ebf0f7"),
+        ] {
+            for glyph in batch.as_slice() {
+                let raster = if glyph.ui_font {
+                    overlay_font::ui_coverage_raster(glyph.byte)
+                } else {
+                    overlay_font::coverage_raster(glyph.byte)
+                };
+                for y in 0..24_u32 {
+                    for x in 0..18_u32 {
+                        let coverage = overlay_font::coverage_pixel(raster, x, y);
+                        if coverage == 0 {
+                            continue;
+                        }
+                        let step = f64::from(glyph.scale) / 2.0;
+                        write!(svg,"<rect x='{}' y='{}' width='{step}' height='{step}' fill='{color}' opacity='{}'/>",f64::from(glyph.x)+f64::from(x)*step,f64::from(glyph.y)+f64::from(y)*step,f64::from(coverage)/3.0).unwrap();
+                    }
+                }
+            }
+        }
+        svg.push_str("</svg>");
+        std::fs::write(path, svg).unwrap();
     }
 
     #[test]

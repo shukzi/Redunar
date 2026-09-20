@@ -11,12 +11,11 @@ mod media;
 mod media_tools;
 mod playback;
 mod profiles;
-mod replay_menu_window;
 mod runtime;
 mod sessions;
 mod tray;
 mod updates;
-use tauri::{Listener, Manager};
+use tauri::Manager;
 
 const APP_ID: &str = "com.redunar.Redunar";
 #[cfg(target_os = "linux")]
@@ -95,7 +94,18 @@ fn main() {
     // icon. This must run before Tauri initializes GTK or creates a window.
     #[cfg(target_os = "linux")]
     gtk::glib::set_prgname(Some(APP_ID));
-    backend::other_owner();
+    // A previous instance that crashed or was killed cannot run its own
+    // cleanup: private capture-session sockets and multi-hundred-megabyte
+    // playback copies stay behind. Sweep them once, but only while no other
+    // live Redunar owns the backend session; another instance may be
+    // mid-conversion, and the ownership probe caches its answer anyway.
+    if !backend::other_owner() {
+        let removed = backend::service().sweep_stale_capture_sessions();
+        playback::sweep_stale_playback_copies();
+        if removed > 0 {
+            eprintln!("Redunar startup: removed {removed} stale capture session directories");
+        }
+    }
     // Load the saved replay configuration once, outside the polling path.
     let _ = backend::service().replay_runtime_status();
     let monitor = backend::service().start_monitor();
@@ -106,14 +116,6 @@ fn main() {
             tray::setup(app)?;
             app.state::<hotkeys::ShortcutMonitor>()
                 .set_app_handle(app.handle().clone());
-            let handle = app.handle().clone();
-            app.listen("replay-menu-open-settings", move |_| {
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    let _ = window.eval("location.hash = '#global'");
-                }
-            });
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(saved) = backend::service().app_preferences() {
                     if saved.window_maximized {
@@ -135,28 +137,6 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "replay-menu" {
-                if let tauri::WindowEvent::Focused(false) = event {
-                    let should_hide = backend::service()
-                        .replay_preferences()
-                        .map(|preferences| preferences.close_overlay_on_outside_click)
-                        .unwrap_or(false);
-                    if should_hide {
-                        backend::service()
-                            .game_session_coordinator()
-                            .close_replay_menu();
-                        let _ = window.hide();
-                    }
-                }
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    backend::service()
-                        .game_session_coordinator()
-                        .close_replay_menu();
-                    let _ = window.hide();
-                }
-                return;
-            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Do not write preferences from every native move/resize
                 // notification. GTK can emit those events repeatedly while

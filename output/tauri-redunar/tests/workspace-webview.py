@@ -26,7 +26,7 @@ function artworkFixture(width,height,label,mime='image/png'){const canvas=docume
 const posterFixture=artworkFixture(300,450,'Poster');
 const bannerFixture=artworkFixture(1200,350,'Landscape banner');
 const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
-const values={overlay:true,preset:'Compact',position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
+const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
 const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/fixture/game',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',overrides:{overlay:false}}];
 window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
  bridge.calls.push({command,args:structuredClone(args)});
@@ -138,6 +138,11 @@ try:
     test('HUD preview retains native FPS typography',"check(getComputedStyle(q('.hud-native-value')).fontSize==='24px','native 24px measurement font');")
     test('Clean global settings hide draft actions',"check(q('.settings-save-bar').hidden,'clean bar hidden')")
     snap('global-overlay')
+    test('Layout and palette change structure and color without changing selected metrics',"const metrics=[...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|');const layout=q('[data-global=layout]');layout.value='Ribbon';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));const hud=q('#hud'),brand=q('.hud-layout-brand'),brandText=q('.hud-layout-brand span'),hudBounds=hud.getBoundingClientRect(),textBounds=brandText.getBoundingClientRect();check(hud.dataset.layout==='Ribbon','ribbon preview');check(getComputedStyle(hud).width==='628px','ribbon fits six visible metrics');check(getComputedStyle(brand).flexDirection==='row','generic HUD rule does not top-align brand');check(Math.abs((textBounds.top+textBounds.bottom-hudBounds.top-hudBounds.bottom)/2)<1,'brand text vertically centered');check(hud.style.getPropertyValue('--hud-accent')==='#5ec8e5','glacier accent');check([...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|')===metrics,'metrics unchanged');check(q('[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','layout card selected');check(q('[data-palette=Glacier]').getAttribute('aria-pressed')==='true','palette swatch selected');")
+    snap('global-overlay-ribbon-glacier')
+    test('Telemetry and Rose produce the dense preview',"const layout=q('[data-global=layout]');layout.value='Telemetry';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Rose';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('#hud').dataset.layout==='Telemetry','telemetry preview');check(q('.hud-telemetry-row'),'dense metric row');check(q('#hud').style.getPropertyValue('--hud-accent')==='#ff82ad','rose accent');")
+    snap('global-overlay-telemetry-rose')
+    js("const layout=q('[data-global=layout]');layout.value='Grid';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Redunar';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('.settings-save-bar').hidden,'restored style is clean')")
     test('Global toggles preserve booleans across input and change',"q('[data-global=overlay]').click();click('[data-action=save-global]')")
     pump()
     test('Boolean persisted through native payload',"const save=bridge.calls.findLast(c=>c.command==='save_global_settings');check(save.args.input.overlay===false,'boolean false persisted');check(save.args.expectedRevision==='1','optimistic revision preserved');check(q('#hud').hidden,'overlay off preview');check(q('[data-global=overlay]').getAttribute('aria-label')==='Show in-game overlay','clear visibility label');check(q('.settings-save-bar').hidden,'save hides bar');q('[data-global=overlay]').click();")
@@ -292,32 +297,6 @@ try:
     test('Live overlay can be shown again without recording reconfiguration',"check(bridge.calls.findLast(c=>c.command==='save_global_settings').args.input.overlay===true,'show persisted');check(q('[data-global=overlay]').checked,'shown');check(q('[data-global=scale]').value==='105','draft still intact');bridge.conflict=true;q('[data-global=overlay]').click();")
     pump(400)
     test('Failed live visibility save restores the saved toggle and preserves drafts',"check(q('[data-global=overlay]').checked,'last saved shown state restored');check(!q('[data-global=overlay]').disabled,'retry usable');check(q('#toast').textContent.includes('changed elsewhere'),'error visible');check(q('[data-global=scale]').value==='105','draft retained');bridge.conflict=false;click('[data-action=discard-global]');check(q('[data-global=overlay]').checked,'discard does not undo saved visibility');check(q('.settings-save-bar').hidden,'draft bar cleared');")
-    # Cold-load the actual native menu entry, not a hash change in an already
-    # initialized desktop document. This is the path the global hotkey opens.
-    window.resize(760,520);pump()
-    view.load_uri(f'http://127.0.0.1:{server.server_port}/replay-menu.html');pump(1400)
-    test('Native menu cold load has no desktop shell or unrelated data requests',"check(location.pathname==='/replay-menu.html','dedicated native entry');check(!q('.sidebar,.topbar,.brand,.app-shell,#workspace'),'desktop shell is absent');check(document.body.dataset.page==='replay-menu','static identity');check(bridge.calls.every(c=>['replay_runtime_status','replay_preferences'].includes(c.command)),'only menu reads');check(q('#replay-menu-status-title').textContent==='Ready to save','runtime read');check(document.activeElement===q('h1'),'neutral initial focus');check(!bridge.errors.length,bridge.errors.join(';'));")
-    snap('native-menu-cold')
-    pixels=GdkPixbuf.Pixbuf.new_from_file(str(ARTIFACTS/'native-menu-cold.png'))
-    assert pixels.get_has_alpha(), 'Native menu must retain alpha'
-    data=pixels.get_pixels();stride=pixels.get_rowstride();channels=pixels.get_n_channels()
-    for x,y in [(0,0),(10,260),(380,5),(380,515)]:
-        assert data[y*stride+x*channels+3]==0, 'Opaque native menu surround'
-    checks.append('Cold native menu has transparent pixels on all four sides')
-    js("bridge.replayInactive=true");pump(1200)
-    test('Native menu updates inactive controls without replacing focus',"check(q('#replay-menu-status-title').textContent==='Replay inactive','inactive status');check([...document.querySelectorAll('[data-menu-duration]')].every(b=>b.disabled),'inactive saves disabled');bridge.replayInactive=false;bridge.failSave=true;")
-    pump(1200);js("click('[data-menu-duration=\"30\"]')");pump(300)
-    test('Native menu recovers controls after a rejected save',"check(q('#replay-menu-feedback').textContent==='Fixture save failed','save error visible');check(!q('[data-menu-duration]').disabled,'retry available');bridge.failSave=false;click('[data-menu-duration=\"30\"]');")
-    pump(300)
-    test('Native menu requests saves through the native bridge',"check(q('#replay-menu-feedback').textContent.includes('save requested'),'honest save feedback');check(bridge.calls.some(c=>c.command==='save_replay'&&c.args.durationSeconds===30),'duration preserved');bridge.failRuntime=true;")
-    pump(1200)
-    test('Native menu clears stale readiness when the runtime disconnects',"check(q('#replay-menu-status-title').textContent==='Replay unavailable','unavailable status');check(q('[data-menu-duration]').disabled,'stale saves disabled');bridge.failRuntime=false;bridge.outsideClick=false;")
-    pump(1200)
-    test('Native menu respects disabled outside dismissal',"window.beforeCloses=bridge.calls.filter(c=>c.command==='hide_replay_menu').length;document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(bridge.calls.filter(c=>c.command==='hide_replay_menu').length===beforeCloses,'outside click ignored');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));check(bridge.calls.filter(c=>c.command==='hide_replay_menu').length===beforeCloses+1,'Escape closes');bridge.outsideClick=true;")
-    pump(1200)
-    test('Native menu supports outside and explicit dismissal',"window.beforeCloses=bridge.calls.filter(c=>c.command==='hide_replay_menu').length;document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));click('[data-action=hide-replay-menu]');check(bridge.calls.filter(c=>c.command==='hide_replay_menu').length===beforeCloses+2,'both dismissal controls');window.dispatchEvent(new Event('focus'));check(document.activeElement===q('h1'),'reopen neutral focus');")
-    pump(300)
-    test('Native menu refreshes when reopened without retaining old save feedback',"check(!q('#replay-menu-feedback').dataset.manual,'old feedback cleared');check(q('#replay-menu-status-title').textContent==='Ready to save','fresh status');check(!bridge.errors.length,bridge.errors.join(';'));")
     (ARTIFACTS/'workspace-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
     print(f'PASS: {len(checks)} workspace checks. Screenshots: {ARTIFACTS}')
 finally:

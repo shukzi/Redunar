@@ -9,7 +9,8 @@ for panel transparency and one fixed-layout antialiased glyph pipeline:
 
 - `panel.vert` emits one buffer-free full-screen triangle using
   `gl_VertexIndex`;
-- `panel.frag` emits Redunar's dark panel color;
+- `panel.frag` selects one of eight bounded panel/border palettes and clips an
+  optional corner radius supplied through a 24-byte push constant;
 - dynamic viewport and scissor state constrain the draw to the panel;
 - dynamic constant-alpha blending applies the saved 0–100% opacity;
 - `glyph.vert` maps one bounded glyph viewport without buffers or descriptors;
@@ -17,7 +18,8 @@ for panel transparency and one fixed-layout antialiased glyph pipeline:
   named scalar push-constant words. It reconstructs that 2x source at the
   saved fractional overlay scale, so 200% text no longer enlarges 9x12 bitmap
   squares; and
-- dynamic constant-color blending selects Redunar accent or body text.
+- dynamic constant-color blending selects the active palette's accent, muted,
+  divider, or body text color.
 
 The generated coverage table lives in `redunar-core`. Regenerate it with
 `tools/generate-overlay-font.py` and the licensed Noto Sans Mono Regular face;

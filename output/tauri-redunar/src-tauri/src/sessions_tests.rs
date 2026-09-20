@@ -111,6 +111,8 @@ fn active_capture_accepts_global_overlay_changes_without_a_restart() {
 
     let requested = GlobalGameProfile {
         overlay_preset: redunar_core::OverlayPreset::Custom,
+        overlay_layout: redunar_core::OverlayLayout::Telemetry,
+        overlay_palette: redunar_core::OverlayPalette::Amethyst,
         overlay_metrics: redunar_core::OverlayMetricSet::from_bits(
             redunar_core::OverlayMetricSet::FPS | redunar_core::OverlayMetricSet::GPU_LOAD,
         )
@@ -126,6 +128,8 @@ fn active_capture_accepts_global_overlay_changes_without_a_restart() {
     );
     let active = f.engine.active.as_ref().unwrap();
     assert_eq!(active.profile.overlay_preset, requested.overlay_preset);
+    assert_eq!(active.profile.overlay_layout, requested.overlay_layout);
+    assert_eq!(active.profile.overlay_palette, requested.overlay_palette);
     assert_eq!(active.profile.overlay_metrics, requested.overlay_metrics);
     assert_eq!(active.profile.overlay_corner, requested.overlay_corner);
     assert_eq!(active.profile.overlay_opacity, requested.overlay_opacity);

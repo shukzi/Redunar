@@ -51,7 +51,7 @@ Paths below are relative to `output/tauri-redunar/`:
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
 | Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
-| Replay menu and shortcuts | `src-tauri/src/replay_menu_window.rs`, `hotkeys.rs`; `ui/replay-menu.html` |
+| Replay menu and shortcuts | `src-tauri/src/hotkeys.rs`; `crates/redunar-hotkeys` (pointer capture); `crates/redunar-capture-vulkan/src/overlay.rs` (in-game menu render); `ui/replay-menu-view.mjs` (app preview) |
 | Tray preference/lifecycle | `src-tauri/src/tray.rs`, `main.rs` |
 | Real-data mapping | `ui/native-data.mjs`, `app.js` |
 | History coordinates and inspection | `ui/history-timeline.mjs`, `history-chart.css` |
@@ -76,8 +76,9 @@ Do not flatten inherited values on save. Native saves reject stale drafts;
 unrelated game/launch/preference updates must preserve pending edits. Compatibility
 fields may remain persisted without reappearing as controls.
 
-Tauri exposes frame-metric collection and overlay visibility. Supported launches
-request replay automatically. Replay settings and shortcuts remain separately configurable.
+Tauri exposes frame-metric collection, overlay visibility, and the bounded
+layout/palette settings owned by the global profile. Supported launches request
+replay automatically. Replay settings and shortcuts remain separately configurable.
 Global overlay visibility affects the current game when inherited; its custom
 per-game setting takes precedence. A visibility-only save must not be rejected
 because unchanged recording settings are locked.
@@ -134,16 +135,26 @@ layer. Metrics visibility is reversible without removing that prepared runtime;
 save feedback can remain visible independently. Geometry/font details live in
 `redunar-capture-vulkan/src/overlay.rs`, core font data, and the
 [shader notes](crates/redunar-capture-vulkan/src/shaders/README.md).
+The effective profile carries Grid, Ribbon, or Telemetry and one of eight
+bounded palettes through direct-launch environment values, the versioned Steam
+activation wire format, and the live overlay telemetry block. Metric presets
+and Custom metric bits remain separate, so changing structure or color never
+changes which measurements are selected.
 
-The active Tauri replay shortcut opens `ui/replay-menu.html` in a dedicated,
-transparent, undecorated native webview. It does not load the main app document.
-The app's Preview replay menu is a separate dialog using shared menu presentation.
-Neither is proof of native in-swapchain menu compositing on every desktop.
+The active Tauri replay shortcut toggles the in-game Replay menu through the
+daemon's replay control socket. The Vulkan capture layer renders the panel into
+the game's own swapchain (see `redunar-capture-vulkan/src/overlay.rs`), and the
+hotkey helper grabs the mice and streams pointer events while it is open; no
+desktop menu webview exists. If the session exposes readable keyboard devices
+but no readable mouse event device, the helper still opens the in-game panel in
+view-only mode and reports the missing pointer capability to Tauri. The app's
+Preview replay menu is a dialog using shared menu presentation in
+`ui/replay-menu-view.mjs`.
 Close to tray controls icon visibility immediately. Closing hides only when the
 preference and usable tray registration allow reopening; otherwise it exits.
-Loss of the tray host must not strand a hidden main window. Closing the replay
-window dismisses the menu rather than quitting the app. Native hotkey dispatch
-continues while the main webview is hidden; an empty binding set is valid.
+Loss of the tray host must not strand a hidden main window. Native hotkey
+dispatch continues while the main webview is hidden; an empty binding set is
+valid.
 
 ## Persistence and compatibility
 

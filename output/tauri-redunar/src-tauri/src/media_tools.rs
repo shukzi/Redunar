@@ -5,7 +5,10 @@ use std::{
     ffi::OsStr,
     fs,
     io::Read,
-    os::unix::fs::PermissionsExt,
+    os::unix::{
+        fs::PermissionsExt,
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock},
@@ -36,14 +39,36 @@ pub fn ffmpeg(required_encoder: Option<&str>) -> Result<Command, String> {
             || probe_encoders(&path, PROBE_TIMEOUT, PROBE_LIMIT),
         )?;
     }
-    Ok(Command::new(path))
+    Ok(kill_when_parent_dies(Command::new(path)))
 }
 
 pub fn ffprobe() -> Result<Command, String> {
-    Ok(Command::new(resolve(
+    Ok(kill_when_parent_dies(Command::new(resolve(
         "ffprobe",
         std::env::var_os("PATH").as_deref(),
-    )?))
+    )?)))
+}
+
+/// Ask the kernel to send SIGKILL to a spawned media tool when the thread
+/// that spawned it exits. The UI always reaps its children cooperatively;
+/// this is a backstop so a killed or crashed Redunar cannot leave FFmpeg or
+/// FFprobe blocked forever on a closed pipe. The shortcut helper is
+/// deliberately excluded: it exits on stdin end-of-file, which keeps
+/// shortcuts alive across unrelated worker-thread turnover.
+#[must_use]
+pub fn kill_when_parent_dies(command: Command) -> Command {
+    let mut command = command;
+    // SAFETY: the pre-exec handler runs in the child before exec and calls
+    // only the async-signal-safe prctl with a fixed request and signal.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
 }
 
 fn resolve(tool: &str, search: Option<&OsStr>) -> Result<PathBuf, String> {

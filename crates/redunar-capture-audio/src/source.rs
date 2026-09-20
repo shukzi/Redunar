@@ -10,6 +10,7 @@ use std::fmt;
 use std::fs;
 use std::io::{Read, Take};
 use std::os::fd::AsFd;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -170,7 +171,8 @@ impl PipeWireGameAudioCapture {
         }
         let encoder =
             OpusEncoder::open().map_err(|error| AudioCaptureError::new(error.to_string()))?;
-        let mut child = Command::new(PW_CAT_PATH)
+        let mut command = Command::new(PW_CAT_PATH);
+        command
             .args([
                 "--record",
                 "--raw",
@@ -189,6 +191,26 @@ impl PipeWireGameAudioCapture {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            ;
+        {
+            // SAFETY: the closure runs in the child between fork and exec
+            // and calls only the async-signal-safe prctl with fixed values.
+            // Ask the kernel to kill this recording stream if Redunar dies
+            // without reaping it. The cooperative paths (pause, epoch reset,
+            // session end) already kill and wait; this is the backstop that
+            // prevents an orphaned pw-cat from capturing audio forever after
+            // a crash or SIGKILL. The worker that spawns it outlives every
+            // child it owns, so the parent-death signal cannot fire early.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let mut child = command
             .spawn()
             .map_err(|error| {
                 AudioCaptureError::new(format!("could not start game audio capture: {error}"))

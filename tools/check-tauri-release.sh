@@ -70,6 +70,8 @@ test -x "$staging_root/usr/bin/redunar-steam-launch"
 test -f "$staging_root/usr/bin/libredunar_capture_vulkan.so"
 test -x "$staging_root/usr/libexec/redunar-hotkey-helper"
 test -f "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
+grep -Fq 'ENV{ID_INPUT_KEYBOARD}=="1"' "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
+grep -Fq 'ENV{ID_INPUT_MOUSE}=="1"' "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
 test -f "$staging_root/usr/share/licenses/redunar/LICENSE"
 test -f "$staging_root/usr/share/licenses/redunar/COPYRIGHT"
 test -f "$staging_root/usr/share/doc/redunar/DEPENDENCY-LICENSES.md"
@@ -137,6 +139,7 @@ if command -v rpmbuild >/dev/null 2>&1; then
   grep -Fq 'postinstall scriptlet' <<<"$rpm_scripts"
   grep -Fq '/usr/bin/udevadm control --reload-rules' <<<"$rpm_scripts"
   grep -Fq '/usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_KEYBOARD=1 --action=change' <<<"$rpm_scripts"
+  grep -Fq '/usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_MOUSE=1 --action=change' <<<"$rpm_scripts"
   ! grep -Eiq 'pkexec|polkit|steam|/usr/bin/sudo' <<<"$rpm_scripts"
 fi
 

@@ -191,6 +191,10 @@ struct State {
     retired_routes: [Option<Route>; 1],
     abandoned_route: Option<Route>,
     disabled: bool,
+    /// Highest presentation timestamp already exported to the daemon. This
+    /// is process-wide because the daemon keeps one codec epoch across a
+    /// swapchain route replacement.
+    last_export_timestamp_ns: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -265,6 +269,21 @@ fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64) -> u64 
         now_ns
     } else {
         current_deadline_ns
+    }
+}
+
+/// Keep exported presentation times strictly increasing across route
+/// replacement. Within one route the cadence deadline already rises, so this
+/// only fires when a replacement route resets its deadline bookkeeping while
+/// the newest timestamp already stamped is still ahead of wall time (a stale
+/// future deadline from the retired route). The replay pipeline treats a
+/// non-monotonic timestamp as a terminal codec-epoch violation, so one
+/// interleaved stale stamp must never be exported.
+fn monotonic_export_timestamp(previous_ns: u64, candidate_ns: u64) -> u64 {
+    if candidate_ns > previous_ns {
+        candidate_ns
+    } else {
+        previous_ns.saturating_add(1)
     }
 }
 
@@ -608,8 +627,14 @@ pub(crate) unsafe fn prepare_present(
         route.next_submit_ns =
             next_capture_deadline(route.next_submit_ns, now_ns, route.frame_interval_ns);
     }
+    let exported_timestamp_ns = proof.map(|proof| {
+        let timestamp_ns =
+            monotonic_export_timestamp(state.last_export_timestamp_ns, proof.timestamp_ns);
+        state.last_export_timestamp_ns = timestamp_ns;
+        (proof, timestamp_ns)
+    });
     drop(state);
-    if let Some(proof) = proof {
+    if let Some((proof, timestamp_ns)) = exported_timestamp_ns {
         producer::record_replay_frame_copied(
             proof.source,
             proof.copied_bytes,
@@ -623,7 +648,7 @@ pub(crate) unsafe fn prepare_present(
                 0,
                 proof.source.width.saturating_mul(4),
                 0,
-                proof.timestamp_ns,
+                timestamp_ns,
                 proof.duration_ns,
             );
         }

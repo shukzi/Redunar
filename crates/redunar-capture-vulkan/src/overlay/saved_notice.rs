@@ -72,6 +72,8 @@ mod tests {
             revision: 2,
             corner: 3,
             preset: 1,
+            layout: 0,
+            palette: 0,
             metrics: 3,
             opacity_percent: 70,
             scale_percent: 125,
@@ -82,13 +84,13 @@ mod tests {
             gpu_utilization_tenths: None,
             gpu_temperature_tenths_celsius: None,
         };
-        state.update_presentation(Some(telemetry), 1_000_000);
+        state.update_presentation(Some(telemetry), None, 1_000_000);
         assert!(state.plan.is_empty());
         assert!(!state.saved_notice.is_empty());
         assert_eq!(state.history.snapshot.cpu_percent, Some(75));
         telemetry.metrics_visible = Some(true);
         telemetry.revision = 4;
-        state.update_presentation(Some(telemetry), 2_000_000);
+        state.update_presentation(Some(telemetry), None, 2_000_000);
         assert!(!state.plan.is_empty());
         assert!(!state.saved_notice.is_empty());
         assert_eq!(state.plan.corner, OverlayCorner::BottomRight);
@@ -99,14 +101,16 @@ mod tests {
             OverlayConfig {
                 corner: OverlayCorner::BottomRight,
                 preset: OverlayPreset::Detailed,
+                layout: crate::overlay::OverlayLayout::Grid,
+                palette: crate::overlay::OverlayPalette::Redunar,
                 metrics: 3,
                 opacity_percent: 70,
                 scale_percent: 125,
             }
         );
         telemetry.metrics_visible = Some(false);
-        state.update_presentation(Some(telemetry), 3_000_000);
-        state.update_presentation(None, 4_000_000_000);
+        state.update_presentation(Some(telemetry), None, 3_000_000);
+        state.update_presentation(None, None, 4_000_000_000);
         assert!(state.plan.is_empty());
         assert!(state.saved_notice.is_empty());
         assert!(

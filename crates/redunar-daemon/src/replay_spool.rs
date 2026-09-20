@@ -107,6 +107,13 @@ pub struct ReplaySpoolStats {
     pub dropped_queue_full: u64,
     pub dropped_awaiting_keyframe: u64,
     pub recovered_segments: u32,
+    /// Packet commits that exceeded the bounded write latency. These remain
+    /// in the running phase; sustained slowness degrades through the bounded
+    /// queue drop path instead of stopping the spool.
+    pub slow_writes: u64,
+    /// Times disk history discarded a partial segment after a transient
+    /// commit failure and resynchronized at the next keyframe.
+    pub segment_resyncs: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -209,6 +216,8 @@ struct SharedStats {
     first_packet_timestamp_ns: AtomicU64,
     latest_packet_end_ns: AtomicU64,
     accepted_packets: AtomicU64,
+    slow_writes: AtomicU64,
+    segment_resyncs: AtomicU64,
 }
 
 /// Asynchronous, disk-segment rolling history for already-encoded packets.
@@ -254,6 +263,8 @@ impl ReplaySegmentSpool {
             first_packet_timestamp_ns: AtomicU64::new(u64::MAX),
             latest_packet_end_ns: AtomicU64::new(0),
             accepted_packets: AtomicU64::new(0),
+            slow_writes: AtomicU64::new(0),
+            segment_resyncs: AtomicU64::new(0),
         });
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let worker_index = Arc::clone(&index);
@@ -467,6 +478,8 @@ impl ReplaySegmentSpool {
             dropped_queue_full: self.shared.dropped_queue_full.load(Ordering::Relaxed),
             dropped_awaiting_keyframe: index.dropped_awaiting_keyframe,
             recovered_segments: index.recovered_segments,
+            slow_writes: self.shared.slow_writes.load(Ordering::Relaxed),
+            segment_resyncs: self.shared.segment_resyncs.load(Ordering::Relaxed),
         }
     }
 
@@ -670,19 +683,31 @@ fn run_worker(
                     limits,
                     index,
                 ) {
-                    eprintln!("Redunar Replay: disk spool failed: {error}");
-                    shared
-                        .phase
-                        .store(ReplaySpoolPhase::Failed.code(), Ordering::Release);
-                    break;
+                    // A packet write, rotation commit, or segment-creation
+                    // failure invalidates only the partial segment. Rolling
+                    // history degrades instead of stopping the recorder: the
+                    // temporary file is removed, advertised buffered duration
+                    // resets honestly, and the next independently decodable
+                    // keyframe starts a fresh segment.
+                    eprintln!("Redunar Replay: disk spool dropped a segment: {error}");
+                    if let Some(writer) = current.take() {
+                        let _ = fs::remove_file(writer.temporary_path);
+                    }
+                    shared.segment_resyncs.fetch_add(1, Ordering::Relaxed);
+                    reset_buffered_duration(shared);
+                    continue;
                 }
                 record_buffered_packet(shared, &packet);
                 if started.elapsed() > MAX_WRITE_LATENCY {
-                    eprintln!("Redunar Replay: disk spool exceeded the bounded write latency");
-                    shared
-                        .phase
-                        .store(ReplaySpoolPhase::SlowStorage.code(), Ordering::Release);
-                    break;
+                    // One slow commit is counted, not terminal. Sustained
+                    // slowness drains the bounded queue, and the existing
+                    // queue-full discontinuity path drops replay work exactly
+                    // as a stall should, without ending the recording session.
+                    eprintln!(
+                        "Redunar Replay: disk spool exceeded the bounded write latency; \
+                         disk history is degrading through bounded drops"
+                    );
+                    shared.slow_writes.fetch_add(1, Ordering::Relaxed);
                 }
             }
             SpoolCommand::ResetEpoch => {
@@ -690,13 +715,17 @@ fn run_worker(
                     && let Err(error) = fs::remove_file(writer.temporary_path)
                     && error.kind() != io::ErrorKind::NotFound
                 {
-                    eprintln!("Redunar Replay: disk spool epoch reset failed: {error}");
-                    shared
-                        .phase
-                        .store(ReplaySpoolPhase::Failed.code(), Ordering::Release);
-                    break;
+                    // The partial file is abandoned rather than retried. It
+                    // stays invisible to snapshots because the index is
+                    // cleared below, and the next spool open removes leftovers.
+                    eprintln!(
+                        "Redunar Replay: disk spool could not remove the active segment on reset: {error}"
+                    );
                 }
                 if let Err(error) = clear_completed_segments(directory, index) {
+                    // A half-cleared index could let a new codec epoch save
+                    // old-epoch segments, so this stays terminal. The export
+                    // pump re-arms a fresh spool, which retries the reset.
                     eprintln!("Redunar Replay: completed spool cleanup failed: {error}");
                     shared
                         .phase
@@ -709,14 +738,14 @@ fn run_worker(
                 let result = current.take().map_or(Ok(()), |writer| {
                     commit_segment(directory, writer, limits, index)
                 });
-                let failed = result.is_err();
-                let _ = response.send(result);
-                if failed {
-                    shared
-                        .phase
-                        .store(ReplaySpoolPhase::Failed.code(), Ordering::Release);
-                    break;
+                if result.is_err() {
+                    // The save caller receives this error and degrades to the
+                    // completed-segment history; the worker itself stays
+                    // available for the next keyframe-safe segment.
+                    shared.segment_resyncs.fetch_add(1, Ordering::Relaxed);
+                    reset_buffered_duration(shared);
                 }
+                let _ = response.send(result);
             }
             SpoolCommand::Shutdown => break,
         }
@@ -855,6 +884,20 @@ fn create_segment(
         .create_new(true)
         .mode(0o600)
         .open(&temporary_path)
+        // A failed rotation can abandon this exact temporary name. Remove the
+        // leftover once and retry so a transient disk error cannot turn into
+        // a permanent create collision on the next keyframe.
+        .or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+            let _ = fs::remove_file(&temporary_path);
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary_path)
+        })
         .map_err(|error| io_error("could not create Replay segment", &error))?;
     file.write_all(SEGMENT_MAGIC)
         .map_err(|error| io_error("could not write Replay segment header", &error))?;
@@ -883,8 +926,13 @@ fn commit_segment(
         "{SEGMENT_PREFIX}{:016x}-{:016x}-{:016x}{SEGMENT_SUFFIX}",
         writer.sequence, writer.start_timestamp_ns, writer.end_timestamp_ns
     ));
-    fs::rename(&writer.temporary_path, &destination)
-        .map_err(|error| io_error("could not commit Replay segment", &error))?;
+    if let Err(error) = fs::rename(&writer.temporary_path, &destination) {
+        // The partial segment is invalid history for any later save, so the
+        // abandoned temporary file is removed here before the error reaches
+        // the worker's drop-and-resynchronize path.
+        let _ = fs::remove_file(&writer.temporary_path);
+        return Err(io_error("could not commit Replay segment", &error));
+    }
     sync_directory(directory)?;
     let metadata = fs::symlink_metadata(&destination)
         .map_err(|error| io_error("could not inspect Replay segment", &error))?;

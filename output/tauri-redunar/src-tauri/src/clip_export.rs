@@ -121,7 +121,14 @@ pub async fn export_replay_clip(
     let exports = exports.inner().clone();
     let (id, job) = exports.begin()?;
     let result = tauri::async_runtime::spawn_blocking(move || {
-        export_clip(opened.file, opened.bytes, start_seconds, duration, &job)
+        export_clip(
+            opened.file,
+            opened.bytes,
+            opened.game_name,
+            start_seconds,
+            duration,
+            &job,
+        )
     })
     .await
     .map_err(|error| format!("Clip export worker failed: {error}"));
@@ -146,6 +153,7 @@ fn validate_trim_range(start_seconds: f64, end_seconds: f64) -> Result<f64, Stri
 fn export_clip(
     source: File,
     source_bytes: u64,
+    source_game_name: Option<String>,
     start_seconds: f64,
     duration_seconds: f64,
     job: &ExportJob,
@@ -198,6 +206,11 @@ fn export_clip(
         .and_then(|name| name.to_str())
         .ok_or("The exported clip name is invalid")?
         .to_owned();
+    // Carry the source clip's game attribution onto the trimmed export.
+    // Labeling only: a ledger failure never fails a completed export.
+    if let Some(game_name) = source_game_name {
+        let _ = crate::backend::service().record_clip_game(&file_name, &game_name);
+    }
     job.progress_thousandths.store(1000, Ordering::Release);
     Ok(ExportedClip {
         file_name,

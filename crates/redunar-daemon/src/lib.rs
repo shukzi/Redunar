@@ -19,6 +19,7 @@ mod module_state;
 mod monitor;
 mod replay;
 mod replay_audio;
+mod replay_clip_games;
 mod replay_control;
 mod replay_diagnostics;
 mod replay_encoder;
@@ -265,7 +266,9 @@ impl RedunarService {
         let coordinator = self
             .runtime
             .game_session
-            .get_or_init(ProductionGameSessionCoordinator::new)
+            .get_or_init(|| {
+                ProductionGameSessionCoordinator::new(self.state_directory.clone())
+            })
             .clone();
         self.runtime.replay_control.get_or_init(|| {
             replay_control::ReplayControlServer::start(
@@ -307,6 +310,17 @@ impl RedunarService {
             |error| CaptureRuntimeStatus::Unavailable(error.to_string()),
             |_| CaptureRuntimeStatus::Available,
         )
+    }
+
+    /// Sweep capture-session directories left by a previous Redunar instance
+    /// that died before cleanup ran. The caller (the app shell) must have
+    /// confirmed that no other live instance owns the backend session; the
+    /// sweep never removes paths another uid owns. Returns the removed count
+    /// for diagnostics; leftovers are never fatal to startup.
+    #[must_use]
+    pub fn sweep_stale_capture_sessions(&self) -> usize {
+        CaptureSessionConfig::for_current_build()
+            .map_or(0, |config| config.sweep_stale_session_directories())
     }
 
     /// Verify the packaged Steam bridge and return the exact Launch Options
@@ -586,8 +600,48 @@ impl RedunarService {
         if !status.initialized {
             return Ok(Vec::new());
         }
-        ReplayClipStore::open_existing(directory, budget)
+        let clips = ReplayClipStore::open_existing(directory, budget)
             .and_then(|store| store.inventory())
+            .map_err(|error| ReplayStorageAccessError::inventory(&error))?;
+        Ok(self.attach_clip_games(clips))
+    }
+
+    /// Join each clip with the game that recorded it. The persisted ledger
+    /// wins; clips saved before attribution existed (or after a ledger
+    /// failure) fall back to the commit time encoded in the clip name
+    /// matching exactly one recorded session window. Listing never fails
+    /// because labeling evidence is missing or unreadable.
+    fn attach_clip_games(
+        &self,
+        mut clips: Vec<ReplayClipEntry>,
+    ) -> Vec<ReplayClipEntry> {
+        let ledger = replay_clip_games::games(&self.state_directory);
+        let sessions = session_history::load(&self.state_directory).unwrap_or_default();
+        for clip in &mut clips {
+            clip.game_name = replay_clip_games::resolve(&clip.file_name, &ledger, &sessions);
+        }
+        clips
+    }
+
+    /// Attribute one owned clip to a game name (for example, an export of a
+    /// clip whose source was recorded by a game). Best-effort labeling;
+    /// callers must not fail a feature because attribution could not persist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the clip name is not a Redunar-generated name or
+    /// the private ledger cannot be rewritten.
+    pub fn record_clip_game(
+        &self,
+        file_name: &str,
+        game_name: &str,
+    ) -> Result<(), ReplayStorageAccessError> {
+        if !replay_store::is_owned_clip_name(std::ffi::OsStr::new(file_name)) {
+            return Err(ReplayStorageAccessError::inventory(
+                &"clip name is not a Redunar-generated name",
+            ));
+        }
+        replay_clip_games::record(&self.state_directory, file_name, game_name)
             .map_err(|error| ReplayStorageAccessError::inventory(&error))
     }
 

@@ -98,6 +98,7 @@ version = "0.1.0"
 name = "redunar-capture-audio"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "nix",
 ]
 

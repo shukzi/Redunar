@@ -26,6 +26,8 @@ const POINTER_SPEED_GAIN_MILLI: i64 = 300;
 const POINTER_SPEED_LIMIT: i64 = 32;
 const POINTER_VERTICAL_RATIO_MILLI: i64 = 1_568;
 const EVENT_TICK: Duration = Duration::from_millis(8);
+const CHORD_BATCH_WINDOW: Duration = Duration::from_millis(4);
+const MAX_CHORD_BATCH: usize = 32;
 const MOTION_INTERVAL: Duration = Duration::from_millis(8);
 const MENU_PING_INTERVAL: Duration = Duration::from_millis(500);
 const MENU_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -56,7 +58,7 @@ enum HotkeyAction {
     Save(u16),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct KeyEvent {
     device: usize,
     code: u16,
@@ -113,10 +115,6 @@ impl MenuCapture {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "menu mouse capture remains dormant in the restored helper path"
-    )]
     fn opened(&mut self, control: UnixStream, now: Instant) {
         self.open = true;
         self.control = Some(control);
@@ -510,68 +508,87 @@ fn monitor_events(
     while !stop.load(Ordering::Acquire) {
         match receiver.recv_timeout(EVENT_TICK) {
             Ok(event) => {
-                let identity = (event.device, event.code);
-                match event.value {
-                    0 => {
-                        pressed.remove(&identity);
+                let events = chord_event_batch(receiver, event);
+                for event in events {
+                    let identity = (event.device, event.code);
+                    // Escape is the menu's recovery path as well as its normal
+                    // dismissal key. Handle it before composite-device press
+                    // suppression so a missed release on one keyboard interface
+                    // cannot strand an open menu. Some evdev devices report an
+                    // already-held key as value 2, which must close it too.
+                    if menu.open && escape_closes_menu(event) {
+                        if event.value == 1 {
+                            pressed.insert(identity);
+                        }
+                        close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
+                        continue;
                     }
-                    1 => {
-                        let first_logical_press = logical_press_is_new(&pressed, event.code);
-                        pressed.insert(identity);
-                        // Composite USB keyboards can expose the same physical
-                        // keys through more than one `-event-kbd` interface.
-                        // Treat those duplicate edges as one logical press so
-                        // an overlay toggle cannot immediately toggle itself
-                        // closed and a save cannot be submitted twice.
-                        if !first_logical_press {
-                            continue;
+                    match event.value {
+                        0 => {
+                            pressed.remove(&identity);
                         }
-                        if menu.open && event.code == KEY_ESC {
-                            close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
-                            continue;
-                        }
-                        let modifiers = active_modifiers(&pressed);
-                        let action = bindings
-                            .iter()
-                            .find(|binding| {
-                                binding.key == event.code && binding.modifiers == modifiers
-                            })
-                            .map(|binding| binding.action);
-                        // The Replay menu is mouse-only. Any unrelated
-                        // non-modifier key closes it before that same event is
-                        // handled by the game or desktop (notably Alt+Tab), so
-                        // an evdev mouse grab can never strand app switching.
-                        if menu.open
-                            && action != Some(HotkeyAction::ToggleOverlay)
-                            && !is_modifier_key(event.code)
-                        {
-                            close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
-                        }
-                        if let Some(action) = action {
-                            match action {
-                                HotkeyAction::ToggleOverlay => {
-                                    println!("OVERLAY");
-                                }
-                                HotkeyAction::Save(seconds) => {
-                                    let command = format!("SAVE {seconds}\n");
-                                    match request_save(control_path, command.as_bytes()) {
-                                        Ok(()) => println!("ACTIVATED {seconds}"),
-                                        Err(error) => println!("REJECTED {error}"),
+                        1 => {
+                            let first_logical_press = logical_press_is_new(&pressed, event.code);
+                            pressed.insert(identity);
+                            // Composite USB keyboards can expose the same physical
+                            // keys through more than one `-event-kbd` interface.
+                            // Treat those duplicate edges as one logical press so
+                            // an overlay toggle cannot immediately toggle itself
+                            // closed and a save cannot be submitted twice.
+                            if !first_logical_press {
+                                continue;
+                            }
+                            let modifiers = active_modifiers(&pressed);
+                            let action = bindings
+                                .iter()
+                                .find(|binding| {
+                                    binding.key == event.code && binding.modifiers == modifiers
+                                })
+                                .map(|binding| binding.action);
+                            // The Replay menu is mouse-only. Any unrelated
+                            // non-modifier key closes it before that same event is
+                            // handled by the game or desktop (notably Alt+Tab), so
+                            // an evdev mouse grab can never strand app switching.
+                            if menu.open
+                                && action != Some(HotkeyAction::ToggleOverlay)
+                                && !is_modifier_key(event.code)
+                            {
+                                close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
+                            }
+                            if let Some(action) = action {
+                                match action {
+                                    HotkeyAction::ToggleOverlay => {
+                                        // The helper owns the whole in-game
+                                        // menu session: it asks the daemon to
+                                        // toggle, grabs every mouse on success
+                                        // so the game receives no pointer input,
+                                        // and streams MENU MOVE/BUTTON updates
+                                        // until the menu closes.
+                                        toggle_menu(control_path, mice, &mut menu);
+                                    }
+                                    HotkeyAction::Save(seconds) => {
+                                        let command = format!("SAVE {seconds}\n");
+                                        match request_save(control_path, command.as_bytes()) {
+                                            Ok(()) => println!("ACTIVATED {seconds}"),
+                                            Err(error) => println!("REJECTED {error}"),
+                                        }
                                     }
                                 }
+                                io::stdout().flush().map_err(|error| error.to_string())?;
                             }
-                            io::stdout().flush().map_err(|error| error.to_string())?;
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if menu.open && !process_mouse_events(mice, &mut menu) {
-            release_all(mice);
-            menu.closed_by_release();
+            // A failed pointer request used to clear only the helper's local
+            // state, leaving the Vulkan menu visible while Escape was ignored.
+            // Close through the owner so both sides make the same transition.
+            close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
         }
         if menu.open && watchdog_action(&menu, Instant::now()) != WatchdogAction::None {
             close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
@@ -620,17 +637,9 @@ fn request_save(control_path: &Path, command: &[u8]) -> Result<(), String> {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "menu mouse capture remains dormant in the restored helper path"
-)]
 fn toggle_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture) {
     if menu.open {
         close_menu(control_path, mice, menu, b"MENU TOGGLE\n");
-        return;
-    }
-    if mice.is_empty() {
-        println!("REJECTED no bounded mouse input device is available");
         return;
     }
     let mut control = match UnixStream::connect(control_path) {
@@ -641,17 +650,73 @@ fn toggle_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture)
         }
     };
     match request_on_stream(&mut control, b"MENU TOGGLE\n") {
-        Ok(response) if response == "OK GRAB\n" => match grab_all(mice) {
-            Ok(()) => menu.opened(control, Instant::now()),
-            Err(error) => {
-                release_all(mice);
-                let _ = request_on_stream(&mut control, b"MENU ESCAPE\n");
-                println!("REJECTED mouse capture failed: {error}");
+        Ok(response) if response == "OK GRAB\n" => {
+            if mice.is_empty() {
+                // Keyboard devices commonly receive a logind ACL while raw
+                // mouse event nodes do not. The menu is still useful as an
+                // in-game status surface and the configured save shortcut
+                // remains available, so lack of pointer access must not turn
+                // a valid Shift+F8 press into a no-op.
+                menu.opened(control, Instant::now());
+                println!("MENU OPENED VIEW ONLY");
+            } else {
+                match grab_all(mice) {
+                    Ok(()) => {
+                        menu.opened(control, Instant::now());
+                        // Report the transition so the app can show honest
+                        // shortcut activity. The menu itself is rendered into
+                        // the captured game by the Vulkan layer; no desktop
+                        // window is involved.
+                        println!("MENU OPENED");
+                    }
+                    Err(error) => {
+                        release_all(mice);
+                        // Pointer ownership is optional; the menu itself is
+                        // rendered independently in the game's swapchain. A
+                        // transient EVIOCGRAB failure must not erase a valid
+                        // hotkey action or make the panel flash closed.
+                        menu.opened(control, Instant::now());
+                        println!("MENU OPENED VIEW ONLY");
+                        eprintln!("Replay menu pointer capture unavailable: {error}");
+                    }
+                }
             }
-        },
+        }
         Ok(_) => println!("REJECTED Replay menu returned an invalid open response"),
         Err(error) => println!("REJECTED {error}"),
     }
+}
+
+fn chord_event_batch(receiver: &mpsc::Receiver<KeyEvent>, first: KeyEvent) -> Vec<KeyEvent> {
+    let mut events = Vec::with_capacity(8);
+    events.push(first);
+    let deadline = Instant::now() + CHORD_BATCH_WINDOW;
+    while events.len() < MAX_CHORD_BATCH {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(event) => events.push(event),
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    // Composite keyboards may publish modifier and function-key edges from
+    // different event interfaces. Reader-thread scheduling is not a chord
+    // ordering contract, so apply modifier presses first and releases last
+    // within this tiny bounded window.
+    events.sort_by_key(|event| {
+        let priority = match (event.value, is_modifier_key(event.code)) {
+            (1, true) => 0,
+            (1, false) => 1,
+            (2, _) => 2,
+            (0, false) => 3,
+            (0, true) => 4,
+            _ => 5,
+        };
+        (priority, event.device, event.code)
+    });
+    events
 }
 
 fn close_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture, command: &[u8]) {
@@ -662,12 +727,9 @@ fn close_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture, 
         .or_else(|_| request_control(control_path, command));
     release_all(mice);
     menu.closed_by_release();
+    println!("MENU CLOSED");
 }
 
-#[allow(
-    dead_code,
-    reason = "menu mouse capture remains dormant in the restored helper path"
-)]
 fn grab_all(devices: &mut [Device]) -> Result<(), String> {
     for grabbed in 0..devices.len() {
         let device = &mut devices[grabbed];
@@ -820,6 +882,10 @@ fn logical_press_is_new(pressed: &HashSet<(usize, u16)>, code: u16) -> bool {
     !pressed
         .iter()
         .any(|&(_, pressed_code)| pressed_code == code)
+}
+
+fn escape_closes_menu(event: KeyEvent) -> bool {
+    event.code == KEY_ESC && matches!(event.value, 1 | 2)
 }
 
 fn is_modifier_key(code: u16) -> bool {
@@ -977,6 +1043,31 @@ mod tests {
     }
 
     #[test]
+    fn composite_keyboard_batch_applies_modifier_press_before_function_key() {
+        let (sender, receiver) = mpsc::sync_channel(4);
+        sender
+            .send(KeyEvent {
+                device: 0,
+                code: 66,
+                value: 1,
+            })
+            .unwrap();
+        sender
+            .send(KeyEvent {
+                device: 1,
+                code: KEY_LEFTSHIFT,
+                value: 1,
+            })
+            .unwrap();
+        drop(sender);
+        let first = receiver.recv().unwrap();
+        let events = chord_event_batch(&receiver, first);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].code, KEY_LEFTSHIFT);
+        assert_eq!(events[1].code, 66);
+    }
+
+    #[test]
     fn watchdog_closes_only_an_open_inactive_menu() {
         let now = Instant::now();
         let mut menu = MenuCapture::closed(now);
@@ -1007,5 +1098,55 @@ mod tests {
         assert!(is_modifier_key(KEY_RIGHTSHIFT));
         assert!(!is_modifier_key(15));
         assert!(!is_modifier_key(KEY_ESC));
+    }
+
+    #[test]
+    fn escape_press_and_repeat_are_reliable_menu_close_edges() {
+        let event = |value| KeyEvent {
+            device: 0,
+            code: KEY_ESC,
+            value,
+        };
+        assert!(escape_closes_menu(event(1)));
+        assert!(escape_closes_menu(event(2)));
+        assert!(!escape_closes_menu(event(0)));
+        assert!(!escape_closes_menu(KeyEvent {
+            device: 0,
+            code: 2,
+            value: 1,
+        }));
+    }
+
+    #[test]
+    fn menu_opens_without_a_readable_mouse_device() {
+        let directory = std::env::temp_dir().join(format!(
+            "redunar-hotkey-view-only-menu-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("menu fixture directory");
+        let path = directory.join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("control fixture");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("menu request");
+            let mut request = String::new();
+            BufReader::new(&mut stream)
+                .read_line(&mut request)
+                .expect("read menu request");
+            assert_eq!(request, "MENU TOGGLE\n");
+            stream.write_all(b"OK GRAB\n").expect("menu response");
+        });
+
+        let mut menu = MenuCapture::closed(Instant::now());
+        toggle_menu(&path, &mut [], &mut menu);
+        server.join().expect("control fixture worker");
+        assert!(
+            menu.open,
+            "the in-game menu remains available without pointer access"
+        );
+        assert!(menu.control.is_some());
+
+        drop(menu);
+        std::fs::remove_file(&path).expect("remove control fixture");
+        std::fs::remove_dir(&directory).expect("remove menu fixture directory");
     }
 }

@@ -44,6 +44,7 @@ rpm_scripts=$(rpm -qp --scripts "$rpm_path")
 if ! grep -Fq 'postinstall scriptlet' <<<"$rpm_scripts" || \
    ! grep -Fq '/usr/bin/udevadm control --reload-rules' <<<"$rpm_scripts" || \
    ! grep -Fq '/usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_KEYBOARD=1 --action=change' <<<"$rpm_scripts" || \
+   ! grep -Fq '/usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_MOUSE=1 --action=change' <<<"$rpm_scripts" || \
    grep -Eiq 'pkexec|polkit|steam|/usr/bin/sudo' <<<"$rpm_scripts"; then
   printf '%s\n' 'local Tauri Redunar RPM must contain only the fixed udev refresh post-install script' >&2
   exit 1
@@ -63,7 +64,7 @@ if rpm -qlp "$rpm_path" | grep -Eq '/redunar-kms-helper$|/gg\.redunar\.replay-ca
   exit 1
 fi
 if ! rpm -qlp "$rpm_path" | grep -Fxq '/usr/lib/udev/rules.d/70-redunar-hotkeys.rules'; then
-  printf '%s\n' 'local Tauri Redunar RPM must install the keyboard uaccess rule' >&2
+  printf '%s\n' 'local Tauri Redunar RPM must install the input uaccess rule' >&2
   exit 1
 fi
 
