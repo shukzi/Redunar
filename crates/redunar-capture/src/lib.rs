@@ -6,9 +6,9 @@ mod overlay;
 
 pub use overlay::{
     OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayHardwareTelemetry, OverlayTelemetryError,
-    REPLAY_MENU_TELEMETRY_BYTES, ReplayMenuStatus, ReplayMenuTelemetry,
-    decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
-    encode_overlay_hardware_telemetry, encode_replay_menu_telemetry,
+    REPLAY_MENU_TELEMETRY_BYTES, REPLAY_SHORTCUT_LABEL_BYTES, ReplayMenuStatus,
+    ReplayMenuTelemetry, ReplayShortcutLabel, decode_overlay_hardware_telemetry,
+    decode_replay_menu_telemetry, encode_overlay_hardware_telemetry, encode_replay_menu_telemetry,
 };
 
 use std::error::Error;

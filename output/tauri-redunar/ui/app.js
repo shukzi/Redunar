@@ -1,6 +1,7 @@
 import { mergeGameDrafts } from './game-drafts.mjs';
 import { replayStatusCopy } from './replay-menu-view.mjs';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { latestReplayRequest } from './replay-requests.mjs';
 import { renderReplayFilmstrip } from './replay-filmstrip.mjs';
 import { watchReplayLoading } from './replay-loading.mjs';
@@ -47,6 +48,7 @@ let updateStatus = null;
 let startupUpdateCheckStarted = false;
 let toastTimer;
 const native = Boolean(window.__TAURI_INTERNALS__);
+const appWindow = native ? getCurrentWindow() : null;
 const loaded = {catalog:false,clips:false,history:false,global:false,preferences:false,replayPreferences:false};
 const errors = {};
 let hardware = null, runtime = null, modules = null, diagnostics = null, displayCapability = null, activeSession = null, replayPreferences = null, storageStatus = null, globalRevision = null, savedShortcutMap = {}, busy = false;
@@ -89,6 +91,7 @@ function moduleBadge(key,label='') {
  return `<span class="pill ${moduleClass(modules?.[key])}" data-module-status="${key}" data-module-label="${label}">${escape((label?label+' · ':'')+moduleText(modules?.[key]))}</span>`;
 }
 const workspace = $('#workspace');
+const scrollRoot = $('.window-content');
 const clip = () => clips.find(c=>c.id===selectedClip);
 const game = () => games.find(g=>g.id===selectedGame);
 const route = () => location.hash.slice(1) || 'overview';
@@ -244,7 +247,7 @@ function globalOverlay() {
 }
 function globalReplay() {
  const folder=replayPreferences?.resolved_directory||'Loading replay folder…';
- return `<section class="panel controls-panel"><h2>Capture defaults</h2><p>Changes apply to future sessions.</p>${field('Instant replay','Buffers automatically for supported games launched through Redunar. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Capture frame rate','',frameRateControl())}${field('Quality preset','',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Replay folder','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use Videos folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
+ return `<section class="panel controls-panel"><h2>Capture defaults</h2><p>Frame rate and quality apply to future sessions. File format applies to future saves.</p>${field('Instant replay','Buffers automatically for supported games launched through Redunar. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Capture frame rate','',frameRateControl())}${field('Quality preset','',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Applies to future saves, including the current session',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Replay folder','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use Videos folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
 }
 function frameRateControl() {
  const selected=Number(draft.fps), supported=displayCapability?.compatible_120_modes>0;
@@ -910,7 +913,21 @@ document.addEventListener('pointerup',event=>{
  suppressPlayerToggleClickUntil=performance.now()+500;
  togglePlayback();
 });
+document.addEventListener('pointerdown',event=>{
+ const resizeHandle=event.target.closest?.('[data-resize-direction]');
+ if(!resizeHandle||!appWindow||event.button!==0)return;
+ event.preventDefault();
+ appWindow.startResizeDragging(resizeHandle.dataset.resizeDirection).catch(error=>notify(`Window resize failed: ${message(error)}`));
+});
 document.addEventListener('click',event=>{
+ const windowControl=event.target.closest('[data-window-action]');
+ if(windowControl){
+  if(!appWindow)return;
+  const action=windowControl.dataset.windowAction;
+  const request=action==='minimize'?appWindow.minimize():action==='maximize'?appWindow.toggleMaximize():appWindow.close();
+  request.catch(error=>notify(`Window action failed: ${message(error)}`));
+  return;
+ }
  const timeline=event.target.closest('#clip-timeline');
  if(timeline){if(suppressTimelineClick){suppressTimelineClick=false;return;}if(!event.target.closest('.timeline-handle')){const value=pointerTimelineValue(event);if(value!==null)setTimelineValue('seek',value,true);return;}}
  const more=event.target.closest('.game-more');document.querySelectorAll('.game-more[open]').forEach(el=>{if(el!==more)el.open=false;});
@@ -1152,7 +1169,7 @@ document.addEventListener('submit',event=>{
 $('#dialog').addEventListener('cancel',event=>{if(exporting)event.preventDefault();});
 window.addEventListener('native-error',event=>notify(event.detail));
 window.addEventListener('focus',()=>{if(native&&route()==='library'&&loaded.catalog)installation.refresh();});
-window.addEventListener('hashchange',()=>{render();workspace.focus({preventScroll:true});scrollTo(0,0);});
+window.addEventListener('hashchange',()=>{render();workspace.focus({preventScroll:true});scrollRoot.scrollTo(0,0);});
 
 render();
     if(native){

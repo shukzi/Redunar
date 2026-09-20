@@ -1,10 +1,11 @@
 use crate::capture_session::ReplayExportEndpoint;
-use crate::replay_menu::ReplayMenuState;
+use crate::replay_menu::{ReplayMenuAction, ReplayMenuState};
 use crate::{
     CaptureLaunchDisposition, CaptureLaunchProcessState, CapturePhase, CaptureSessionError,
     CaptureSessionHandle, DmaBufReplayFrame, HardwareEncoderBackend, OverlayRuntimeStatus,
     ProductionReplayRuntime, ReplayBackendReadiness, ReplayFailure, ReplayHardwarePipeline,
-    ReplayPhase, ReplayRuntimeError, ReplayRuntimeStatus, SteamActivationState,
+    ReplayPhase, ReplayPreferences, ReplayRuntimeError, ReplayRuntimeStatus, SteamActivationState,
+    replay_preferences,
 };
 use redunar_core::{GameId, ReplayDuration, ReplaySettings, SystemSnapshot};
 use std::collections::VecDeque;
@@ -144,6 +145,7 @@ struct CoordinatorInner {
     state: Mutex<CoordinatorState>,
     replay: ProductionReplayRuntime,
     replay_menu: Mutex<ReplayMenuState>,
+    replay_preferences: Mutex<ReplayPreferences>,
     replay_menu_revision: std::sync::atomic::AtomicU64,
     /// Private state directory holding the clip-to-game attribution ledger.
     clip_games_state: PathBuf,
@@ -241,11 +243,15 @@ impl Drop for ReplayExportPump {
 impl ProductionGameSessionCoordinator {
     #[must_use]
     pub(crate) fn new(state_directory: PathBuf) -> Self {
+        let preferences = replay_preferences::load(&state_directory).unwrap_or_default();
+        let mut replay_menu = ReplayMenuState::default();
+        replay_menu.set_initial_duration(preferences.initial_save_duration);
         Self {
             inner: Arc::new(CoordinatorInner {
                 state: Mutex::new(CoordinatorState::default()),
                 replay: ProductionReplayRuntime::unavailable(ReplaySettings::default()),
-                replay_menu: Mutex::new(ReplayMenuState::default()),
+                replay_menu: Mutex::new(replay_menu),
+                replay_preferences: Mutex::new(preferences),
                 replay_menu_revision: std::sync::atomic::AtomicU64::new(2),
                 clip_games_state: state_directory,
             }),
@@ -315,8 +321,17 @@ impl ProductionGameSessionCoordinator {
             let save = menu.button(pressed, ready, now);
             (save, !menu.is_visible())
         };
-        if let Some(duration) = save {
-            self.save_replay(duration)?;
+        if let Some(action) = save {
+            match action {
+                ReplayMenuAction::Save(duration) => self.save_replay(duration)?,
+                ReplayMenuAction::SetOutputFormat(format) => {
+                    let preferences =
+                        replay_preferences::set_output_format(&self.inner.clip_games_state, format)
+                            .map_err(|error| ReplayRuntimeError::new(error.to_string()))?;
+                    self.inner.replay.set_output_format(format);
+                    *lock_unpoisoned(&self.inner.replay_preferences) = preferences;
+                }
+            }
         }
         self.publish_replay_menu();
         Ok(closed)
@@ -344,7 +359,15 @@ impl ProductionGameSessionCoordinator {
             revision,
             self.inner.replay.status(),
             self.inner.replay.output_format(),
+            &lock_unpoisoned(&self.inner.replay_preferences),
         )
+    }
+
+    pub(crate) fn update_replay_preferences(&self, preferences: ReplayPreferences) {
+        lock_unpoisoned(&self.inner.replay_menu)
+            .set_initial_duration(preferences.initial_save_duration);
+        *lock_unpoisoned(&self.inner.replay_preferences) = preferences;
+        self.publish_replay_menu();
     }
 
     fn publish_replay_menu(&self) {

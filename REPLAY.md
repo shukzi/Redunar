@@ -1,6 +1,6 @@
 # Instant Replay contract
 
-Current Tauri behavior, reviewed September 13, 2026. Recording and saving remain
+Current Tauri behavior, reviewed September 20, 2026. Recording and saving remain
 local. This guide owns replay behavior; [DESIGN.md](DESIGN.md) owns presentation
 and [PERFORMANCE.md](PERFORMANCE.md) owns resource budgets.
 
@@ -15,9 +15,11 @@ The prepared Vulkan runtime also permits showing/hiding metrics during that game
 Hiding metrics does not dismantle capture or disable future visibility changes.
 This does not allow attaching a runtime to an unrelated running game.
 
-Recording frame rate, quality, and format are configured before launch and
-locked until the owned game closes. The default is 60 FPS / Balanced. Supported
-save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes. The spool retains the
+Recording frame rate and quality are configured before launch and locked until
+the owned game closes. The output container remains selectable between MKV and
+MP4 from Global settings or the in-game Replay menu; changes apply to future
+saves without rebuilding the active buffer. The default is 60 FPS / Balanced.
+Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes. The spool retains the
 bounded 15-minute horizon; choosing a shorter manual save length selects a suffix,
 not a smaller rolling horizon. Fixed 120 FPS is gated by display/game-surface
 limits of 1080p or lower and actual encoder capability.
@@ -58,11 +60,15 @@ shortcuts remain active, and the shortcuts panel reports that pointer control
 is unavailable; a transient kernel mouse-grab failure uses the same fallback
 instead of cancelling the menu. Composite keyboard interfaces are evaluated in
 one bounded chord window so modifier and function-key reader scheduling cannot
-drop Shift+F8. Shift+F8 or any unrelated key closes it. The menu renders even
+drop a configured chord. Pressing the assigned menu chord again or any unrelated
+key closes it. The menu renders even
 when the metrics overlay is hidden. Its Vulkan surface and bounded control
 outlines use rounded corners, and measured labels are centered within their
-cells so scaling cannot push shortcut or status text across a divider. A replay menu requires a running captured
-session, and without one the helper reports the rejection and the shortcuts
+cells so scaling cannot push shortcut or status text across a divider. The menu
+shows the current menu chord and the selected duration's direct-save chord from
+live persisted preferences; cleared bindings show as unassigned. Its format
+picker persists MKV or MP4 and updates the active save runtime. A replay menu
+requires a running captured session, and without one the helper reports the rejection and the shortcuts
 panel shows it. The app does not expose a desktop preview because the production
 menu is rendered by the Vulkan layer inside the captured game.
 

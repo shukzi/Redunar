@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.3" date="2026-09-20">
+      <description>
+        <p>Redesigns the in-game Replay menu with live buffer status, direct saving, and live MKV/MP4 selection; applies Replay shortcut and format changes to active sessions; and adds a compact titlebar independent of the Linux desktop compositor.</p>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-09-20">
       <description>
         <p>Records the active system output through PulseAudio or PipeWire with automatic recovery, adds optional in-game overlay branding, removes the obsolete desktop Replay preview, and fixes bounded trimmed-clip exports.</p>

@@ -2,7 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 pub const OVERLAY_HARDWARE_TELEMETRY_BYTES: usize = 48;
-pub const REPLAY_MENU_TELEMETRY_BYTES: usize = 48;
+pub const REPLAY_MENU_TELEMETRY_BYTES: usize = 128;
+pub const REPLAY_SHORTCUT_LABEL_BYTES: usize = 40;
 
 const MAGIC: [u8; 8] = *b"RDOVL001";
 const VERSION: u16 = 4;
@@ -17,7 +18,7 @@ const KNOWN_FLAGS: u16 = CPU_UTILIZATION_PRESENT
 const MAX_UTILIZATION_TENTHS: u16 = 1_000;
 const MAX_TEMPERATURE_TENTHS_CELSIUS: u16 = 2_000;
 const REPLAY_MENU_MAGIC: [u8; 8] = *b"RDRPM001";
-const REPLAY_MENU_VERSION: u16 = 1;
+const REPLAY_MENU_VERSION: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -48,6 +49,67 @@ pub struct ReplayMenuTelemetry {
     pub quality: u8,
     pub output_format: u8,
     pub save_enabled: bool,
+    pub overlay_shortcut: ReplayShortcutLabel,
+    pub save_shortcut: ReplayShortcutLabel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplayShortcutLabel {
+    bytes: [u8; REPLAY_SHORTCUT_LABEL_BYTES],
+    length: u8,
+}
+
+impl Default for ReplayShortcutLabel {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl ReplayShortcutLabel {
+    pub const EMPTY: Self = Self {
+        bytes: [0; REPLAY_SHORTCUT_LABEL_BYTES],
+        length: 0,
+    };
+
+    /// Build one bounded display label from a validated shortcut chord.
+    /// Modifiers and the key are uppercased and separated for legibility.
+    #[must_use]
+    pub fn from_shortcut(shortcut: &str) -> Self {
+        let mut label = Self::EMPTY;
+        for (index, part) in shortcut
+            .split('+')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .enumerate()
+        {
+            if index > 0 {
+                label.push_bytes(b" + ");
+            }
+            for byte in part.bytes() {
+                label.push(byte.to_ascii_uppercase());
+            }
+        }
+        label
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.length)]
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.push(*byte);
+        }
+    }
+
+    fn push(&mut self, byte: u8) {
+        let index = usize::from(self.length);
+        if index < self.bytes.len() && (byte.is_ascii_graphic() || byte == b' ') {
+            self.bytes[index] = byte;
+            self.length = self.length.saturating_add(1);
+        }
+    }
 }
 
 /// Encode one daemon-owned Replay menu snapshot into its fixed private ABI.
@@ -85,7 +147,11 @@ pub fn encode_replay_menu_telemetry(
     output[33] = value.quality;
     output[34] = value.output_format;
     output[35] = u8::from(value.save_enabled);
-    write_u64(output, 40, value.revision);
+    output[36] = value.overlay_shortcut.length;
+    output[37] = value.save_shortcut.length;
+    output[40..80].copy_from_slice(&value.overlay_shortcut.bytes);
+    output[80..120].copy_from_slice(&value.save_shortcut.bytes);
+    write_u64(output, 120, value.revision);
     Ok(REPLAY_MENU_TELEMETRY_BYTES)
 }
 
@@ -132,13 +198,15 @@ pub fn decode_replay_menu_telemetry(
         quality: input[33],
         output_format: input[34],
         save_enabled: input[35] == 1,
+        overlay_shortcut: decode_shortcut_label(input[36], &input[40..80])?,
+        save_shortcut: decode_shortcut_label(input[37], &input[80..120])?,
     };
-    if input[10] > 1 || input[11] > 1 || input[35] > 1 || input[36..40] != [0; 4] {
+    if input[10] > 1 || input[11] > 1 || input[35] > 1 || input[38..40] != [0; 2] {
         return Err(OverlayTelemetryError::new(
             "Replay menu encoding is not canonical",
         ));
     }
-    if read_u64(input, 40) != value.revision {
+    if read_u64(input, 120) != value.revision {
         return Err(OverlayTelemetryError::new(
             "Replay menu update is incomplete",
         ));
@@ -152,8 +220,8 @@ fn validate_replay_menu(value: ReplayMenuTelemetry) -> Result<(), OverlayTelemet
         || !value.revision.is_multiple_of(2)
         || value.cursor_x > 10_000
         || value.cursor_y > 10_000
-        || value.hover_target > 9
-        || value.pressed_target > 9
+        || value.hover_target > 11
+        || value.pressed_target > 11
         || value.selected_duration_index > 7
         || value.available_seconds > 900
         || !matches!(value.frame_rate, 30 | 60 | 120)
@@ -166,6 +234,28 @@ fn validate_replay_menu(value: ReplayMenuTelemetry) -> Result<(), OverlayTelemet
         ));
     }
     Ok(())
+}
+
+fn decode_shortcut_label(
+    length: u8,
+    bytes: &[u8],
+) -> Result<ReplayShortcutLabel, OverlayTelemetryError> {
+    let length = usize::from(length);
+    if length > REPLAY_SHORTCUT_LABEL_BYTES
+        || bytes.len() != REPLAY_SHORTCUT_LABEL_BYTES
+        || bytes[..length]
+            .iter()
+            .any(|byte| !byte.is_ascii_graphic() && *byte != b' ')
+        || bytes[length..].iter().any(|byte| *byte != 0)
+    {
+        return Err(OverlayTelemetryError::new(
+            "Replay shortcut label is invalid",
+        ));
+    }
+    let mut label = ReplayShortcutLabel::EMPTY;
+    label.bytes.copy_from_slice(bytes);
+    label.length = u8::try_from(length).unwrap_or(0);
+    Ok(label)
 }
 
 /// One bounded daemon-to-layer hardware update.
@@ -556,6 +646,8 @@ mod tests {
             quality: 2,
             output_format: 1,
             save_enabled: true,
+            overlay_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+Shift+R"),
+            save_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+F9"),
         };
         let mut bytes = [0; REPLAY_MENU_TELEMETRY_BYTES];
         assert_eq!(
@@ -563,7 +655,7 @@ mod tests {
             Ok(bytes.len())
         );
         assert_eq!(decode_replay_menu_telemetry(&bytes), Ok(value));
-        write_u64(&mut bytes, 40, 10);
+        write_u64(&mut bytes, 120, 10);
         assert!(decode_replay_menu_telemetry(&bytes).is_err());
         let mut invalid_bool = [0; REPLAY_MENU_TELEMETRY_BYTES];
         encode_replay_menu_telemetry(value, &mut invalid_bool).unwrap();

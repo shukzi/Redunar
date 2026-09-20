@@ -21,7 +21,7 @@
 use crate::ffi::*;
 use redunar_capture::{
     OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayFailureReason, OverlayHardwareTelemetry,
-    REPLAY_MENU_TELEMETRY_BYTES, ReplayMenuStatus, ReplayMenuTelemetry,
+    REPLAY_MENU_TELEMETRY_BYTES, ReplayMenuStatus, ReplayMenuTelemetry, ReplayShortcutLabel,
     decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
 };
 use redunar_core::overlay_font;
@@ -71,17 +71,21 @@ const MAX_QUEUE_CONTEXTS: usize = 16;
 const MAX_ACCENT_RECTS: usize = 96;
 const MAX_TEXT_GLYPHS: usize = 384;
 
-const REPLAY_MENU_WIDTH: u32 = 690;
-const REPLAY_MENU_HEIGHT: u32 = 440;
-const REPLAY_MENU_HEADER_HEIGHT: u32 = 64;
-const REPLAY_MENU_FACTS_HEIGHT: u32 = 74;
-const REPLAY_MENU_BODY_SPLIT_X: i32 = 452;
-const REPLAY_MENU_DURATION_X: i32 = 28;
-const REPLAY_MENU_DURATION_Y: i32 = 238;
-const REPLAY_MENU_DURATION_WIDTH: u32 = 396;
-const REPLAY_MENU_DURATION_HEIGHT: u32 = 86;
-const REPLAY_MENU_SAVE_Y: i32 = 338;
-const REPLAY_MENU_SAVE_HEIGHT: u32 = 48;
+const REPLAY_MENU_WIDTH: u32 = 520;
+const REPLAY_MENU_HEIGHT: u32 = 286;
+const REPLAY_MENU_FACTS_HEIGHT: u32 = 66;
+const REPLAY_MENU_DURATION_X: i32 = 24;
+const REPLAY_MENU_DURATION_Y: i32 = 124;
+const REPLAY_MENU_DURATION_WIDTH: u32 = 472;
+const REPLAY_MENU_DURATION_HEIGHT: u32 = 84;
+const REPLAY_MENU_SAVE_X: i32 = 220;
+const REPLAY_MENU_SAVE_Y: i32 = 222;
+const REPLAY_MENU_SAVE_WIDTH: u32 = 276;
+const REPLAY_MENU_SAVE_HEIGHT: u32 = 46;
+const REPLAY_MENU_FORMAT_X: i32 = 24;
+const REPLAY_MENU_FORMAT_Y: i32 = 222;
+const REPLAY_MENU_FORMAT_WIDTH: u32 = 180;
+const REPLAY_MENU_FORMAT_HEIGHT: u32 = 46;
 const REPLAY_MENU_CORNER_RADIUS: u8 = 12;
 const REPLAY_MENU_CONTROL_RADIUS: u32 = 6;
 const METRIC_PANEL_RADIUS: u8 = 4;
@@ -534,7 +538,7 @@ struct OverlayPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OverlayPlacement {
     Corner,
-    Center,
+    ReplayMenu,
     SavedNotice,
 }
 
@@ -551,6 +555,8 @@ struct ReplayMenuView {
     cursor_x: u16,
     cursor_y: u16,
     save_enabled: bool,
+    overlay_shortcut: ReplayShortcutLabel,
+    save_shortcut: ReplayShortcutLabel,
 }
 
 impl ReplayMenuView {
@@ -576,6 +582,8 @@ impl ReplayMenuView {
             cursor_x: menu.cursor_x,
             cursor_y: menu.cursor_y,
             save_enabled: menu.save_enabled,
+            overlay_shortcut: menu.overlay_shortcut,
+            save_shortcut: menu.save_shortcut,
         }
     }
 }
@@ -891,7 +899,7 @@ impl OverlayPlan {
             // 1440p game resolutions. `effective_scale_percent` still fits
             // this down on smaller swapchains.
             scale_percent: 160,
-            placement: OverlayPlacement::Center,
+            placement: OverlayPlacement::ReplayMenu,
             animation_progress: menu.animation_progress,
             dim_percent: u8::try_from(
                 u32::from(menu.animation_progress) * 45 / u32::from(u16::MAX),
@@ -899,50 +907,12 @@ impl OverlayPlan {
             .unwrap_or(45),
             palette: OverlayPalette::Redunar,
         };
-        push_redunar_logo(&mut plan, 14, 8);
         push_replay_menu_grid(&mut plan, menu);
         push_replay_menu_text(&mut plan, menu);
         let cursor_x = normalized_coordinate(menu.cursor_x, REPLAY_MENU_WIDTH);
         let cursor_y = normalized_coordinate(menu.cursor_y, REPLAY_MENU_HEIGHT);
         push_replay_pointer(&mut plan, cursor_x, cursor_y);
         plan
-    }
-}
-
-fn push_redunar_logo(plan: &mut OverlayPlan, x: i32, y: i32) {
-    // Pixel runs sampled from a 32px raster of the shipped Comet R vector. Keeping the small
-    // mark as bounded rectangles avoids texture allocation while preserving
-    // the actual white crescent and red tail used throughout the app.
-    for (offset_y, offset_x, width) in [
-        (7, 14, 5),
-        (8, 10, 12),
-        (9, 8, 15),
-        (10, 7, 1),
-        (10, 19, 5),
-        (11, 20, 4),
-        (12, 21, 4),
-        (13, 21, 4),
-        (14, 21, 4),
-        (15, 20, 4),
-        (16, 19, 5),
-        (17, 19, 4),
-        (18, 20, 2),
-    ] {
-        plan.cursor.push(x + offset_x, y + offset_y, width, 1);
-    }
-    for (offset_y, offset_x, width) in [
-        (15, 8, 7),
-        (16, 9, 8),
-        (17, 10, 8),
-        (18, 11, 8),
-        (19, 12, 7),
-        (20, 13, 7),
-        (21, 14, 7),
-        (22, 15, 7),
-        (23, 16, 7),
-        (24, 17, 7),
-    ] {
-        plan.accent.push(x + offset_x, y + offset_y, width, 1);
     }
 }
 
@@ -972,18 +942,31 @@ fn replay_menu_hit_target(x: i32, y: i32) -> u8 {
         && y >= REPLAY_MENU_DURATION_Y
         && y < REPLAY_MENU_DURATION_Y + i32::try_from(REPLAY_MENU_DURATION_HEIGHT).unwrap_or(0)
     {
-        let column = (x - REPLAY_MENU_DURATION_X) / 99;
-        let row = (y - REPLAY_MENU_DURATION_Y) / 43;
+        let column = (x - REPLAY_MENU_DURATION_X) / 118;
+        let row = (y - REPLAY_MENU_DURATION_Y) / 42;
         return u8::try_from(row * 4 + column + 1).unwrap_or(0);
     }
-    if x >= REPLAY_MENU_DURATION_X
-        && x < REPLAY_MENU_DURATION_X + i32::try_from(REPLAY_MENU_DURATION_WIDTH).unwrap_or(0)
-        && (REPLAY_MENU_SAVE_Y..REPLAY_MENU_SAVE_Y + 48).contains(&y)
+    if x >= REPLAY_MENU_SAVE_X
+        && x < REPLAY_MENU_SAVE_X + i32::try_from(REPLAY_MENU_SAVE_WIDTH).unwrap_or(0)
+        && (REPLAY_MENU_SAVE_Y
+            ..REPLAY_MENU_SAVE_Y + i32::try_from(REPLAY_MENU_SAVE_HEIGHT).unwrap_or(0))
+            .contains(&y)
     {
         return 9;
     }
-    if (474..662).contains(&x) && (212..252).contains(&y) {
+    if (REPLAY_MENU_FORMAT_X..REPLAY_MENU_FORMAT_X + 90).contains(&x)
+        && (REPLAY_MENU_FORMAT_Y
+            ..REPLAY_MENU_FORMAT_Y + i32::try_from(REPLAY_MENU_FORMAT_HEIGHT).unwrap_or(0))
+            .contains(&y)
+    {
         return 10;
+    }
+    if (REPLAY_MENU_FORMAT_X + 90..REPLAY_MENU_FORMAT_X + 180).contains(&x)
+        && (REPLAY_MENU_FORMAT_Y
+            ..REPLAY_MENU_FORMAT_Y + i32::try_from(REPLAY_MENU_FORMAT_HEIGHT).unwrap_or(0))
+            .contains(&y)
+    {
+        return 11;
     }
     0
 }
@@ -991,25 +974,12 @@ fn replay_menu_hit_target(x: i32, y: i32) -> u8 {
 #[allow(clippy::too_many_lines)]
 fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     let width = REPLAY_MENU_WIDTH;
-    let height = REPLAY_MENU_HEIGHT;
-    plan.dividers.push(
-        0,
-        i32::try_from(REPLAY_MENU_HEADER_HEIGHT).unwrap_or(64),
-        width,
-        1,
-    );
-    let facts_bottom = REPLAY_MENU_HEADER_HEIGHT + REPLAY_MENU_FACTS_HEIGHT;
+    let facts_bottom = REPLAY_MENU_FACTS_HEIGHT;
     plan.dividers
         .push(0, i32::try_from(facts_bottom).unwrap_or(138), width, 1);
-    for x in [172, 345, 517] {
-        plan.dividers.push(x, 64, 1, REPLAY_MENU_FACTS_HEIGHT);
+    for x in [173, 346] {
+        plan.dividers.push(x, 0, 1, REPLAY_MENU_FACTS_HEIGHT);
     }
-    plan.dividers.push(
-        REPLAY_MENU_BODY_SPLIT_X,
-        i32::try_from(facts_bottom).unwrap_or(138),
-        1,
-        height - facts_bottom,
-    );
     let cell_width = REPLAY_MENU_DURATION_WIDTH / 4;
     let cell_height = REPLAY_MENU_DURATION_HEIGHT / 2;
     push_rounded_outline(
@@ -1020,11 +990,8 @@ fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         REPLAY_MENU_DURATION_HEIGHT,
         REPLAY_MENU_CONTROL_RADIUS,
     );
-    for x in [
-        REPLAY_MENU_DURATION_X + 99,
-        REPLAY_MENU_DURATION_X + 198,
-        REPLAY_MENU_DURATION_X + 297,
-    ] {
+    for column in 1..4 {
+        let x = REPLAY_MENU_DURATION_X + i32::try_from(column * cell_width).unwrap_or_default();
         plan.dividers.push(
             x,
             REPLAY_MENU_DURATION_Y + i32::try_from(REPLAY_MENU_CONTROL_RADIUS).unwrap_or(0),
@@ -1034,7 +1001,7 @@ fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     }
     plan.dividers.push(
         REPLAY_MENU_DURATION_X + i32::try_from(REPLAY_MENU_CONTROL_RADIUS).unwrap_or(0),
-        REPLAY_MENU_DURATION_Y + 43,
+        REPLAY_MENU_DURATION_Y + i32::try_from(cell_height).unwrap_or(0),
         REPLAY_MENU_DURATION_WIDTH - REPLAY_MENU_CONTROL_RADIUS * 2,
         1,
     );
@@ -1042,50 +1009,88 @@ fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
     let selected_x = REPLAY_MENU_DURATION_X + i32::try_from(selected % 4 * cell_width).unwrap_or(0);
     let selected_y =
         REPLAY_MENU_DURATION_Y + i32::try_from(selected / 4 * cell_height).unwrap_or(0);
-    push_rounded_outline(
-        &mut plan.accent,
-        selected_x + 1,
-        selected_y + 1,
-        cell_width - 2,
-        cell_height - 2,
-        4,
+    plan.logo_dark_red.push(
+        selected_x + 2,
+        selected_y + 2,
+        cell_width - 4,
+        cell_height - 4,
     );
-    push_rounded_outline(
-        &mut plan.dividers,
-        REPLAY_MENU_DURATION_X,
-        REPLAY_MENU_SAVE_Y,
-        REPLAY_MENU_DURATION_WIDTH,
-        REPLAY_MENU_SAVE_HEIGHT,
-        REPLAY_MENU_CONTROL_RADIUS,
+    plan.accent.push(
+        selected_x + 8,
+        selected_y + i32::try_from(cell_height).unwrap_or(0) - 3,
+        cell_width - 16,
+        2,
     );
+    if menu.save_enabled {
+        plan.logo_dark_red.push(
+            REPLAY_MENU_SAVE_X + 2,
+            REPLAY_MENU_SAVE_Y + 2,
+            REPLAY_MENU_SAVE_WIDTH - 4,
+            REPLAY_MENU_SAVE_HEIGHT - 4,
+        );
+        push_rounded_outline(
+            &mut plan.accent,
+            REPLAY_MENU_SAVE_X,
+            REPLAY_MENU_SAVE_Y,
+            REPLAY_MENU_SAVE_WIDTH,
+            REPLAY_MENU_SAVE_HEIGHT,
+            REPLAY_MENU_CONTROL_RADIUS,
+        );
+    } else {
+        push_rounded_outline(
+            &mut plan.dividers,
+            REPLAY_MENU_SAVE_X,
+            REPLAY_MENU_SAVE_Y,
+            REPLAY_MENU_SAVE_WIDTH,
+            REPLAY_MENU_SAVE_HEIGHT,
+            REPLAY_MENU_CONTROL_RADIUS,
+        );
+    }
 
-    // The right rail follows the original desktop overlay's connected fields
-    // instead of leaving labels floating in an unstructured empty column.
     push_rounded_outline(
         &mut plan.dividers,
-        474,
-        212,
-        188,
-        40,
+        REPLAY_MENU_FORMAT_X,
+        REPLAY_MENU_FORMAT_Y,
+        REPLAY_MENU_FORMAT_WIDTH,
+        REPLAY_MENU_FORMAT_HEIGHT,
         REPLAY_MENU_CONTROL_RADIUS,
     );
-    push_rounded_outline(
-        &mut plan.dividers,
-        474,
-        284,
-        188,
-        56,
-        REPLAY_MENU_CONTROL_RADIUS,
+    plan.dividers.push(
+        REPLAY_MENU_FORMAT_X + 90,
+        REPLAY_MENU_FORMAT_Y + 6,
+        1,
+        REPLAY_MENU_FORMAT_HEIGHT - 12,
     );
-    plan.dividers.push(474, 312, 188, 1);
-    plan.dividers.push(570, 290, 1, 44);
+    let format_left = if menu.format == 0 {
+        REPLAY_MENU_FORMAT_X
+    } else {
+        REPLAY_MENU_FORMAT_X + 90
+    };
+    plan.logo_dark_red.push(
+        format_left + 2,
+        REPLAY_MENU_FORMAT_Y + 2,
+        86,
+        REPLAY_MENU_FORMAT_HEIGHT - 4,
+    );
+    plan.accent
+        .push(format_left + 8, REPLAY_MENU_FORMAT_Y + 43, 74, 2);
     if (1..=8).contains(&menu.hover_target) && menu.hover_target != menu.selected_duration + 1 {
         let hover = u32::from(menu.hover_target - 1);
         plan.accent.push(
             REPLAY_MENU_DURATION_X + i32::try_from(hover % 4 * cell_width).unwrap_or(0),
             REPLAY_MENU_DURATION_Y
-                + i32::try_from(hover / 4 * cell_height + cell_height - 2).unwrap_or(0),
+                + i32::try_from(hover / 4 * cell_height + cell_height).unwrap_or(0)
+                - 2,
             cell_width,
+            2,
+        );
+    }
+    if matches!(menu.hover_target, 10 | 11) && menu.hover_target != menu.format + 10 {
+        let x = REPLAY_MENU_FORMAT_X + i32::from(menu.hover_target - 10) * 90;
+        plan.accent.push(
+            x + 8,
+            REPLAY_MENU_FORMAT_Y + i32::try_from(REPLAY_MENU_FORMAT_HEIGHT).unwrap_or(0) - 3,
+            74,
             2,
         );
     }
@@ -1093,67 +1098,48 @@ fn push_replay_menu_grid(plan: &mut OverlayPlan, menu: ReplayMenuView) {
 
 #[allow(clippy::too_many_lines)]
 fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
-    push_text_scaled(&mut plan.text_glyphs, b"REDUNAR", 52, 20, 2);
-    push_text(&mut plan.muted_glyphs, b"IN-GAME", 190, 26);
-    push_text(&mut plan.accent_glyphs, b"*", 530, 26);
-    let replay_status = match menu.status {
-        0 => b"UNAVAILABLE".as_slice(),
-        1 => b"REPLAY OFF".as_slice(),
-        3 => b"SAVING REPLAY".as_slice(),
-        4 => b"REPLAY ERROR".as_slice(),
-        _ => b"REPLAY ACTIVE".as_slice(),
-    };
-    push_text(&mut plan.muted_glyphs, replay_status, 546, 26);
+    let mut buffered = FixedText::<12>::default();
+    match menu.status {
+        0 => buffered.push_bytes(b"N/A"),
+        1 => buffered.push_bytes(b"OFF"),
+        3 => buffered.push_bytes(b"SAVING"),
+        4 => buffered.push_bytes(b"ERROR"),
+        _ => {
+            buffered.push_unsigned(menu.available_seconds, 1);
+            buffered.push_bytes(b" SEC");
+        }
+    }
 
     for (left, right, label) in [
-        (0, 172, b"AVAILABLE".as_slice()),
-        (172, 345, b"CAPTURE".as_slice()),
-        (345, 517, b"QUALITY".as_slice()),
-        (517, 690, b"FORMAT".as_slice()),
+        (0, 173, b"CAPTURE".as_slice()),
+        (173, 346, b"QUALITY".as_slice()),
+        (346, 520, b"BUFFER".as_slice()),
     ] {
-        push_text_centered(&mut plan.muted_glyphs, label, left, right, 78);
+        push_text_centered(&mut plan.muted_glyphs, label, left, right, 13);
     }
-    let mut available = FixedText::<12>::default();
-    available.push_unsigned(menu.available_seconds, 1);
-    available.push_bytes(b" SEC");
-    push_ui_text_centered(&mut plan.text_glyphs, available.as_bytes(), 0, 172, 99, 2);
     let capture = match menu.capture_fps {
         30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
         120 => b"120 FPS".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
-    push_ui_text_centered(&mut plan.text_glyphs, capture, 172, 345, 99, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, capture, 0, 173, 32, 2);
     let quality = match menu.quality {
         0 => b"EFFICIENT".as_slice(),
         1 => b"BALANCED".as_slice(),
         _ => b"HIGH".as_slice(),
     };
-    push_ui_text_centered(&mut plan.text_glyphs, quality, 345, 517, 99, 2);
-    push_ui_text_centered(
-        &mut plan.text_glyphs,
-        if menu.format == 1 { b"MP4" } else { b"MKV" },
-        517,
-        690,
-        99,
-        2,
-    );
+    push_ui_text_centered(&mut plan.text_glyphs, quality, 173, 346, 32, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, buffered.as_bytes(), 346, 520, 32, 2);
 
-    push_text(&mut plan.muted_glyphs, b"INSTANT REPLAY", 28, 160);
-    push_ui_text_scaled(&mut plan.text_glyphs, b"Save recent gameplay", 28, 184, 2);
-    push_ui_text(
-        &mut plan.muted_glyphs,
-        b"Choose how much of the rolling buffer to keep.",
-        28,
-        215,
-    );
+    push_ui_text_scaled(&mut plan.text_glyphs, b"Instant Replay", 24, 86, 2);
     let durations: [&[u8]; 8] = [
         b"15 SEC", b"30 SEC", b"1 MIN", b"2 MIN", b"3 MIN", b"5 MIN", b"10 MIN", b"15 MIN",
     ];
     for (index, label) in durations.into_iter().enumerate() {
-        let left = REPLAY_MENU_DURATION_X + i32::try_from(index % 4).unwrap_or(0) * 99;
-        let right = left + 99;
-        let y = 254 + i32::try_from(index / 4).unwrap_or(0) * 43;
+        let left = REPLAY_MENU_DURATION_X + i32::try_from(index % 4).unwrap_or(0) * 118;
+        let right = left + 118;
+        let y = 140 + i32::try_from(index / 4).unwrap_or(0) * 42;
         if index == usize::from(menu.selected_duration.min(7)) {
             push_text_centered(&mut plan.accent_glyphs, label, left, right, y);
         } else {
@@ -1170,36 +1156,20 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         6 => b"SAVE LAST 10 MIN".as_slice(),
         _ => b"SAVE LAST 15 MIN".as_slice(),
     };
-    let save_label_x = REPLAY_MENU_DURATION_X
-        + (i32::try_from(REPLAY_MENU_DURATION_WIDTH).unwrap_or(0) - ui_text_width(save_label, 1))
-            / 2;
-    push_ui_text(
+    push_ui_text_centered(
         if menu.save_enabled {
             &mut plan.text_glyphs
         } else {
             &mut plan.muted_glyphs
         },
         save_label,
-        save_label_x,
-        356,
+        REPLAY_MENU_SAVE_X,
+        REPLAY_MENU_SAVE_X + i32::try_from(REPLAY_MENU_SAVE_WIDTH).unwrap_or(0),
+        238,
+        1,
     );
-
-    push_text(&mut plan.muted_glyphs, b"BASIC SETTINGS", 474, 160);
-    push_ui_text(&mut plan.text_glyphs, b"File format", 474, 180);
-    push_ui_text(&mut plan.muted_glyphs, b"Applied to future saves", 474, 196);
-    push_ui_text_centered(
-        &mut plan.text_glyphs,
-        if menu.format == 1 { b"MP4" } else { b"MKV" },
-        474,
-        662,
-        222,
-        2,
-    );
-    push_text(&mut plan.muted_glyphs, b"SHORTCUTS", 474, 268);
-    push_ui_text_centered(&mut plan.text_glyphs, b"SHIFT + F8", 474, 570, 292, 1);
-    push_ui_text_centered(&mut plan.muted_glyphs, b"Open / close", 570, 662, 292, 1);
-    push_ui_text_centered(&mut plan.text_glyphs, b"F8", 474, 570, 320, 1);
-    push_ui_text_centered(&mut plan.muted_glyphs, b"Save replay", 570, 662, 320, 1);
+    push_ui_text_centered(&mut plan.text_glyphs, b"MKV", 24, 114, 238, 1);
+    push_ui_text_centered(&mut plan.text_glyphs, b"MP4", 114, 204, 238, 1);
 }
 
 fn push_rounded_outline(
@@ -3579,7 +3549,11 @@ unsafe fn record_plan(
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment([0.41, 0.08, 0.13, 1.0]),
+        clear_attachment(if plan.placement == OverlayPlacement::ReplayMenu {
+            [0.13, 0.035, 0.045, 1.0]
+        } else {
+            [0.41, 0.08, 0.13, 1.0]
+        }),
         &logo_dark_red,
     );
     let dividers = plan
@@ -3812,7 +3786,7 @@ fn overlay_origin(extent: VkExtent2d, plan: &OverlayPlan, scale_percent: u8) -> 
     let bottom = height
         .saturating_sub(plan_height)
         .saturating_sub(OVERLAY_MARGIN);
-    if plan.placement == OverlayPlacement::Center {
+    if plan.placement == OverlayPlacement::ReplayMenu {
         let center_x = width.saturating_sub(plan_width) / 2;
         let center_y = height.saturating_sub(plan_height) / 2;
         let progress = u64::from(plan.animation_progress);
@@ -3929,14 +3903,14 @@ mod tests {
         assert_eq!(plan.height, REPLAY_MENU_HEIGHT);
         assert_eq!(plan.panel_radius, REPLAY_MENU_CORNER_RADIUS);
         for (index, (x, y)) in [
-            (40, 259),
-            (139, 259),
-            (238, 259),
-            (337, 259),
-            (40, 302),
-            (139, 302),
-            (238, 302),
-            (337, 302),
+            (83, 145),
+            (201, 145),
+            (319, 145),
+            (437, 145),
+            (83, 187),
+            (201, 187),
+            (319, 187),
+            (437, 187),
         ]
         .into_iter()
         .enumerate()
@@ -3946,33 +3920,19 @@ mod tests {
                 u8::try_from(index + 1).unwrap()
             );
         }
-        assert_eq!(replay_menu_hit_target(226, 360), 9);
-        assert_eq!(replay_menu_hit_target(520, 230), 10);
-        assert_eq!(replay_menu_hit_target(680, 430), 0);
+        assert_eq!(replay_menu_hit_target(358, 245), 9);
+        assert_eq!(replay_menu_hit_target(69, 245), 10);
+        assert_eq!(replay_menu_hit_target(159, 245), 11);
+        assert_eq!(replay_menu_hit_target(510, 276), 0);
         assert!(plan.accent.length <= MAX_ACCENT_RECTS);
         assert!(plan.dividers.length <= MAX_ACCENT_RECTS);
+        assert_eq!(plan.logo_dark_red.length, 3);
         assert!(plan.text_glyphs.length <= MAX_TEXT_GLYPHS);
         assert!(plan.muted_glyphs.length <= MAX_TEXT_GLYPHS);
-        for glyph in plan
-            .text_glyphs
-            .as_slice()
-            .iter()
-            .chain(plan.muted_glyphs.as_slice())
-            .filter(|glyph| matches!(glyph.y, 292 | 320))
-        {
-            let right_edge = if glyph.x < 570 { 570 } else { 662 };
-            assert!(glyph.x >= 474);
-            assert!(
-                glyph.x
-                    + i32::try_from(overlay_font::GLYPH_WIDTH * u32::from(glyph.scale)).unwrap()
-                    <= right_edge,
-                "shortcut glyph escaped its cell"
-            );
-        }
     }
 
     #[test]
-    fn replay_menu_uses_the_redunar_mask_geometry_and_a_separate_pointer() {
+    fn replay_menu_has_no_logo_bar_and_uses_a_separate_pointer() {
         let plan = OverlayPlan::replay_menu(ReplayMenuView {
             animation_progress: u16::MAX,
             cursor_x: 5_000,
@@ -3980,17 +3940,17 @@ mod tests {
             ..ReplayMenuView::default()
         });
         assert_eq!(plan.logo_base.length, 0);
-        assert_eq!(plan.logo_dark_red.length, 0);
-        assert_eq!(plan.cursor.length, 13);
-        assert!(plan.accent.length >= 10);
+        assert_eq!(plan.logo_dark_red.length, 2);
+        assert_eq!(plan.cursor.length, 0);
+        assert!(plan.accent.length >= 2);
         assert!(plan.pointer.is_some());
         assert!(plan.pointer_shadow.is_some());
         assert!(
             !plan
-                .accent_glyphs
+                .text_glyphs
                 .as_slice()
                 .iter()
-                .any(|glyph| glyph.byte == b'R' && glyph.scale == 2)
+                .any(|glyph| glyph.y == 14)
         );
     }
 
@@ -4004,9 +3964,9 @@ mod tests {
             width: 1_440,
             height: 900,
         };
-        assert_eq!(overlay_origin(extent, &plan, 100), (375, 230));
+        assert_eq!(overlay_origin(extent, &plan, 100), (460, 307));
         plan.animation_progress = 0;
-        assert_eq!(overlay_origin(extent, &plan, 100), (375, OVERLAY_MARGIN));
+        assert_eq!(overlay_origin(extent, &plan, 100), (460, OVERLAY_MARGIN));
     }
 
     #[test]
@@ -4074,6 +4034,8 @@ mod tests {
             quality: 2,
             output_format: 1,
             save_enabled: true,
+            overlay_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+Shift+R"),
+            save_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+F9"),
         }
     }
 
@@ -4182,13 +4144,13 @@ mod tests {
     }
 
     #[test]
-    fn replay_menu_header_uses_the_authoritative_runtime_state() {
+    fn replay_menu_buffer_fact_uses_the_authoritative_runtime_state() {
         for (status, expected) in [
-            (0, b"UNAVAILABLE".as_slice()),
-            (1, b"REPLAYOFF".as_slice()),
-            (2, b"REPLAYACTIVE".as_slice()),
-            (3, b"SAVINGREPLAY".as_slice()),
-            (4, b"REPLAYERROR".as_slice()),
+            (0, b"N/A".as_slice()),
+            (1, b"OFF".as_slice()),
+            (2, b"0SEC".as_slice()),
+            (3, b"SAVING".as_slice()),
+            (4, b"ERROR".as_slice()),
         ] {
             let plan = OverlayPlan::replay_menu(ReplayMenuView {
                 status,
@@ -4196,7 +4158,7 @@ mod tests {
                 ..ReplayMenuView::default()
             });
             let rendered: Vec<u8> = plan
-                .muted_glyphs
+                .text_glyphs
                 .as_slice()
                 .iter()
                 .map(|glyph| glyph.byte)
@@ -4761,14 +4723,16 @@ mod tests {
             cursor_x: 8_200,
             cursor_y: 7_800,
             save_enabled: true,
+            overlay_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+Shift+R"),
+            save_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+F9"),
             ..ReplayMenuView::default()
         });
         let mut svg = String::from(
-            "<svg xmlns='http://www.w3.org/2000/svg' width='1104' height='704' viewBox='0 0 690 440'><rect width='690' height='440' fill='#151922'/><rect x='0.5' y='0.5' width='689' height='439' rx='11.5' fill='#090909' stroke='#262930'/>",
+            "<svg xmlns='http://www.w3.org/2000/svg' width='832' height='458' viewBox='0 0 520 286'><rect width='520' height='286' fill='#151922'/><rect x='0.5' y='0.5' width='519' height='285' rx='11.5' fill='#090909' stroke='#262930'/>",
         );
         for (batch, color) in [
             (&plan.logo_base, "#07080a"),
-            (&plan.logo_dark_red, "#691521"),
+            (&plan.logo_dark_red, "#21090b"),
             (&plan.accent, "#eb2933"),
             (&plan.dividers, "#262930"),
             (&plan.cursor_shadow, "#050505"),

@@ -92,9 +92,11 @@ its saved value updates a prepared running overlay through the same live path
 as palette and layout changes. Renderer ABI details belong in
 architecture/component documentation.
 
-Automatic replay has no global/per-game Off selector. Recording configuration
-is locked until the owned game closes; this must not block an otherwise valid
-visibility-only save. Menu/save shortcuts may all be cleared.
+Automatic replay has no global/per-game Off selector. Frame-rate and quality
+configuration is locked until the owned game closes; this must not block an
+otherwise valid visibility-only save. The MKV/MP4 save container may change
+during a session and applies to future saves. Menu/save shortcuts may all be
+cleared.
 
 Settings contains the current application preferences, including Close to tray
 and software updates. Automatic update checks default on; the user can disable

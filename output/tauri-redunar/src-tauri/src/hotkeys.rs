@@ -266,7 +266,7 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
             HelperEvent::MenuOpenedWithoutPointer => {
                 state.last_action = Some("Replay menu opened · View only".into());
                 state.message = Some(
-                    "Pointer control is unavailable for this session. Shift+F8 closes the menu; Replay save shortcuts remain active."
+                    "Pointer control is unavailable for this session. Press the assigned Replay menu shortcut again to close it; save shortcuts remain active."
                         .into(),
                 );
             }

@@ -746,7 +746,9 @@ impl RedunarService {
         &self,
         bindings: Vec<ReplayShortcutBinding>,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        replay_preferences::set_save_shortcuts(&self.state_directory, bindings)
+        let preferences = replay_preferences::set_save_shortcuts(&self.state_directory, bindings)?;
+        self.publish_replay_preferences(&preferences);
+        Ok(preferences)
     }
 
     /// Replace the overlay toggle and duration-specific save shortcuts in one
@@ -761,7 +763,10 @@ impl RedunarService {
         overlay_shortcut: String,
         bindings: Vec<ReplayShortcutBinding>,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        replay_preferences::set_hotkeys(&self.state_directory, overlay_shortcut, bindings)
+        let preferences =
+            replay_preferences::set_hotkeys(&self.state_directory, overlay_shortcut, bindings)?;
+        self.publish_replay_preferences(&preferences);
+        Ok(preferences)
     }
 
     /// Update the manual Replay overlay shortcut and pointer-dismiss behavior
@@ -776,11 +781,13 @@ impl RedunarService {
         overlay_shortcut: String,
         close_on_outside_click: bool,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        replay_preferences::set_overlay_behavior(
+        let preferences = replay_preferences::set_overlay_behavior(
             &self.state_directory,
             overlay_shortcut,
             close_on_outside_click,
-        )
+        )?;
+        self.publish_replay_preferences(&preferences);
+        Ok(preferences)
     }
 
     /// Change only dismissal, preserving the current shortcut assignments.
@@ -791,7 +798,9 @@ impl RedunarService {
         &self,
         enabled: bool,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        replay_preferences::set_outside_click(&self.state_directory, enabled)
+        let preferences = replay_preferences::set_outside_click(&self.state_directory, enabled)?;
+        self.publish_replay_preferences(&preferences);
+        Ok(preferences)
     }
 
     /// Set the duration shown in the Replay save control when it opens.
@@ -804,7 +813,10 @@ impl RedunarService {
         &self,
         duration: redunar_core::ReplayDuration,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        replay_preferences::set_initial_save_duration(&self.state_directory, duration)
+        let preferences =
+            replay_preferences::set_initial_save_duration(&self.state_directory, duration)?;
+        self.publish_replay_preferences(&preferences);
+        Ok(preferences)
     }
 
     /// Select the container used for future Replay saves and update the live
@@ -818,17 +830,19 @@ impl RedunarService {
         &self,
         output_format: ReplayOutputFormat,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        if self.replay_recording_settings_locked() {
-            return Err(ReplayPreferencesError::new(
-                "Replay file format is locked until the current game closes",
-            ));
-        }
         let preferences =
             replay_preferences::set_output_format(&self.state_directory, output_format)?;
         self.game_session_coordinator()
             .replay_runtime()
             .set_output_format(output_format);
+        self.publish_replay_preferences(&preferences);
         Ok(preferences)
+    }
+
+    fn publish_replay_preferences(&self, preferences: &ReplayPreferences) {
+        if let Some(coordinator) = self.runtime.game_session.get() {
+            coordinator.update_replay_preferences(preferences.clone());
+        }
     }
 
     /// Rolling history retained while Replay is enabled. Clip-length and
@@ -1174,7 +1188,8 @@ impl RedunarService {
     /// # Errors
     ///
     /// Returns an error if another writer changed the draft, recording settings are locked, or persistence fails.
-    /// Replay recording values remain subject to the same active-session lock as the individual editors.
+    /// Frame rate, quality, and storage remain subject to the active-session
+    /// lock. Output format may change for future saves during that session.
     pub fn save_global_workspace(
         &self,
         expected: redunar_core::GlobalGameProfile,
@@ -1201,8 +1216,7 @@ impl RedunarService {
         if locked
             && (requested.replay.frame_rate != expected.replay.frame_rate
                 || requested.replay.quality != expected.replay.quality
-                || requested.replay.storage_limit != expected.replay.storage_limit
-                || requested_format != expected_format)
+                || requested.replay.storage_limit != expected.replay.storage_limit)
         {
             return Err(
                 "Replay recording settings are locked until the current game closes.".to_owned(),

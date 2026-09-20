@@ -1,5 +1,7 @@
-use crate::{ReplayOutputFormat, ReplayPhase, ReplayRuntimeStatus};
-use redunar_capture::{ReplayMenuStatus, ReplayMenuTelemetry};
+use crate::{ReplayOutputFormat, ReplayPhase, ReplayPreferences, ReplayRuntimeStatus};
+use redunar_capture::{ReplayMenuStatus, ReplayMenuTelemetry, ReplayShortcutLabel};
+#[cfg(test)]
+use redunar_core::ReplaySettings;
 use redunar_core::{ReplayDuration, ReplayFrameRate, ReplayQuality};
 use std::time::{Duration, Instant};
 
@@ -21,6 +23,13 @@ enum Target {
     None,
     Duration(u8),
     Save,
+    Format(ReplayOutputFormat),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReplayMenuAction {
+    Save(ReplayDuration),
+    SetOutputFormat(ReplayOutputFormat),
 }
 
 pub(crate) struct ReplayMenuState {
@@ -78,7 +87,7 @@ impl ReplayMenuState {
         pressed: bool,
         replay_ready: bool,
         now: Instant,
-    ) -> Option<ReplayDuration> {
+    ) -> Option<ReplayMenuAction> {
         if !self.visible {
             return None;
         }
@@ -101,8 +110,9 @@ impl ReplayMenuState {
                 self.click_revision = self.click_revision.wrapping_add(1).max(1);
                 let duration = DURATIONS.get(usize::from(self.selected)).copied();
                 self.close();
-                return duration;
+                return duration.map(ReplayMenuAction::Save);
             }
+            Target::Format(format) => return Some(ReplayMenuAction::SetOutputFormat(format)),
             Target::None => self.close(),
             Target::Save => {}
         }
@@ -136,7 +146,19 @@ impl ReplayMenuState {
         revision: u64,
         runtime: ReplayRuntimeStatus,
         format: ReplayOutputFormat,
+        preferences: &ReplayPreferences,
     ) -> ReplayMenuTelemetry {
+        let selected_duration = DURATIONS
+            .get(usize::from(self.selected))
+            .copied()
+            .unwrap_or(ReplayDuration::Seconds30);
+        let save_shortcut = preferences
+            .save_shortcuts
+            .iter()
+            .find(|binding| binding.duration == selected_duration)
+            .map_or(ReplayShortcutLabel::EMPTY, |binding| {
+                ReplayShortcutLabel::from_shortcut(&binding.shortcut)
+            });
         ReplayMenuTelemetry {
             revision,
             visible: self.visible,
@@ -156,20 +178,36 @@ impl ReplayMenuState {
             output_format: u8::from(format == ReplayOutputFormat::Mp4),
             save_enabled: runtime.phase == ReplayPhase::Buffering
                 && runtime.buffered_duration_ns >= 1_000_000_000,
+            overlay_shortcut: ReplayShortcutLabel::from_shortcut(&preferences.overlay_shortcut),
+            save_shortcut,
+        }
+    }
+
+    pub(crate) fn set_initial_duration(&mut self, duration: ReplayDuration) {
+        if let Some(index) = DURATIONS
+            .iter()
+            .position(|candidate| *candidate == duration)
+        {
+            self.selected = u8::try_from(index).unwrap_or(1);
         }
     }
 }
 
 fn hit_test(x: i32, y: i32) -> Target {
-    // These normalized bounds are the exact 690x440 Vulkan menu grid:
-    // x 28..424, duration y 238..324, save y 338..386.
-    if (406..6_145).contains(&x) && (5_409..7_364).contains(&y) {
-        let column = ((x - 406) * 4 / (6_145 - 406)).clamp(0, 3);
-        let row = ((y - 5_409) * 2 / (7_364 - 5_409)).clamp(0, 1);
+    // These normalized bounds mirror the exact 520x286 Vulkan menu controls.
+    if (462..9_539).contains(&x) && (4_336..7_273).contains(&y) {
+        let column = ((x - 462) * 4 / (9_539 - 462)).clamp(0, 3);
+        let row = ((y - 4_336) * 2 / (7_273 - 4_336)).clamp(0, 1);
         return Target::Duration(u8::try_from(row * 4 + column).unwrap_or(0));
     }
-    if (406..6_145).contains(&x) && (7_682..8_773).contains(&y) {
+    if (4_231..9_539).contains(&x) && (7_763..9_371).contains(&y) {
         return Target::Save;
+    }
+    if (462..2_193).contains(&x) && (7_763..9_371).contains(&y) {
+        return Target::Format(ReplayOutputFormat::Matroska);
+    }
+    if (2_193..3_924).contains(&x) && (7_763..9_371).contains(&y) {
+        return Target::Format(ReplayOutputFormat::Mp4);
     }
     Target::None
 }
@@ -179,6 +217,8 @@ const fn target_code(target: Target) -> u8 {
         Target::None => 0,
         Target::Duration(index) => index + 1,
         Target::Save => 9,
+        Target::Format(ReplayOutputFormat::Matroska) => 10,
+        Target::Format(ReplayOutputFormat::Mp4) => 11,
     }
 }
 
@@ -217,11 +257,11 @@ mod tests {
         let now = Instant::now();
         let mut state = ReplayMenuState::default();
         state.toggle(now);
-        state.move_cursor(-2_000, 3_000, now);
+        state.move_cursor(0, 3_500, now);
         assert_eq!(state.button(true, true, now), None);
         assert_eq!(
             state.button(false, true, now),
-            Some(ReplayDuration::Seconds30)
+            Some(ReplayMenuAction::Save(ReplayDuration::Seconds30))
         );
         assert_eq!(state.button(false, true, now), None);
     }
@@ -242,7 +282,7 @@ mod tests {
         let now = Instant::now();
         let mut state = ReplayMenuState::default();
         state.toggle(now);
-        state.move_cursor(-4_000, 1_000, now);
+        state.move_cursor(-3_450, 0, now);
         state.button(true, true, now);
         assert_eq!(state.button(false, true, now), None);
         assert_eq!(state.selected, 0);
@@ -251,10 +291,10 @@ mod tests {
     #[test]
     fn every_duration_cell_selects_the_expected_bounded_option() {
         let now = Instant::now();
-        let left = 406;
-        let right = 6_145;
-        let top = 5_409;
-        let bottom = 7_364;
+        let left = 462;
+        let right = 9_539;
+        let top = 4_336;
+        let bottom = 7_273;
         let column_width = (right - left) / 4;
         let row_height = (bottom - top) / 2;
 
@@ -277,8 +317,8 @@ mod tests {
         let now = Instant::now();
         let mut state = ReplayMenuState::default();
         state.toggle(now);
-        state.cursor_x = 3_000;
-        state.cursor_y = 8_200;
+        state.cursor_x = 5_000;
+        state.cursor_y = 8_500;
 
         assert_eq!(state.button(true, false, now), None);
         assert_eq!(state.button(false, false, now), None);
@@ -287,10 +327,55 @@ mod tests {
         assert_eq!(state.button(true, true, now), None);
         assert_eq!(
             state.button(false, true, now),
-            Some(ReplayDuration::Seconds30)
+            Some(ReplayMenuAction::Save(ReplayDuration::Seconds30))
         );
         assert!(!state.is_visible());
         assert_eq!(state.button(false, true, now), None);
+    }
+
+    #[test]
+    fn format_targets_return_the_selected_container_without_closing() {
+        let now = Instant::now();
+        for (x, expected) in [
+            (1_000, ReplayOutputFormat::Matroska),
+            (3_000, ReplayOutputFormat::Mp4),
+        ] {
+            let mut state = ReplayMenuState::default();
+            state.toggle(now);
+            state.cursor_x = x;
+            state.cursor_y = 8_500;
+            assert_eq!(state.button(true, true, now), None);
+            assert_eq!(
+                state.button(false, true, now),
+                Some(ReplayMenuAction::SetOutputFormat(expected))
+            );
+            assert!(state.is_visible());
+        }
+    }
+
+    #[test]
+    fn telemetry_uses_live_menu_and_selected_duration_shortcuts() {
+        let preferences = ReplayPreferences {
+            overlay_shortcut: "Ctrl+Shift+R".into(),
+            save_shortcuts: vec![crate::ReplayShortcutBinding {
+                shortcut: "Ctrl+F9".into(),
+                duration: ReplayDuration::Seconds60,
+            }],
+            initial_save_duration: ReplayDuration::Seconds60,
+            ..ReplayPreferences::default()
+        };
+        let mut state = ReplayMenuState::default();
+        state.set_initial_duration(preferences.initial_save_duration);
+        let telemetry = state.telemetry(
+            2,
+            ReplayRuntimeStatus::unavailable(ReplaySettings::default()),
+            ReplayOutputFormat::Mp4,
+            &preferences,
+        );
+        assert_eq!(telemetry.selected_duration_index, 2);
+        assert_eq!(telemetry.overlay_shortcut.as_bytes(), b"CTRL + SHIFT + R");
+        assert_eq!(telemetry.save_shortcut.as_bytes(), b"CTRL + F9");
+        assert_eq!(telemetry.output_format, 1);
     }
 
     #[test]

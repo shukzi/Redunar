@@ -247,21 +247,28 @@ test('Replay opening keeps thumbnail work bounded and playback controls wait for
  assert.match(source,/const needsSeek=Math\.abs\(video\.currentTime-wanted\)>\.25;[\s\S]*try\{await video\.play\(\);break;\}/);
  assert.match(css,/\.player-controls \.icon-button\{color:#eee8ef;font-size:11px;width:42px;min-width:42px;height:34px/);
 });
-test('Native shell uses the default decorated window chrome',()=>{
+test('Native shell owns compact portable window chrome',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const html=readFileSync(new URL('../ui/index.html',import.meta.url),'utf8');
  const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
  const nativeMain=readFileSync(new URL('../src-tauri/src/main.rs',import.meta.url),'utf8');
  const capability=JSON.parse(readFileSync(new URL('../src-tauri/capabilities/default.json',import.meta.url),'utf8'));
- assert.doesNotMatch(html,/app-window-actions|data-window-action/);
- assert.doesNotMatch(html,/data-window=|window-resize-handles|data-resize-direction|data-tauri-drag-region/);
+ assert.equal((html.match(/data-window-action=/g)||[]).length,3);
+ assert.equal((html.match(/data-resize-direction=/g)||[]).length,8);
+ assert.match(html,/class="window-titlebar" data-tauri-drag-region/);
+ assert.match(html,/class="window-content"/);
  const config=JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json',import.meta.url),'utf8'));
- assert.equal(config.app.windows[0].decorations,true);
+ assert.equal(config.app.windows[0].decorations,false);
  assert.deepEqual(config.app.security.capabilities,['default']);
  assert.doesNotMatch(nativeMain,/window\.set_decorations\(false\)/);
+ assert.doesNotMatch(nativeMain,/GDK_BACKEND|preferred_kde_gdk_backend|configure_window_backend/);
  assert.deepEqual(capability.windows,['main']);
- assert.doesNotMatch(source,/startResizeDragging|startDragging|data-tauri-drag-region|markWindowResizing|initWindowControls/);
- assert.doesNotMatch(css,/window-resize-handles|window-resizing|data-tauri-drag-region/);
+ for(const permission of ['core:window:allow-close','core:window:allow-minimize','core:window:allow-start-dragging','core:window:allow-start-resize-dragging','core:window:allow-toggle-maximize'])assert.ok(capability.permissions.includes(permission),permission);
+ assert.match(source,/getCurrentWindow/);
+ assert.match(source,/appWindow\.startResizeDragging/);
+ assert.match(source,/appWindow\.toggleMaximize/);
+ assert.match(css,/\.window-titlebar \{[\s\S]*height: 28px/);
+ assert.match(css,/\.window-content \{ position: fixed; inset: 28px 0 0;[\s\S]*overflow-y: auto/);
  assert.match(readFileSync(new URL('../ui/app.css',import.meta.url),'utf8'),/\.topbar\{[^}]*padding:0 16px 0 34px/);
 });
 test('Native window movement does not perform synchronous preference I/O',()=>{
@@ -270,16 +277,6 @@ test('Native window movement does not perform synchronous preference I/O',()=>{
  assert.match(nativeMain,/if let tauri::WindowEvent::CloseRequested \{ api, \.\. \} = event \{/);
  assert.match(nativeMain,/Do not write preferences from every native move\/resize[\s\S]*persist_window_state\(window\);/);
  assert.match(nativeMain,/Do not write preferences from every native move\/resize/);
-});
-test('Native shell leaves window controls to the decorated host window',()=>{
- const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
- const html=readFileSync(new URL('../ui/index.html',import.meta.url),'utf8');
- const css=readFileSync(new URL('../ui/app.css',import.meta.url),'utf8');
- const capability=JSON.parse(readFileSync(new URL('../src-tauri/capabilities/default.json',import.meta.url),'utf8'));
- assert.doesNotMatch(html,/app-window-actions|data-window-action/);
- assert.doesNotMatch(source,/getCurrentWindow|appWindow|data-window-action|startResizeDragging|startDragging|data-tauri-drag-region/);
- assert.doesNotMatch(css,/\.app-window-actions|\.window-action/);
- assert.deepEqual(capability.permissions,['core:default','core:event:default']);
 });
 test('Tauri replay settings do not expose a total storage quota',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');

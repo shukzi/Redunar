@@ -76,6 +76,9 @@ as part of a read-only review.
 - The Replay menu shortcut renders the menu inside the captured game through the
   Vulkan layer; there is no desktop menu window. The in-app preview dialog is
   only for configuration checks and never loads the desktop shell as backdrop.
+- The main window uses Redunar's compact titlebar and native window commands so
+  its size and controls remain consistent across supported X11 and Wayland
+  desktops without selecting a compositor or display backend.
 - Close to tray immediately controls icon visibility. Missing tray support must
   not strand an invisible window. Empty shortcut configurations remain valid.
 - The service does not expose arbitrary privileged commands. The package

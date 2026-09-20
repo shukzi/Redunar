@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.2
+Version:        0.1.3
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -95,6 +95,12 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Sun Sep 20 2026 Redunar <local@redunar.invalid> - 0.1.3-1.local
+- Redesign the in-game Replay menu around a compact two-row duration picker,
+  live buffer status, a direct save action, and in-overlay MKV/MP4 selection
+- Apply changed Replay shortcuts and output formats to the active session
+- Add a compact titlebar independent of the Linux desktop compositor
+
 * Sun Sep 20 2026 Redunar <local@redunar.invalid> - 0.1.2-1.local
 - Record the active system output through PulseAudio or PipeWire and recover
   automatically from route changes, stalled capture, and backend failures

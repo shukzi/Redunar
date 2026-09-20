@@ -151,7 +151,10 @@ hotkey helper grabs the mice and streams pointer events while it is open; no
 desktop menu webview exists. If the session exposes readable keyboard devices
 but no readable mouse event device, the helper still opens the in-game panel in
 view-only mode and reports the missing pointer capability to Tauri. The app does
-not expose a desktop preview of this game-rendered menu.
+not expose a desktop preview of this game-rendered menu. The versioned menu
+telemetry carries bounded display labels for the current menu chord and the
+selected duration's save chord. Menu format clicks are daemon-owned preference
+writes and update the active replay runtime before the next save.
 Close to tray controls icon visibility immediately. Closing hides only when the
 preference and usable tray registration allow reopening; otherwise it exits.
 Loss of the tray host must not strand a hidden main window. Native hotkey

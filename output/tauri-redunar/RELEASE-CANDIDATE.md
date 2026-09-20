@@ -18,15 +18,30 @@ Current design/calculation contracts are [DESIGN](../../DESIGN.md) and
 ## Current automated evidence
 
 On September 20, 2026, the full `tools/check-tauri-release.sh` gate passed for
-the v0.1.2 source. It built the pinned glibc 2.36 compatibility artifacts,
+the v0.1.3 source. It built the pinned glibc 2.36 compatibility artifacts,
 passed the Rust, frontend, license, installer, staging, desktop metadata, and
 package checks, and produced signed DEB, RPM, openSUSE RPM, Arch, and portable
 artifacts.
 
-This evidence applies only to the checked source snapshot. The v0.1.2 package
-has not been installed or run as the system application. The installed-runtime
-and manual acceptance items below remain open; the passing gate does not by
-itself qualify an installed package or a public release.
+This evidence applies only to the checked source snapshot. The passing gate does
+not by itself qualify an installed package or a public release.
+
+Earlier on September 20, 2026, the Fedora 44 RPM built from the accepted feature
+source was installed over the existing package. Its package version was still
+v0.1.2 because the v0.1.3 version bump followed owner acceptance. The installed
+binary and sidecars matched the package, and a fresh process loaded without an
+external GDK backend override. The owner confirmed the redesigned in-game Replay
+menu, including its save action, format selection, and live buffer controls.
+
+The final v0.1.3 Fedora 44 RPM was then installed from the qualified source.
+`tools/check-installed-tauri-runtime.sh` reported matching application binary,
+capture layer, Steam wrapper, shortcut helper, desktop entry, AppStream
+metadata, icon, and uaccess rule. A fresh `/usr/bin/redunar-tauri` process
+started without an external GDK backend override, remained running for ten
+seconds, and terminated cleanly. Before packaging, the owner also accepted the
+final-source compact app-owned titlebar, native edge/corner resizing, and the
+content scrollbar beginning below the titlebar. This shell does not select or
+require a particular compositor or GDK display backend.
 
 On September 16, 2026, the v0.1.0 Fedora 44 RPM was installed on the
 owner-controlled Fedora 44 x86_64 host. `tools/check-installed-tauri-runtime.sh`
@@ -69,8 +84,11 @@ The deferred checks below are therefore follow-up work, not publication gates.
       output-monitor fallback honestly and make no game-only audio claim.
 - [x] Pass the relevant automated/native/package gate on the final source.
 - [x] Verify installed binary/sidecars match and test a freshly opened process.
-- [ ] Repeat affected menu, visibility, optional-hotkey, tray, playback, and
-      History checks with the final runtime.
+- [ ] Repeat unaffected visibility, optional-hotkey, tray, playback, and History
+      checks with the final runtime. The changed Replay menu passed owner
+      acceptance on the package built immediately before the v0.1.3 bump; the
+      final-source titlebar, resizing, and scroll boundary passed owner
+      acceptance before the exact package was built and installed.
 - [deferred] Complete the Counter-Strike 2 acceptance run.
 - [deferred] Validate another Linux host/distribution's package and embedded
       WebKit playback, seeking, export, and desktop integration.

@@ -1,4 +1,54 @@
 /* Native states extend the approved sidebar design without replacing its controls. */
+html, body { height: 100%; overflow: hidden; }
+.window-titlebar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 50;
+  height: 28px;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  border-bottom: 1px solid #34343a;
+  background: #19191c;
+  color: #d5d3da;
+  user-select: none;
+}
+.window-drag-region { flex: 1; min-width: 0; }
+.window-control {
+  width: 32px;
+  height: 27px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+.window-control:hover { border: 0; background: #303035; }
+.window-control:focus-visible { outline-offset: -3px; }
+.window-control svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; }
+.window-close:hover { background: #b5343d; color: #fff; }
+.window-resize { position: fixed; z-index: 60; }
+.window-resize-n,.window-resize-s { left: 7px; right: 7px; height: 5px; cursor: ns-resize; }
+.window-resize-e,.window-resize-w { top: 7px; bottom: 7px; width: 5px; cursor: ew-resize; }
+.window-resize-n { top: 0; }
+.window-resize-e { right: 0; }
+.window-resize-s { bottom: 0; }
+.window-resize-w { left: 0; }
+.window-resize-ne,.window-resize-se,.window-resize-sw,.window-resize-nw { width: 8px; height: 8px; }
+.window-resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.window-resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
+.window-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.window-resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.window-content { position: fixed; inset: 28px 0 0; overflow-x: hidden; overflow-y: auto; }
+.app-shell { min-height: 100%; }
+.sidebar { top: 28px; }
+body[data-page="replay-menu"] .window-titlebar,
+body[data-page="replay-menu"] .window-resize { display: none; }
+body[data-page="replay-menu"] .window-content { inset: 0; }
+@media(max-width:700px) { .sidebar { top: auto; } }
+
 .brand .brand-mark { flex: none; width: 34px; height: 34px; }
 .brand-copy { min-width: 0; }
 .brand .brand-wordmark { display: block; width: 122px; max-width: 100%; height: auto; }

@@ -774,7 +774,7 @@ impl CaptureSessionHandle {
             .write_all_at(&odd, (OVERLAY_HARDWARE_TELEMETRY_BYTES + 16) as u64)
             .and_then(|()| {
                 self.overlay_telemetry_file
-                    .write_all_at(&odd, (OVERLAY_HARDWARE_TELEMETRY_BYTES + 40) as u64)
+                    .write_all_at(&odd, (OVERLAY_HARDWARE_TELEMETRY_BYTES + 120) as u64)
             })
             .map_err(|error| {
                 CaptureSessionError::owned(format!(
@@ -1001,7 +1001,10 @@ fn write_overlay_config(file: &File, revision: &AtomicU64, packed: u64) -> io::R
     );
     bytes[32] = u8::try_from((packed >> 32) & 0xff).expect("masked opacity fits");
     bytes[33] = u8::try_from((packed >> 40) & 0xff).expect("masked scale fits");
-    bytes[36] = ((packed >> 48) & 0xff) as u8;
+    bytes[36] = ((packed >> 48) & 0x03) as u8;
+    bytes[37] = ((packed >> 56) & 0x0f) as u8;
+    bytes[38] = ((packed >> 60) & 0x0f) as u8;
+    bytes[39] = u8::from(((packed >> 48) & 0x04) != 0);
     bytes[16..24].copy_from_slice(&next.to_le_bytes());
     bytes[40..48].copy_from_slice(&next.to_le_bytes());
     file.write_all_at(&bytes, 0)
@@ -1616,6 +1619,8 @@ fn create_overlay_telemetry_file(directory: &Path) -> io::Result<(PathBuf, File)
         quality: 1,
         output_format: 0,
         save_enabled: false,
+        overlay_shortcut: redunar_capture::ReplayShortcutLabel::EMPTY,
+        save_shortcut: redunar_capture::ReplayShortcutLabel::EMPTY,
     };
     let mut menu_bytes = [0; REPLAY_MENU_TELEMETRY_BYTES];
     encode_replay_menu_telemetry(menu, &mut menu_bytes)
