@@ -1,6 +1,6 @@
 # Hardware and integration support
 
-Reviewed September 14, 2026 against the local implementation and retained test
+Reviewed September 20, 2026 against the local implementation and retained test
 records. The known tested baseline is **x86_64 Linux with AMD hardware**. This
 is narrower than a future cross-vendor goal; other setups may be tried and
 reported after publication. A detected interface or a successful fixture does
@@ -38,6 +38,12 @@ using RADV with Vulkan Video support exposed by its installed Mesa build.
 Historical controlled probes cover native Wayland/XCB presentation, packed
 10-bit conversion, 30/60 FPS recording, resize/reset, and 4K output. They do not
 establish universal throughput or performance at those modes.
+
+The retained KMS/DRM examples are explicit engineering diagnostics outside the
+production per-game Replay path. Their ability to enumerate an output, open a
+device, or initialize an encoder is not a desktop-capture support claim. Their
+commands, effects, and evidence boundaries are documented in
+[TESTING.md](TESTING.md#retained-engineering-diagnostics).
 
 Retained reports record owner runs with ARC Raiders and PEAK, synthetic native
 session/replay acceptance, and local/Flatpak-runtime codec checks. Counter-Strike

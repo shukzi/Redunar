@@ -74,10 +74,10 @@ fn main() {
                     assert_eq!(indicator_status(), "Passive", "native icon must be hidden");
                     wait_for(|| main.is_visible().unwrap());
                 }
-            // The in-game menu is owned by the helper and the Vulkan layer;
-            // the app only mirrors its open/close reports. No desktop menu
-            // window may exist for any reason anymore.
-            assert!(handle.get_webview_window("replay-menu").is_none());
+                // The in-game menu is owned by the helper and the Vulkan layer;
+                // the app only mirrors its open/close reports. No desktop menu
+                // window may exist for any reason anymore.
+                assert!(handle.get_webview_window("replay-menu").is_none());
                 backend::service()
                     .set_replay_hotkeys(String::new(), Vec::new())
                     .unwrap();

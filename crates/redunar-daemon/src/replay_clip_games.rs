@@ -277,7 +277,10 @@ extra\tcolumns\there\n\
 
     #[test]
     fn exact_ledger_entry_wins_over_window_fallback() {
-        let ledger = vec![("redunar-replay-5000-000000001-0.mkv".to_owned(), "Ledger".to_owned())];
+        let ledger = vec![(
+            "redunar-replay-5000-000000001-0.mkv".to_owned(),
+            "Ledger".to_owned(),
+        )];
         let sessions = vec![session("Window Game", 4000, 5000)];
         assert_eq!(
             resolve("redunar-replay-5000-000000001-0.mkv", &ledger, &sessions).as_deref(),
@@ -289,10 +292,7 @@ extra\tcolumns\there\n\
     fn fallback_requires_one_unambiguous_session_window() {
         let inside = "redunar-replay-2500-000000001-0.mp4";
         let between = "redunar-replay-4000-000000001-0.mkv";
-        let sessions = vec![
-            session("First", 2000, 1000),
-            session("Second", 5000, 1000),
-        ];
+        let sessions = vec![session("First", 2000, 1000), session("Second", 5000, 1000)];
         assert_eq!(resolve(inside, &[], &sessions).as_deref(), Some("First"));
         assert_eq!(resolve(between, &[], &sessions), None);
         // Overlapping sessions of the same game remain one attribution.

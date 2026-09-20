@@ -1,6 +1,6 @@
 # Verification guide
 
-Current Tauri and shared-backend checks, reviewed September 16, 2026. Run commands
+Current Tauri and shared-backend checks, reviewed September 20, 2026. Run commands
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
@@ -96,6 +96,49 @@ The default probe generates isolated H.264/Opus media and requires a decoded fra
 and filmstrip samples. An optional clip argument uses a private copy of that
 recording. Do not log private stream tokens or modify source clips. Fixture
 success does not establish real-game performance or every distribution's codecs.
+
+## Retained engineering diagnostics
+
+The following examples are intentional engineering tools. Keep them unless their
+capability has a documented replacement. They are outside the ordinary automated
+gate: select one for a specific question, record the build and host, and interpret
+only the property it checks.
+
+Synthetic and isolated diagnostics are safe for routine development:
+
+```sh
+cargo run --release --offline -p redunar-daemon --example replay_foundation_self_test
+cargo run --release --offline -p redunar-daemon --example replay_profile
+cargo run --release --offline -p redunar-daemon --example replay_store_profile
+cargo build --release --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --example desktop_controls_probe
+dbus-run-session -- xvfb-run -a output/tauri-redunar/src-tauri/target/release/examples/desktop_controls_probe
+```
+
+`replay_foundation_self_test` uses temporary state and deliberately reports that
+hardware encoding and decoded playback are unverified. `replay_profile` measures
+bounded in-memory ring insertion with synthetic packets. `replay_store_profile`
+writes and removes one synthetic 16 MiB container under the temporary directory.
+`desktop_controls_probe` uses an isolated D-Bus/Xvfb session, fixture preferences,
+and a pipe-only shortcut helper; it does not open input devices or change host
+settings.
+
+These live probes require an explicit, scoped hardware run:
+
+| Probe | Command and scope |
+| --- | --- |
+| PipeWire game audio | `cargo run --release --offline -p redunar-capture-audio --example game_audio_live_probe` starts a temporary silent `pw-cat` playback node, captures ten Opus packets, and terminates the child. It checks owned-node discovery/capture only. |
+| PipeWire output fallback | `cargo run --release --offline -p redunar-capture-audio --example output_audio_live_probe` resolves the actual default output, starts temporary silent playback on that exact sink, captures ten Opus packets from its monitor, and terminates both children. It does not capture microphone input or retain audio. |
+| Vulkan capture | Build `redunar-capture-vulkan`, then run `cargo run --release --offline -p redunar-daemon --example capture_probe -- /usr/bin/vkcube`. It launches the absolute target through the private layer and cleans isolated state. `REDUNAR_CAPTURE_PROBE_OVERLAY=1` checks rendered overlay submission; `REDUNAR_CAPTURE_PROBE_REPLAY_CANDIDATE=1` requests source eligibility; `REDUNAR_CAPTURE_PROBE_REQUIRE_REPLAY_CANDIDATE=1` makes missing eligibility fail; `REDUNAR_CAPTURE_PROBE_REPLAY_ENCODE=1` performs a real Vulkan Video encode. WSI, frame count, dimensions, FPS, metrics, preset, corner, opacity, scale, and timeout have bounded `REDUNAR_CAPTURE_PROBE_*` overrides in the example source. |
+| KMS discovery/planning | `cargo run --release --offline -p redunar-capture-kms --example kms_replay_probe` enumerates local DRM outputs and constructs 60 FPS plans. It does not capture or encode frames. |
+| KMS DRM read | `cargo run --release --offline -p redunar-capture-kms --example kms_drm_read_probe -- 1 DP-2` opens the selected card/connector read path and reports its active dimensions. Replace the example arguments with the intended output. |
+| KMS encoder setup | `cargo run --release --offline -p redunar-capture-vulkan --example kms_encoder_probe` creates the production KMS Vulkan Video encoder at its fixed 2560x1440@60 diagnostic request. |
+| KMS live replay | `cargo run --release --offline -p redunar-daemon --example kms_replay_live_probe -- 8` performs local KMS capture and hardware encode for the requested frame count. |
+
+The KMS/DRM examples are retained exploratory diagnostics, not the production
+per-game Replay path and not evidence of supported desktop capture. The
+`redunar-platform` `prepare_capture_layer` example is a low-level manifest helper
+for a supplied session directory and layer library; normal sessions prepare this
+through the service and should not need the example directly.
 
 ## Regression areas
 

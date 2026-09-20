@@ -11,12 +11,14 @@ use std::fs;
 use std::io::{Read, Take};
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const PW_DUMP_PATH: &str = "/usr/bin/pw-dump";
 const PW_CAT_PATH: &str = "/usr/bin/pw-cat";
+const WPCTL_PATH: &str = "/usr/bin/wpctl";
+const PACTL_PATH: &str = "/usr/bin/pactl";
 const MAX_REGISTRY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PROCESSES: usize = 8_192;
 const MAX_PROCESS_DEPTH: usize = 32;
@@ -85,17 +87,17 @@ pub fn process_tree(root_pid: u32) -> BTreeSet<u32> {
 ///
 /// # Errors
 ///
-/// Returns [`AudioCaptureError`] when the fixed system utility is unavailable,
+/// Returns [`AudioCaptureError`] when the system utility is unavailable,
 /// its bounded output is malformed, or process ownership is ambiguous.
 pub fn discover_pipewire_game_node(
     process_ids: &BTreeSet<u32>,
 ) -> Result<Option<GameAudioNode>, AudioCaptureError> {
-    if !Path::new(PW_DUMP_PATH).is_file() {
+    let Some(pw_dump) = system_utility(PW_DUMP_PATH, "pw-dump") else {
         return Err(AudioCaptureError::new(
             "PipeWire registry utility is unavailable",
         ));
-    }
-    let mut child = Command::new(PW_DUMP_PATH)
+    };
+    let mut child = Command::new(pw_dump)
         .args(["-N", "-i0"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -131,13 +133,88 @@ pub fn discover_pipewire_game_node(
         ));
     }
     discover_game_audio_node(&bytes, process_ids)
-        .and_then(|node| {
-            node.map_or_else(
-                || discover_output_monitor_node(&bytes),
-                |found| Ok(Some(found)),
-            )
+        .and_then(|node| match node {
+            Some(found) => Ok(Some(found)),
+            None => discover_default_output_monitor_node(&bytes),
         })
         .map_err(|error| AudioCaptureError::new(error.to_string()))
+}
+
+fn discover_default_output_monitor_node(
+    registry: &[u8],
+) -> Result<Option<GameAudioNode>, crate::GameAudioNodeError> {
+    let preferred = inspect_default_sink_name();
+    discover_output_monitor_node(registry, preferred.as_deref())
+}
+
+fn inspect_default_sink_name() -> Option<String> {
+    if let Some(wpctl) = system_utility(WPCTL_PATH, "wpctl")
+        && let Ok(output) = Command::new(wpctl)
+            .args(["inspect", "@DEFAULT_AUDIO_SINK@"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        && output.status.success()
+        && output.stdout.len() <= 64 * 1024
+        && let Some(name) = parse_default_sink_name(&output.stdout)
+    {
+        return Some(name);
+    }
+    let pactl = system_utility(PACTL_PATH, "pactl")?;
+    let output = Command::new(pactl)
+        .arg("get-default-sink")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > 4 * 1024 {
+        return None;
+    }
+    parse_pactl_default_sink_name(&output.stdout)
+}
+
+fn parse_default_sink_name(output: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(output).ok()?;
+    let value = text.lines().find_map(|line| {
+        let (_, value) = line.trim().split_once("node.name = ")?;
+        value
+            .trim()
+            .strip_prefix('"')?
+            .strip_suffix('"')
+            .map(str::to_owned)
+    })?;
+    if value.is_empty()
+        || value.len() > 256
+        || value.contains('\\')
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn parse_pactl_default_sink_name(output: &[u8]) -> Option<String> {
+    let value = std::str::from_utf8(output).ok()?.trim();
+    if value.is_empty()
+        || value.len() > 256
+        || value.contains(char::is_whitespace)
+        || value.contains('\\')
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+fn system_utility(preferred: &str, name: &str) -> Option<PathBuf> {
+    let preferred = Path::new(preferred);
+    if preferred.is_file() {
+        return Some(preferred.to_owned());
+    }
+    ["/bin", "/usr/local/bin"]
+        .into_iter()
+        .map(|directory| Path::new(directory).join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 pub struct PipeWireGameAudioCapture {
@@ -164,14 +241,17 @@ impl PipeWireGameAudioCapture {
         timeline_timestamp_ns: u64,
         timeline_started: Instant,
     ) -> Result<Self, AudioCaptureError> {
-        if !Path::new(PW_CAT_PATH).is_file() || node.serial == 0 {
+        let Some(pw_cat) = system_utility(PW_CAT_PATH, "pw-cat") else {
             return Err(AudioCaptureError::new(
                 "PipeWire audio capture utility is unavailable",
             ));
+        };
+        if node.serial == 0 {
+            return Err(AudioCaptureError::new("PipeWire audio target is invalid"));
         }
         let encoder =
             OpusEncoder::open().map_err(|error| AudioCaptureError::new(error.to_string()))?;
-        let mut command = Command::new(PW_CAT_PATH);
+        let mut command = Command::new(pw_cat);
         command
             .args([
                 "--record",
@@ -190,8 +270,7 @@ impl PipeWireGameAudioCapture {
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            ;
+            .stderr(Stdio::null());
         {
             // SAFETY: the closure runs in the child between fork and exec
             // and calls only the async-signal-safe prctl with fixed values.
@@ -210,11 +289,9 @@ impl PipeWireGameAudioCapture {
                 });
             }
         }
-        let mut child = command
-            .spawn()
-            .map_err(|error| {
-                AudioCaptureError::new(format!("could not start game audio capture: {error}"))
-            })?;
+        let mut child = command.spawn().map_err(|error| {
+            AudioCaptureError::new(format!("could not start game audio capture: {error}"))
+        })?;
         let Some(stdout) = child.stdout.take() else {
             let _ = child.kill();
             let _ = child.wait();
@@ -330,5 +407,26 @@ mod tests {
     #[test]
     fn process_tree_always_contains_the_requested_root() {
         assert!(process_tree(std::process::id()).contains(&std::process::id()));
+    }
+
+    #[test]
+    fn default_sink_parser_accepts_wpctl_node_name() {
+        let output = br#"id 74, type PipeWire:Interface:Node
+  * node.name = "alsa_output.pci-0000_0f_00.4.analog-stereo"
+  * object.serial = "74"
+"#;
+        assert_eq!(
+            parse_default_sink_name(output).as_deref(),
+            Some("alsa_output.pci-0000_0f_00.4.analog-stereo")
+        );
+    }
+
+    #[test]
+    fn default_sink_parser_accepts_pipewire_pulse_name() {
+        assert_eq!(
+            parse_pactl_default_sink_name(b"alsa_output.pci-0000_0f_00.4.analog-stereo\n")
+                .as_deref(),
+            Some("alsa_output.pci-0000_0f_00.4.analog-stereo")
+        );
     }
 }

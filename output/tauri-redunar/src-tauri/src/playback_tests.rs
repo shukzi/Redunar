@@ -201,7 +201,12 @@ fn matroska_preparation_creates_fast_start_mp4_and_removes_its_private_copy() {
     assert!(!source_bytes.windows(cues.len()).any(|bytes| bytes == cues));
 
     let file = File::open(&source).unwrap();
-    let prepared = prepare_playback_mp4(&file, SourceIdentity::read(&file).unwrap()).unwrap();
+    let prepared = prepare_playback_mp4(
+        &file,
+        SourceIdentity::read(&file).unwrap(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     let prepared_path = prepared.temporary.path.clone();
     let prepared_directory = prepared.temporary.directory.clone();
     assert_eq!(
@@ -241,7 +246,7 @@ fn conversion_reports_storage_exhaustion_without_exposing_diagnostics() {
             "fixture",
             message,
         ]);
-        let error = run_preparation(&mut command).unwrap_err();
+        let error = run_preparation(&mut command, &AtomicBool::new(false)).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::StorageFull);
         assert!(error.to_string().contains("/var/tmp"));
         assert!(error
@@ -253,7 +258,7 @@ fn conversion_reports_storage_exhaustion_without_exposing_diagnostics() {
         "-c",
         "printf '%s' '/private/recording corrupt packet' >&2; exit 1",
     ]);
-    let error = run_preparation(&mut command).unwrap_err();
+    let error = run_preparation(&mut command, &AtomicBool::new(false)).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(!error.to_string().contains("/private"));
 }
@@ -267,7 +272,7 @@ fn conversion_reports_missing_codecs_without_requesting_a_provider_swap() {
         "fixture",
         "Unknown encoder 'aac' for /private/recording.mkv",
     ]);
-    let error = run_preparation(&mut command).unwrap_err();
+    let error = run_preparation(&mut command, &AtomicBool::new(false)).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     let message = error.to_string();
     assert!(message.contains("codec or format support"));
@@ -285,7 +290,24 @@ fn conversion_diagnostics_drain_large_output_but_retain_only_a_bounded_tail() {
     assert_eq!(reader.position(), reader.get_ref().len() as u64);
     assert_eq!(details.len(), MAX_PREPARE_DIAGNOSTICS);
     assert!(details.ends_with("Disk quota exceeded"));
-    assert!(run_preparation(&mut Command::new("/bin/true")).is_ok());
+    assert!(run_preparation(&mut Command::new("/bin/true"), &AtomicBool::new(false)).is_ok());
+}
+
+#[test]
+fn active_preparation_can_be_cancelled_promptly() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
+    let started = Instant::now();
+    let worker = std::thread::spawn(move || {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        run_preparation(&mut command, &worker_cancelled)
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    cancelled.store(true, Ordering::Release);
+    let error = worker.join().unwrap().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert!(started.elapsed() < Duration::from_secs(2));
 }
 
 fn make_player_dir(root: &Path, name: &str, age: Option<Duration>) -> PathBuf {

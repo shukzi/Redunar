@@ -365,7 +365,7 @@ impl ProductionGameSessionCoordinator {
     /// failure is swallowed after one warning and never affects the save or
     /// the game session. If two saves complete between polls, both names were
     /// queued, so each clip still gets its own line.
-    fn record_completed_clip_games(&self) {
+    pub fn flush_completed_clip_attribution(&self) {
         let completed = self.inner.replay.status().completed_save_revision;
         let game_name = {
             let mut state = lock_unpoisoned(&self.inner.state);
@@ -576,7 +576,7 @@ impl ProductionGameSessionCoordinator {
         // pass (a save finishing during shutdown) while the previous game
         // name is still published, so it cannot be re-attributed to the
         // session that is about to start.
-        self.record_completed_clip_games();
+        self.flush_completed_clip_attribution();
         if replay.backend_readiness.validation_allowed() {
             self.inner
                 .replay
@@ -703,7 +703,7 @@ impl ProductionGameSessionCoordinator {
         // Observe only committed saves; accepted requests and failures do not
         // emit success, and a telemetry write failure is retried next poll.
         let _ = self.publish_replay_saved_notice();
-        self.record_completed_clip_games();
+        self.flush_completed_clip_attribution();
         let mut state = lock_unpoisoned(&self.inner.state);
         let disposition = state
             .capture
@@ -747,7 +747,7 @@ impl ProductionGameSessionCoordinator {
         // One final attribution pass before the session stops so a save that
         // completed since the last supervisor poll is still labeled with this
         // game. Later drains fall back to session-history window matching.
-        self.record_completed_clip_games();
+        self.flush_completed_clip_attribution();
         let mut replay_pump = {
             let mut state = lock_unpoisoned(&self.inner.state);
             if matches!(
@@ -1074,9 +1074,18 @@ fn run_game_audio_worker(
                 continue;
             }
         };
-        eprintln!("Redunar Replay: game-owned audio capture active");
+        let source_label = if node.process_id == 0 {
+            "default output monitor"
+        } else {
+            "game-owned stream"
+        };
+        eprintln!(
+            "Redunar Replay: audio capture active from {source_label} ({})",
+            node.node_name
+        );
         let mut reconnect = false;
         let mut recorder_pause_logged = false;
+        let mut rediscover_at = Instant::now() + Duration::from_secs(2);
         while !stop.load(Ordering::Acquire) {
             match capture.next_packet(Duration::from_millis(100)) {
                 Ok(Some(packet)) => {
@@ -1110,6 +1119,25 @@ fn run_game_audio_worker(
                 Ok(None) => {}
                 Err(error) => {
                     eprintln!("Redunar Replay: game audio capture stopped; retrying: {error}");
+                    reconnect = true;
+                    break;
+                }
+            }
+            if Instant::now() >= rediscover_at {
+                rediscover_at = Instant::now() + Duration::from_secs(2);
+                let Some(root_pid) = replay_game_process_id(coordinator) else {
+                    reconnect = true;
+                    break;
+                };
+                let process_ids = redunar_capture_audio::process_tree(root_pid);
+                if let Ok(Some(updated)) =
+                    redunar_capture_audio::discover_pipewire_game_node(&process_ids)
+                    && updated.serial != node.serial
+                {
+                    eprintln!(
+                        "Redunar Replay: audio output changed from {} to {}; reconnecting",
+                        node.node_name, updated.node_name
+                    );
                     reconnect = true;
                     break;
                 }

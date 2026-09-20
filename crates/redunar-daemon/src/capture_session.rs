@@ -200,7 +200,9 @@ impl CaptureSessionConfig {
         let current_uid = process_uid();
         // The runtime root's owner is the session user; refuse to sweep a
         // directory we do not own.
-        let root_owner = fs::metadata(&self.runtime_root).ok().map(|metadata| metadata.uid());
+        let root_owner = fs::metadata(&self.runtime_root)
+            .ok()
+            .map(|metadata| metadata.uid());
         if root_owner != Some(current_uid) {
             return 0;
         }
@@ -1760,9 +1762,7 @@ fn cleanup_session_directory(directory: &Path) {
     }
     if let Ok(entries) = fs::read_dir(directory) {
         for entry in entries.flatten() {
-            let is_dir = entry
-                .file_type()
-                .is_ok_and(|file_type| file_type.is_dir());
+            let is_dir = entry.file_type().is_ok_and(|file_type| file_type.is_dir());
             if is_dir {
                 let _ = fs::remove_dir(entry.path());
             } else {
@@ -1776,8 +1776,7 @@ fn cleanup_session_directory(directory: &Path) {
 /// Resolve the current uid from /proc/self, matching the ownership checks
 /// the Steam activation bridge uses for the same runtime directory.
 fn process_uid() -> u32 {
-    fs::metadata("/proc/self")
-        .map_or(u32::MAX, |metadata| metadata.uid())
+    fs::metadata("/proc/self").map_or(u32::MAX, |metadata| metadata.uid())
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -2439,10 +2438,8 @@ mod tests {
         let fixture = Fixture::new();
         let directory = fixture.root.join("capture-leak-check");
         fs::create_dir(&directory).expect("create session dir");
-        fs::write(directory.join(CAPTURE_SOCKET_FILE), b"")
-            .expect("write capture socket stand-in");
-        fs::write(directory.join("r-4242.sock"), b"")
-            .expect("write reply socket stand-in");
+        fs::write(directory.join(CAPTURE_SOCKET_FILE), b"").expect("write capture socket stand-in");
+        fs::write(directory.join("r-4242.sock"), b"").expect("write reply socket stand-in");
         fs::create_dir(directory.join("empty-subdir")).expect("create subdir");
         cleanup_session_directory(&directory);
         assert!(
@@ -2463,9 +2460,7 @@ mod tests {
         // Look-alikes that must survive: wrong prefix, wrong name shape, and
         // a matching-name plain file rather than a directory.
         let foreign_prefix = fixture.root.join("replay-0123456789abcdef0123456789abcdef");
-        let malformed = fixture
-            .root
-            .join("capture-0123456789abcdef0123456789abcde");
+        let malformed = fixture.root.join("capture-0123456789abcdef0123456789abcde");
         let not_a_dir = fixture
             .root
             .join("capture-0123456789abcdef0123456789abcdef0");

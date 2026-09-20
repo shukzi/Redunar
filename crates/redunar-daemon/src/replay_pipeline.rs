@@ -134,7 +134,10 @@ impl ReplayHardwarePipeline {
             in_flight_inputs: VecDeque::with_capacity(MAX_TRACKED_INPUTS),
             completed_inputs: VecDeque::with_capacity(MAX_COMPLETED_INPUTS),
             audio: ReplayAudioBuffer::new(
-                settings.duration,
+                // Video history always retains the full duration-selectable
+                // spool. Keep audio on the same horizon so a 15-minute save
+                // cannot silently contain only the profile's shorter tail.
+                ReplayDuration::Seconds900,
                 redunar_capture_audio::OpusStreamDescription::default(),
             ),
         })

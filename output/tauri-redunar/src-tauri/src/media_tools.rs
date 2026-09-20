@@ -5,10 +5,7 @@ use std::{
     ffi::OsStr,
     fs,
     io::Read,
-    os::unix::{
-        fs::PermissionsExt,
-        process::CommandExt,
-    },
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock},

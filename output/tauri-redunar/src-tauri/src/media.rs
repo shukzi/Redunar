@@ -21,7 +21,14 @@ pub struct Clip {
 }
 #[tauri::command]
 pub fn replay_clips() -> Result<Vec<Clip>, String> {
-    Ok(crate::backend::service()
+    let service = crate::backend::service();
+    // A save revision is published by the replay worker before the one-second
+    // session supervisor necessarily observes it. Flush attribution before the
+    // inventory join so the first UI refresh already carries the game name.
+    service
+        .game_session_coordinator()
+        .flush_completed_clip_attribution();
+    Ok(service
         .replay_clip_inventory()
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -111,6 +118,11 @@ pub async fn clip_playback_path(
     })
     .await
     .map_err(|error| format!("Clip playback worker failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn cancel_clip_playback(playback: tauri::State<'_, crate::playback::Playback>) {
+    playback.cancel_preparation();
 }
 
 /// Generate one bounded JPEG frame for a validated local clip. The bytes are

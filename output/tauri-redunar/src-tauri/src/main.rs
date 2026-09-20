@@ -189,6 +189,7 @@ fn main() {
             catalog::save_game_profile,
             media::replay_clips,
             media::clip_playback_path,
+            media::cancel_clip_playback,
             media::clip_thumbnail,
             media::open_replay_folder,
             media::open_clip_external,

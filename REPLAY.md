@@ -111,11 +111,13 @@ launchers do not expose usable process ownership metadata. The fallback can
 include audio from other applications; do not describe it as game-only capture.
 
 `crates/redunar-capture-audio/src/source.rs` first tries a game-process-owned
-playback node. If none is found, `discover_output_monitor_node` in `node.rs`
-selects the first valid Audio/Sink entry. This does not verify that it is the
-uniquely active/default output. Missing or ambiguous discovery and audio failures
-still need honest runtime states. Validation should record which source was
-selected and check both game-owned audio and the intended output fallback.
+playback node. If none is found, it resolves WirePlumber's default output with
+`wpctl`, falling back to PipeWire's Pulse compatibility through `pactl`, and
+captures that exact monitor. It never guesses between multiple outputs. The
+worker periodically rechecks the route and reconnects when the game stream
+appears or the default output changes. Missing or ambiguous discovery and audio
+failures still need honest runtime states. Validation should record which source
+was selected and check both game-owned audio and the intended output fallback.
 
 ## Clip browsing, playback, and export
 
@@ -123,11 +125,13 @@ Native inventory supplies names, sizes, timestamps, and available game/duration
 metadata. The game name follows the persisted attribution ledger first and the
 unique-session window fallback otherwise; ambiguous or missing evidence shows
 "Game not recorded" rather than a guess, and a trimmed export inherits its
-source clip's attribution. Read thumbnail/metadata files only through validated
-local paths.
+source clip's attribution. Inventory requests first flush names committed by the
+save worker into the attribution ledger, so the completion refresh includes the
+recording game. Read thumbnail/metadata files only through validated local paths.
 Selection preserves the clip rail, search, scroll, and focus. One preparation
 runs while a newer pending selection replaces older requests; stale completions
-cannot replace the selected player. Expensive media work runs off the UI thread.
+cannot replace the selected player. A newer selection or navigation away cancels
+the active native preparation. Expensive media work runs off the UI thread.
 
 Playback lazily starts a loopback-only HTTP listener with random per-selection
 256-bit tokens. It serves an already-opened validated file through GET/HEAD and

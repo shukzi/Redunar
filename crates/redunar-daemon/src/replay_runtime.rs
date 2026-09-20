@@ -367,9 +367,7 @@ impl ProductionReplayRuntime {
                         // bump so the game-session coordinator can attribute
                         // the clip to the game that recorded it. Only the name
                         // is kept; the clip itself is already durable.
-                        if let Some(name) =
-                            stored.path.file_name().and_then(|name| name.to_str())
-                        {
+                        if let Some(name) = stored.path.file_name().and_then(|name| name.to_str()) {
                             if state.committed_clips.len() >= MAX_COMMITTED_CLIP_NAMES {
                                 state.committed_clips.pop_front();
                             }

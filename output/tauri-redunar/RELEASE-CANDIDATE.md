@@ -1,6 +1,6 @@
 # Tauri release qualification
 
-Reviewed September 17, 2026. The active local app is implemented, but release
+Reviewed September 20, 2026. The active local app is implemented, but release
 qualification is still open. Read `packaging/redunar-app.spec` for the current
 package version; do not infer the installed or running version from this file.
 
@@ -17,17 +17,14 @@ Current design/calculation contracts are [DESIGN](../../DESIGN.md) and
 
 ## Current automated evidence
 
-On September 17, 2026, the focused updater/session checks and both Rust
-workspace checks passed for the v0.1.0 initial-release source. The full
-`tools/check-tauri-release.sh` gate remains to be run after the final version
-bump. The prior gate completed successfully with Podman for the same release
-source before its release metadata was reset;
-it built the pinned glibc 2.36
-compatibility artifacts, passed the Rust, frontend, license, installer,
-staging, desktop metadata, and package checks, and produced signed DEB, RPM,
-openSUSE RPM, Arch, and portable artifacts.
+On September 20, 2026, the full `tools/check-tauri-release.sh` gate passed for
+the v0.1.1 source. It built the pinned glibc 2.36 compatibility artifacts,
+passed the Rust, frontend, license, installer, staging, desktop metadata, and
+package checks, and produced signed DEB, RPM, openSUSE RPM, Arch, and portable
+artifacts.
 
-This evidence applies only to the checked source snapshot. The installed-runtime
+This evidence applies only to the checked source snapshot. The v0.1.1 package
+has not been installed or run as the system application. The installed-runtime
 and manual acceptance items below remain open; the passing gate does not by
 itself qualify an installed package or a public release.
 

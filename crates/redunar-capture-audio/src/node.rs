@@ -100,8 +100,10 @@ pub fn discover_game_audio_node(
     }
 }
 
-/// Select the first valid `PipeWire` sink as a fallback monitor target when a
-/// game's stream does not expose process ownership metadata.
+/// Select the requested `PipeWire` sink as a fallback monitor target when a
+/// game's stream does not expose process ownership metadata. Without a
+/// preferred sink, exactly one valid sink must exist; choosing an arbitrary
+/// device can silently record an idle HDMI or network output.
 ///
 /// # Errors
 ///
@@ -109,11 +111,13 @@ pub fn discover_game_audio_node(
 /// or a candidate sink has malformed metadata.
 pub fn discover_output_monitor_node(
     registry: &[u8],
+    preferred_node_name: Option<&str>,
 ) -> Result<Option<GameAudioNode>, GameAudioNodeError> {
     if registry.len() > MAX_REGISTRY_BYTES {
         return Err(GameAudioNodeError::RegistryTooLarge);
     }
     let text = std::str::from_utf8(registry).map_err(|_| GameAudioNodeError::MalformedRegistry)?;
+    let mut sinks = Vec::new();
     for object in json_objects(text)? {
         if object.contains("\"PipeWire:Interface:Node\"")
             && property_equals(object, "media.class", "Audio/Sink")
@@ -123,15 +127,24 @@ pub fn discover_output_monitor_node(
             let node_name = property_string(object, "node.name")
                 .ok_or(GameAudioNodeError::MalformedRegistry)?;
             if serial != 0 && !node_name.is_empty() && node_name.len() <= MAX_NODE_NAME_BYTES {
-                return Ok(Some(GameAudioNode {
+                sinks.push(GameAudioNode {
                     serial,
                     process_id: 0,
                     node_name,
-                }));
+                });
             }
         }
     }
-    Ok(None)
+    sinks.sort_by_key(|node| node.serial);
+    sinks.dedup_by_key(|node| node.serial);
+    if let Some(preferred) = preferred_node_name {
+        return Ok(sinks.into_iter().find(|node| node.node_name == preferred));
+    }
+    match sinks.len() {
+        0 => Ok(None),
+        1 => Ok(sinks.pop()),
+        _ => Err(GameAudioNodeError::Ambiguous),
+    }
 }
 
 fn json_objects(text: &str) -> Result<Vec<&str>, GameAudioNodeError> {
@@ -286,5 +299,31 @@ mod tests {
             .expect("owned node");
         assert_eq!(selected.serial, 41);
         assert_eq!(selected.process_id, 900);
+    }
+
+    #[test]
+    fn output_fallback_selects_the_named_default_sink() {
+        let data = registry(&format!(
+            "{},{}",
+            node(41, 0, "Audio/Sink"),
+            node(42, 0, "Audio/Sink")
+        ));
+        let selected = discover_output_monitor_node(&data, Some("game-audio-42"))
+            .expect("registry")
+            .expect("default sink");
+        assert_eq!(selected.serial, 42);
+    }
+
+    #[test]
+    fn output_fallback_never_guesses_between_multiple_sinks() {
+        let data = registry(&format!(
+            "{},{}",
+            node(41, 0, "Audio/Sink"),
+            node(42, 0, "Audio/Sink")
+        ));
+        assert_eq!(
+            discover_output_monitor_node(&data, None),
+            Err(GameAudioNodeError::Ambiguous)
+        );
     }
 }

@@ -351,16 +351,12 @@ mod tests {
             result.overlay_palette,
             redunar_core::OverlayPalette::Glacier
         );
-        assert!(
-            result
-                .overlay_metrics
-                .contains(redunar_core::OverlayMetricSet::CPU_TEMPERATURE)
-        );
-        assert!(
-            !result
-                .overlay_metrics
-                .contains(redunar_core::OverlayMetricSet::CPU_LOAD)
-        );
+        assert!(result
+            .overlay_metrics
+            .contains(redunar_core::OverlayMetricSet::CPU_TEMPERATURE));
+        assert!(!result
+            .overlay_metrics
+            .contains(redunar_core::OverlayMetricSet::CPU_LOAD));
     }
     #[test]
     fn overlay_save_during_a_game_preserves_unedited_recording_settings() {
@@ -407,11 +403,9 @@ mod tests {
         }
         let mut recording_change = current;
         recording_change.replay.frame_rate = ReplayFrameRate::Fps30;
-        assert!(
-            service
-                .save_global_workspace(current, recording_change, format, format)
-                .is_err()
-        );
+        assert!(service
+            .save_global_workspace(current, recording_change, format, format)
+            .is_err());
         assert_eq!(service.load_game_catalog().unwrap().global_profile, current);
         drop(coordinator);
         drop(service);

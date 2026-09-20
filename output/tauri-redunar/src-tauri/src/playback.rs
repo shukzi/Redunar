@@ -35,56 +35,98 @@ pub struct Playback(Arc<Mutex<PlaybackState>>);
 #[derive(Default)]
 struct PlaybackState {
     closed: bool,
+    generation: u64,
+    active_preparation: Option<Arc<AtomicBool>>,
     server: Option<Server>,
     prepared: Option<PreparedPlayback>,
 }
 
 impl Playback {
     pub fn select(&self, file: File, _kind: &'static str) -> Result<String, String> {
-        let mut guard = self.0.lock().map_err(|_| "Clip player unavailable")?;
-        if guard.closed {
+        if self.0.lock().map_err(|_| "Clip player unavailable")?.closed {
             return Err("Clip player has shut down".into());
         }
         let identity = SourceIdentity::read(&file)
             .map_err(|e| format!("Clip metadata could not be read: {e}"))?;
+        let (generation, cancelled) = {
+            let mut guard = self.0.lock().map_err(|_| "Clip player unavailable")?;
+            if guard.closed {
+                return Err("Clip player has shut down".into());
+            }
+            if let Some(active) = guard.active_preparation.take() {
+                active.store(true, Ordering::Release);
+            }
+            guard.generation = guard.generation.wrapping_add(1);
+            if guard
+                .prepared
+                .as_ref()
+                .is_some_and(|clip| clip.source == identity)
+            {
+                let selected = File::open(&guard.prepared.as_ref().unwrap().temporary.path)
+                    .map_err(|e| format!("Prepared clip could not be reopened: {e}"))?;
+                return select_stream(&mut guard, selected);
+            }
+            let cancelled = Arc::new(AtomicBool::new(false));
+            guard.active_preparation = Some(cancelled.clone());
+            (guard.generation, cancelled)
+        };
         // Normalize every recording through the same MP4 path. Some captured MP4s
         // contain an audio track that starts several seconds after video; passing
         // those files directly to WebKit makes its media clock jump to that offset.
-        let selected = match guard
-            .prepared
+        let prepared = prepare_playback_mp4(&file, identity, &cancelled);
+        let mut guard = self.0.lock().map_err(|_| "Clip player unavailable")?;
+        if guard
+            .active_preparation
             .as_ref()
-            .filter(|clip| clip.source == identity)
+            .is_some_and(|active| Arc::ptr_eq(active, &cancelled))
         {
-            Some(prepared) => File::open(&prepared.temporary.path)
-                .map_err(|e| format!("Prepared clip could not be reopened: {e}"))?,
-            None => {
-                let prepared = prepare_playback_mp4(&file, identity)
-                    .map_err(|e| format!("Clip could not be prepared for seeking: {e}"))?;
-                let selected = File::open(&prepared.temporary.path)
-                    .map_err(|e| format!("Prepared clip could not be opened: {e}"))?;
-                guard.prepared = Some(prepared);
-                selected
-            }
-        };
-        if guard.server.is_none() {
-            guard.server =
-                Some(Server::start().map_err(|e| format!("Local playback could not start: {e}"))?);
+            guard.active_preparation = None;
         }
-        guard
-            .server
-            .as_ref()
-            .unwrap()
-            .select(selected, "video/mp4")
-            .map_err(|e| format!("Clip could not be opened: {e}"))
+        if guard.closed || guard.generation != generation || cancelled.load(Ordering::Acquire) {
+            return Err("Clip preparation was cancelled".into());
+        }
+        let prepared =
+            prepared.map_err(|e| format!("Clip could not be prepared for seeking: {e}"))?;
+        let selected = File::open(&prepared.temporary.path)
+            .map_err(|e| format!("Prepared clip could not be opened: {e}"))?;
+        guard.prepared = Some(prepared);
+        select_stream(&mut guard, selected)
     }
+
+    pub fn cancel_preparation(&self) {
+        if let Ok(mut guard) = self.0.lock() {
+            guard.generation = guard.generation.wrapping_add(1);
+            if let Some(active) = guard.active_preparation.take() {
+                active.store(true, Ordering::Release);
+            }
+        }
+    }
+
     pub fn shutdown(&self) {
         if let Ok(mut guard) = self.0.lock() {
             // A queued preparation worker must not restart playback after Quit.
             guard.closed = true;
+            guard.generation = guard.generation.wrapping_add(1);
+            if let Some(active) = guard.active_preparation.take() {
+                active.store(true, Ordering::Release);
+            }
             guard.server.take();
             guard.prepared.take();
         }
     }
+}
+
+fn select_stream(guard: &mut PlaybackState, selected: File) -> Result<String, String> {
+    if guard.server.is_none() {
+        guard.server =
+            Some(Server::start().map_err(|e| format!("Local playback could not start: {e}"))?);
+    }
+    guard
+        .server
+        .as_ref()
+        .unwrap()
+        .select(selected, "video/mp4")
+        .map_err(|e| format!("Clip could not be opened: {e}"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,7 +174,11 @@ impl Drop for TemporaryPlayback {
     }
 }
 
-fn prepare_playback_mp4(file: &File, source: SourceIdentity) -> io::Result<PreparedPlayback> {
+fn prepare_playback_mp4(
+    file: &File,
+    source: SourceIdentity,
+    cancelled: &AtomicBool,
+) -> io::Result<PreparedPlayback> {
     let directory = private_temporary_directory()?;
     let path = directory.join("clip.mp4");
     let temporary = TemporaryPlayback { directory, path };
@@ -173,7 +219,7 @@ fn prepare_playback_mp4(file: &File, source: SourceIdentity) -> io::Result<Prepa
         ])
         .arg(&temporary.path)
         .stdin(Stdio::from(input));
-    run_preparation(&mut command)?;
+    run_preparation(&mut command, cancelled)?;
     let metadata = fs::symlink_metadata(&temporary.path)?;
     if !metadata.file_type().is_file()
         || metadata.len() == 0
@@ -188,7 +234,7 @@ fn prepare_playback_mp4(file: &File, source: SourceIdentity) -> io::Result<Prepa
     Ok(PreparedPlayback { source, temporary })
 }
 
-fn run_preparation(command: &mut Command) -> io::Result<()> {
+fn run_preparation(command: &mut Command, cancelled: &AtomicBool) -> io::Result<()> {
     let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -218,6 +264,15 @@ fn run_preparation(command: &mut Command) -> io::Result<()> {
                 let _ = diagnostics.join();
                 return Err(error);
             }
+        }
+        if cancelled.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = diagnostics.join();
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Preparing the recording was cancelled",
+            ));
         }
         if started.elapsed() >= PREPARE_TIMEOUT {
             let _ = child.kill();
@@ -318,7 +373,9 @@ fn sweep_stale_playback_copies_in(root: &Path) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(suffix) = name.to_str().and_then(|value| value.strip_prefix(PLAYER_TEMP_PREFIX))
+        let Some(suffix) = name
+            .to_str()
+            .and_then(|value| value.strip_prefix(PLAYER_TEMP_PREFIX))
         else {
             continue;
         };

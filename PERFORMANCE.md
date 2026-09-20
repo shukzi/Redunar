@@ -1,6 +1,6 @@
 # Runtime performance contract
 
-Current engineering budgets, reviewed September 13, 2026. Redunar measures games;
+Current engineering budgets, reviewed September 20, 2026. Redunar measures games;
 its own work must not meaningfully disturb them. Budgets are acceptance targets,
 not a promise of performance improvement or a report that every path passes.
 
@@ -91,6 +91,21 @@ That read-only probe measures the monitor, not the whole app. For a production
 Tauri process, measure the current PID with `pidstat`/`ps`, include native helper
 processes, and take before/after RSS. Record at least a ten-minute idle interval
 for the growth budget. UI, Vulkan, recording, and codec checks are separate.
+
+For bounded Replay bookkeeping and temporary-store throughput:
+
+```sh
+cargo run --release --offline -p redunar-daemon --example replay_profile
+cargo run --release --offline -p redunar-daemon --example replay_store_profile
+```
+
+The first pushes ten simulated minutes of fixed-size packets through the Replay
+ring. The second writes and removes one synthetic 16 MiB container under the
+temporary directory. They can expose regressions in those components, but they
+do not measure capture, hardware encode, decoded playback, game frame pacing, or
+sustained recording. Record the build, host, storage, and observed values before
+comparing runs. See the remaining retained diagnostics in
+[TESTING.md](TESTING.md#retained-engineering-diagnostics).
 
 Use matched game runs with the same scene, display mode, graphics settings, and
 other overlays. Report duration, frame-time distribution/lows, variance, CPU/GPU

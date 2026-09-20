@@ -1,6 +1,6 @@
 Name:           redunar-app
-Version:        0.1.0
-Release:        3.70.local%{?dist}
+Version:        0.1.1
+Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
 Source0:        redunar-app-package-root.tar.gz
@@ -93,6 +93,13 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Sun Sep 20 2026 Redunar <local@redunar.invalid> - 0.1.1-1.local
+- Follow the active PipeWire output, retain full-duration Replay audio, and
+  expose audio readiness in the Instant Replay workspace
+- Preserve clip game attribution, cancel stale playback preparation, and guard
+  game discovery and launch edits against stale UI state
+- Correct overlay preview palette borders and remove obsolete generated assets
+
 * Thu Sep 17 2026 Redunar <local@redunar.invalid> - 0.1.0-3.70.local
 - Initial release with signed in-app update metadata, Instant Replay saves sized
   from the requested clip duration, and completed sessions cleared from Overview

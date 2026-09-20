@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.1" date="2026-09-20">
+      <description>
+        <p>Improves Instant Replay audio routing and retention, preserves clip game names during immediate refreshes, cancels obsolete playback preparation, protects game imports and launch edits from stale UI state, and fixes overlay preview palette borders.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-17">
       <description>
         <p>Initial scoped release for x86_64 Linux with AMD/RADV hardware and Steam games. Includes Instant Replay recording, in-game metrics, session history, clip editing, signed update metadata, and clean startup Overview state.</p>

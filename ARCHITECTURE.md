@@ -68,6 +68,8 @@ launch and artwork lookup; it does not replace the local game record.
 
 Installed-game import reads bounded Steam manifests and supported direct native
 XDG Game desktop entries. It is read-only until the user imports candidates.
+The import command re-runs discovery and resolves reviewed candidates by stable
+source identity, so a reordered scan cannot silently import a different game.
 Running-process discovery remains internal to monitoring/supervision; its helper
 processes are not Library import entries. Identity ties remain ambiguous.
 

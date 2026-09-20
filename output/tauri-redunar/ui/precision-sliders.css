@@ -10,8 +10,8 @@
 #workspace input[type=range]:not(.trim-range):focus-visible{outline:2px solid #ff8288;outline-offset:3px}
 #workspace input[type=range]:disabled{cursor:not-allowed;opacity:.4}
 /* Trim handles keep their full-height grab area and mark the selected edges. */
-.trim-selection:before,.trim-selection:after{width:8px;border:2px solid var(--red);background:#0d0d0f;border-radius:4px}
-.trim-selection:before{left:-5px}.trim-selection:after{right:-5px}
-.trim-selection{border-width:1px}
+
+
+
 #workspace .range-setting{gap:12px;min-width:140px}
 @media(pointer:coarse){#workspace input[type=range]:not(.trim-range){height:44px;min-height:44px}}

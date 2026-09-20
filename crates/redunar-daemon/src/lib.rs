@@ -266,9 +266,7 @@ impl RedunarService {
         let coordinator = self
             .runtime
             .game_session
-            .get_or_init(|| {
-                ProductionGameSessionCoordinator::new(self.state_directory.clone())
-            })
+            .get_or_init(|| ProductionGameSessionCoordinator::new(self.state_directory.clone()))
             .clone();
         self.runtime.replay_control.get_or_init(|| {
             replay_control::ReplayControlServer::start(
@@ -611,10 +609,7 @@ impl RedunarService {
     /// failure) fall back to the commit time encoded in the clip name
     /// matching exactly one recorded session window. Listing never fails
     /// because labeling evidence is missing or unreadable.
-    fn attach_clip_games(
-        &self,
-        mut clips: Vec<ReplayClipEntry>,
-    ) -> Vec<ReplayClipEntry> {
+    fn attach_clip_games(&self, mut clips: Vec<ReplayClipEntry>) -> Vec<ReplayClipEntry> {
         let ledger = replay_clip_games::games(&self.state_directory);
         let sessions = session_history::load(&self.state_directory).unwrap_or_default();
         for clip in &mut clips {

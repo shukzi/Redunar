@@ -4,12 +4,12 @@ import {latestReplayRequest} from '../ui/replay-requests.mjs';
 
 const tick = () => new Promise(resolve=>setImmediate(resolve));
 function fixture() {
-  const started = [], accepted = [], rejected = [], jobs = [];
+  const started = [], accepted = [], rejected = [], jobs = [], cancellations = [];
   const queue = latestReplayRequest(value=>{
     started.push(value);
     return new Promise((resolve,reject)=>jobs.push({resolve,reject}));
-  });
-  return {queue, started, accepted, rejected, jobs,
+  },()=>cancellations.push(started.at(-1)));
+  return {queue, started, accepted, rejected, jobs, cancellations,
     select: value=>queue.request(value,result=>accepted.push(result),error=>rejected.push(error)),
   };
 }
@@ -18,6 +18,7 @@ test('rapid selection prepares one clip at a time and skips intermediate clips',
   const f=fixture();
   f.select('a');f.select('b');f.select('c');
   assert.deepEqual(f.started,['a']);
+  assert.deepEqual(f.cancellations,['a']);
   f.jobs[0].resolve('obsolete URL');await tick();
   assert.deepEqual(f.accepted,[]);
   assert.deepEqual(f.started,['a','c']);
@@ -28,6 +29,7 @@ test('rapid selection prepares one clip at a time and skips intermediate clips',
 test('leaving Replay discards queued work and ignores a stale failure',async()=>{
   const f=fixture();
   f.select('a');f.select('b');f.queue.invalidate();
+  assert.deepEqual(f.cancellations,['a']);
   f.jobs[0].reject('obsolete failure');await tick();
   assert.deepEqual(f.started,['a']);
   assert.deepEqual(f.rejected,[]);

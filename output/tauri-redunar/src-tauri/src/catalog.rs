@@ -1,6 +1,7 @@
 use redunar_core::{GameId, GameMatchRule, Inheritable, PerGameProfile};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::os::unix::ffi::OsStrExt;
 
 /// Open the platform's native file chooser for a local executable.
 ///
@@ -53,16 +54,34 @@ pub struct CatalogGame {
     steam_app_id: Option<u32>,
     overrides: HashMap<String, bool>,
     revision: String,
+    launch_revision: String,
 }
 
 #[derive(Serialize)]
 pub struct DiscoveredGameDto {
+    candidate_id: String,
     name: String,
     install_directory: String,
     launch_executable: Option<String>,
     source: String,
     source_id: Option<u32>,
     importable: bool,
+}
+
+fn discovered_candidate_id(game: &redunar_daemon::DiscoveredGame) -> String {
+    match &game.source {
+        redunar_daemon::GameDiscoverySource::Steam { app_id } => format!("steam:{app_id}"),
+        redunar_daemon::GameDiscoverySource::DesktopEntry { path } => {
+            let encoded = path
+                .as_os_str()
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!("desktop:{encoded}")
+        }
+        redunar_daemon::GameDiscoverySource::RunningProcess { pid } => format!("process:{pid}"),
+    }
 }
 
 #[derive(Serialize)]
@@ -93,6 +112,7 @@ fn discovered_game_dto(game: &redunar_daemon::DiscoveredGame) -> DiscoveredGameD
         }
     };
     DiscoveredGameDto {
+        candidate_id: discovered_candidate_id(game),
         name: game.display_name.clone(),
         install_directory: game.install_directory.to_string_lossy().into_owned(),
         launch_executable: game
@@ -114,26 +134,44 @@ pub fn discover_games() -> Result<Vec<DiscoveredGameDto>, String> {
 }
 
 #[tauri::command]
-pub fn import_discovered_games(indices: Vec<usize>) -> Result<Vec<CatalogGame>, String> {
+pub fn import_discovered_games(candidate_ids: Vec<String>) -> Result<Vec<CatalogGame>, String> {
     crate::backend::ensure_write_access()?;
-    if indices.is_empty() {
+    if candidate_ids.is_empty() {
         return Err("Select at least one discovered game to import".into());
     }
     let candidates = crate::backend::service()
         .discover_installed_games()
         .map_err(|error| error.to_string())?;
-    let selected = indices
-        .into_iter()
-        .map(|index| {
-            candidates.get(index).cloned().ok_or_else(|| {
-                "A discovery result changed. Scan again before importing.".to_string()
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let selected = select_discovered_games(candidates, candidate_ids)?;
     crate::backend::service()
         .import_discovered_games(selected)
         .map_err(|error| error.to_string())?;
     catalog_games()
+}
+
+fn select_discovered_games(
+    candidates: Vec<redunar_daemon::DiscoveredGame>,
+    candidate_ids: Vec<String>,
+) -> Result<Vec<redunar_daemon::DiscoveredGame>, String> {
+    let mut by_id = HashMap::new();
+    for candidate in candidates {
+        if by_id
+            .insert(discovered_candidate_id(&candidate), candidate)
+            .is_some()
+        {
+            return Err(
+                "Discovery returned duplicate identities. Scan again before importing.".into(),
+            );
+        }
+    }
+    candidate_ids
+        .into_iter()
+        .map(|candidate_id| {
+            by_id.remove(&candidate_id).ok_or_else(|| {
+                "A reviewed discovery result changed. Scan again before importing.".to_string()
+            })
+        })
+        .collect()
 }
 
 fn active_profile_overrides(profile: PerGameProfile) -> HashMap<String, bool> {
@@ -178,6 +216,7 @@ pub fn catalog_games() -> Result<Vec<CatalogGame>, String> {
             }),
             overrides: active_profile_overrides(game.profile),
             revision: format!("{:?}", game.profile),
+            launch_revision: format!("{:?}", game.launch),
         })
         .collect())
 }
@@ -267,6 +306,7 @@ pub fn update_game_launch(
     executable: String,
     arguments: Vec<String>,
     working_directory: Option<String>,
+    expected_revision: String,
 ) -> Result<Vec<CatalogGame>, String> {
     crate::backend::ensure_write_access()?;
     let id = GameId::new(game_id.parse().map_err(|_| "Invalid game identifier")?)
@@ -276,6 +316,16 @@ pub fn update_game_launch(
         arguments: arguments.into_iter().map(Into::into).collect(),
         working_directory: working_directory.map(Into::into),
     };
+    let current = crate::backend::service()
+        .load_game_catalog()
+        .map_err(|error| error.to_string())?
+        .games
+        .into_iter()
+        .find(|game| game.id == id)
+        .ok_or("The game no longer exists")?;
+    if format!("{:?}", current.launch) != expected_revision {
+        return Err("Launch settings changed elsewhere. Reload the library before saving.".into());
+    }
     crate::backend::service()
         .update_game_launch(id, launch)
         .map_err(|e| e.to_string())?;
@@ -351,6 +401,40 @@ pub fn steam_setup_status(game_id: String) -> Result<SteamSetupDto, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn discovered_steam(app_id: u32) -> redunar_daemon::DiscoveredGame {
+        redunar_daemon::DiscoveredGame {
+            display_name: format!("Game {app_id}"),
+            install_directory: format!("/games/{app_id}").into(),
+            poster_path: None,
+            launch: None,
+            match_rules: Vec::new(),
+            source: redunar_daemon::GameDiscoverySource::Steam { app_id },
+        }
+    }
+
+    #[test]
+    fn reviewed_discovery_id_survives_a_reordered_scan() {
+        let selected = select_discovered_games(
+            vec![discovered_steam(20), discovered_steam(10)],
+            vec!["steam:10".into()],
+        )
+        .unwrap();
+        assert_eq!(selected, vec![discovered_steam(10)]);
+    }
+
+    #[test]
+    fn changed_or_duplicate_discovery_identity_is_rejected() {
+        assert!(
+            select_discovered_games(vec![discovered_steam(20)], vec!["steam:10".into()]).is_err()
+        );
+        assert!(select_discovered_games(
+            vec![discovered_steam(10), discovered_steam(10)],
+            vec!["steam:10".into()]
+        )
+        .is_err());
+    }
+
     #[test]
     fn reset_inheritance_preserves_other_settings() {
         let current = PerGameProfile {
