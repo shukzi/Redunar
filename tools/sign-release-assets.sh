@@ -35,6 +35,11 @@ if (( ${#artifacts[@]} == 0 )); then
   printf '%s\n' 'no Redunar release assets were found to sign' >&2
   exit 1
 fi
+release_version=$(cat "$asset_directory/VERSION" 2>/dev/null || true)
+if [[ ! $release_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  printf '%s\n' 'a release VERSION file is required before signing' >&2
+  exit 1
+fi
 
 manifest="$asset_directory/SHA256SUMS"
 signature="$asset_directory/SHA256SUMS.sig"
@@ -45,12 +50,10 @@ for artifact in "${artifacts[@]}"; do
     sha256sum "$(basename -- "$artifact")"
   ) >>"$manifest"
 done
-if [[ -f "$asset_directory/VERSION" ]]; then
-  (
-    cd "$asset_directory"
-    sha256sum VERSION
-  ) >>"$manifest"
-fi
+(
+  cd "$asset_directory"
+  sha256sum VERSION
+) >>"$manifest"
 openssl dgst -sha256 -sign "$private_key" -out "$signature" "$manifest"
 openssl dgst -sha256 -verify "$public_key" -signature "$signature" "$manifest" >/dev/null
 

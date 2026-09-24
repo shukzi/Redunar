@@ -7,6 +7,7 @@ use crate::{
     ReplayPhase, ReplayPreferences, ReplayRuntimeError, ReplayRuntimeStatus, SteamActivationState,
     replay_preferences,
 };
+use redunar_capture::CaptureApi;
 use redunar_core::{GameId, ReplayDuration, ReplaySettings, SystemSnapshot};
 use std::collections::VecDeque;
 use std::error::Error;
@@ -343,11 +344,27 @@ impl ProductionGameSessionCoordinator {
     }
 
     pub(crate) fn replay_menu_watchdog(&self, now: Instant) -> bool {
-        let closed = lock_unpoisoned(&self.inner.replay_menu).close_if_stale(now);
+        let render_target_available = {
+            let state = lock_unpoisoned(&self.inner.state);
+            replay_menu_has_render_target(&state)
+        };
+        let closed = {
+            let mut menu = lock_unpoisoned(&self.inner.replay_menu);
+            if menu.is_visible() && !render_target_available {
+                menu.close();
+                true
+            } else {
+                menu.close_if_stale(now)
+            }
+        };
         if closed {
             self.publish_replay_menu();
         }
         closed
+    }
+
+    pub(crate) fn replay_menu_is_visible(&self) -> bool {
+        lock_unpoisoned(&self.inner.replay_menu).is_visible()
     }
 
     #[must_use]
@@ -411,7 +428,7 @@ impl ProductionGameSessionCoordinator {
             if let Err(error) =
                 crate::replay_clip_games::record(&self.inner.clip_games_state, &name, &game_name)
             {
-                eprintln!("Redunar could not attribute a saved Replay clip: {error}");
+                crate::log_op!("Redunar could not attribute a saved Replay clip: {error}");
             }
         }
     }
@@ -745,6 +762,7 @@ impl ProductionGameSessionCoordinator {
     /// itself remains active (for example, a forwarded Steam launch whose
     /// capture activation expired).
     pub fn stop_capture(&self) {
+        self.close_replay_menu();
         let mut replay_pump = lock_unpoisoned(&self.inner.state).replay_pump.take();
         if let Some(pump) = replay_pump.as_mut() {
             let _ = pump.stop_and_join();
@@ -773,6 +791,7 @@ impl ProductionGameSessionCoordinator {
         // completed since the last supervisor poll is still labeled with this
         // game. Later drains fall back to session-history window matching.
         self.flush_completed_clip_attribution();
+        self.close_replay_menu();
         let mut replay_pump = {
             let mut state = lock_unpoisoned(&self.inner.state);
             if matches!(
@@ -848,16 +867,23 @@ fn run_replay_export_pump(
     let mut rearm_deadline: Option<Instant> = None;
     let mut rearm_backoff = REPLAY_REARM_BACKOFF;
     let mut consecutive_source_errors = 0_u32;
+    let mut last_source_error_log: Option<Instant> = None;
     let mut audio_worker = None;
     while !stop.load(Ordering::Acquire) {
         let frame = match source.wait_next(REPLAY_EXPORT_WAIT) {
             Ok(Some(frame)) => frame,
             Ok(None) => continue,
-            Err(error) => {
+            Err(_) => {
                 consecutive_source_errors = consecutive_source_errors.saturating_add(1);
-                eprintln!(
-                    "Redunar Replay: frame source failed ({consecutive_source_errors} consecutive): {error}"
-                );
+                // Malformed exports can arrive at frame rate. Log at most
+                // once per interval and never echo a path from transport
+                // diagnostics into the normal application log.
+                if last_source_error_log.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
+                    crate::log_op!(
+                        "Redunar Replay: frame source failed ({consecutive_source_errors} consecutive)"
+                    );
+                    last_source_error_log = Some(Instant::now());
+                }
                 // A single stale or malformed export must not end recording;
                 // a running recorder keeps its last frames and waits for the
                 // next good one. Only a sustained source outage fails the
@@ -896,7 +922,7 @@ fn run_replay_export_pump(
         let frame_dimensions = (frame.width, frame.height);
         if dimensions.is_none() {
             let Ok(pipeline) = pipeline_factory(&frame) else {
-                eprintln!("Redunar Replay: hardware encoder pipeline creation failed");
+                crate::log_op!("Redunar Replay: hardware encoder pipeline creation failed");
                 let _ = source.release(sequence);
                 enter_replay_recovery(
                     &replay,
@@ -909,7 +935,7 @@ fn run_replay_export_pump(
                 continue;
             };
             if let Err(error) = replay.start_validated_pipeline(settings, pipeline, readiness) {
-                eprintln!("Redunar Replay: recorder activation failed: {error}");
+                crate::log_op!("Redunar Replay: recorder activation failed: {error}");
                 let _ = source.release(sequence);
                 enter_replay_recovery(
                     &replay,
@@ -923,9 +949,10 @@ fn run_replay_export_pump(
             }
             dimensions = Some(frame_dimensions);
             rearm_backoff = REPLAY_REARM_BACKOFF;
-            eprintln!(
+            crate::log_op!(
                 "Redunar Replay: rolling recorder active at {}x{}",
-                frame_dimensions.0, frame_dimensions.1
+                frame_dimensions.0,
+                frame_dimensions.1
             );
             publish_replay_component(&coordinator, GameSessionComponentState::Active);
             // One default-output audio worker serves the whole game session.
@@ -937,7 +964,7 @@ fn run_replay_export_pump(
             }
         } else if dimensions != Some(frame_dimensions) {
             let Ok(replacement) = backend_factory(&frame) else {
-                eprintln!(
+                crate::log_op!(
                     "Redunar Replay: replacement encoder creation failed after a source resize"
                 );
                 let _ = source.release(sequence);
@@ -953,7 +980,9 @@ fn run_replay_export_pump(
                 continue;
             };
             if let Err(error) = replay.reset_backend(replacement) {
-                eprintln!("Redunar Replay: recorder reset failed after a source resize: {error}");
+                crate::log_op!(
+                    "Redunar Replay: recorder reset failed after a source resize: {error}"
+                );
                 let _ = source.release(sequence);
                 let _ = release_runtime_completions(source.as_ref(), &replay);
                 enter_replay_recovery(
@@ -968,14 +997,15 @@ fn run_replay_export_pump(
             }
             dimensions = Some(frame_dimensions);
             rearm_backoff = REPLAY_REARM_BACKOFF;
-            eprintln!(
+            crate::log_op!(
                 "Redunar Replay: rolling recorder reset for {}x{}",
-                frame_dimensions.0, frame_dimensions.1
+                frame_dimensions.0,
+                frame_dimensions.1
             );
             let _ = release_runtime_completions(source.as_ref(), &replay);
         }
         if let Err(error) = replay.submit_frame(sequence, frame) {
-            eprintln!("Redunar Replay: hardware frame submission failed: {error}");
+            crate::log_op!("Redunar Replay: hardware frame submission failed: {error}");
             let completed = replay.take_completed_exports();
             if !completed.contains(&sequence) {
                 let _ = source.release(sequence);
@@ -1043,10 +1073,16 @@ fn start_game_audio_worker(
         .spawn(move || {
             run_game_audio_worker(&stop, &replay, timeline_timestamp_ns, timeline_started);
         })
-        .map_err(|error| eprintln!("Redunar Replay: could not start game audio worker: {error}"))
+        .map_err(|error| {
+            crate::log_op!("Redunar Replay: could not start game audio worker: {error}");
+        })
         .ok()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the audio reconnect loop keeps each route and failure transition together"
+)]
 fn run_game_audio_worker(
     stop: &AtomicBool,
     replay: &ProductionReplayRuntime,
@@ -1060,7 +1096,7 @@ fn run_game_audio_worker(
         let sources = match redunar_capture_audio::discover_system_audio_sources() {
             Ok(found) => found,
             Err(error) => {
-                eprintln!("Redunar Replay: game audio discovery failed; retrying: {error}");
+                crate::log_op!("Redunar Replay: game audio discovery failed; retrying: {error}");
                 thread::sleep(Duration::from_secs(1));
                 continue;
             }
@@ -1073,13 +1109,13 @@ fn run_game_audio_worker(
         ) {
             Ok(capture) => capture,
             Err(error) => {
-                eprintln!("Redunar Replay: game audio capture unavailable; retrying: {error}");
+                crate::log_op!("Redunar Replay: game audio capture unavailable; retrying: {error}");
                 backend_attempt = backend_attempt.saturating_add(1);
                 thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
-        eprintln!(
+        crate::log_op!(
             "Redunar Replay: audio capture active from the default output via {} ({})",
             source.backend_name(),
             source.name()
@@ -1103,7 +1139,7 @@ fn run_game_audio_worker(
                             replay.status().phase,
                             ReplayPhase::Buffering | ReplayPhase::Saving
                         ) {
-                            eprintln!(
+                            crate::log_op!(
                                 "Redunar Replay: game audio buffering stopped; retrying: {error}"
                             );
                             reconnect = true;
@@ -1116,7 +1152,7 @@ fn run_game_audio_worker(
                         // reconnecting here would respawn the capture helper
                         // about once per second for the rest of the session.
                         if !recorder_pause_logged {
-                            eprintln!(
+                            crate::log_op!(
                                 "Redunar Replay: game audio paused with the recorder: {error}"
                             );
                             recorder_pause_logged = true;
@@ -1127,7 +1163,7 @@ fn run_game_audio_worker(
                 }
                 Ok(None) => {
                     if last_packet_at.elapsed() > AUDIO_CAPTURE_STALL_TIMEOUT {
-                        eprintln!(
+                        crate::log_op!(
                             "Redunar Replay: audio capture stopped producing samples; reconnecting"
                         );
                         reconnect = true;
@@ -1136,7 +1172,7 @@ fn run_game_audio_worker(
                     }
                 }
                 Err(error) => {
-                    eprintln!("Redunar Replay: game audio capture stopped; retrying: {error}");
+                    crate::log_op!("Redunar Replay: game audio capture stopped; retrying: {error}");
                     reconnect = true;
                     backend_failed = true;
                     break;
@@ -1150,7 +1186,7 @@ fn run_game_audio_worker(
                         .find(|candidate| candidate.backend_name() == source.backend_name())
                     && updated != source
                 {
-                    eprintln!(
+                    crate::log_op!(
                         "Redunar Replay: audio output changed from {} to {}; reconnecting",
                         source.name(),
                         updated.name()
@@ -1267,10 +1303,14 @@ fn replay_component(status: ReplayRuntimeStatus, requested: bool) -> GameSession
 
 fn replay_menu_has_render_target(state: &CoordinatorState) -> bool {
     state.status.phase == GameSessionPhase::Running
-        && state
-            .capture
-            .as_ref()
-            .is_some_and(|capture| capture.snapshot().phase == CapturePhase::Capturing)
+        && state.capture.as_ref().is_some_and(|capture| {
+            let snapshot = capture.snapshot();
+            snapshot.phase == CapturePhase::Capturing
+                && matches!(
+                    snapshot.capture_api,
+                    Some(CaptureApi::Vulkan | CaptureApi::OpenGl)
+                )
+        })
 }
 
 fn stop_optional(state: GameSessionComponentState) -> GameSessionComponentState {
@@ -1310,12 +1350,18 @@ fn apply_capture_snapshot(state: &mut CoordinatorState, snapshot: &crate::Captur
     } else {
         GameSessionPhase::Running
     };
+    // Replay state flows from the replay component itself; the GL producer
+    // now announces the same source/export contract as Vulkan, so the capture
+    // API alone must not override an in-progress replay state.
+    let replay = state.status.replay;
     if state.status.metrics != metrics
         || state.status.overlay != overlay
+        || state.status.replay != replay
         || state.status.phase != phase
     {
         state.status.metrics = metrics;
         state.status.overlay = overlay;
+        state.status.replay = replay;
         state.status.phase = phase;
         bump(&mut state.status);
     }
@@ -1334,6 +1380,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use redunar_capture::{CaptureMessage, CaptureSessionId};
     use redunar_core::ReplaySettings;
     use std::time::Instant;
 
@@ -1367,6 +1414,58 @@ mod tests {
         assert_eq!(state.status.metrics, GameSessionComponentState::Pending);
         assert_eq!(state.status.overlay, GameSessionComponentState::Pending);
         assert_eq!(state.status.replay, GameSessionComponentState::Unavailable);
+    }
+
+    #[test]
+    fn opengl_capture_keeps_metrics_and_overlay_while_replay_keeps_its_component_state() {
+        let request = request();
+        let mut state = CoordinatorState {
+            request: Some(request.clone()),
+            status: GameSessionStatus {
+                phase: GameSessionPhase::Launching,
+                game_id: request.game_id,
+                game_name: Some(request.game_name),
+                metrics: GameSessionComponentState::Pending,
+                overlay: GameSessionComponentState::Pending,
+                replay: GameSessionComponentState::Pending,
+                ..GameSessionStatus::default()
+            },
+            ..CoordinatorState::default()
+        };
+        let session_id = CaptureSessionId::new([8; 16]).expect("session ID");
+        let mut capture = crate::CaptureSessionModel::new(session_id);
+        capture
+            .accept(CaptureMessage::Hello {
+                session_id,
+                process_id: 42,
+                api: CaptureApi::OpenGl,
+                producer_started_monotonic_ns: 1,
+            })
+            .expect("OpenGL producer");
+
+        apply_capture_snapshot(&mut state, &capture.snapshot());
+
+        assert_eq!(state.status.metrics, GameSessionComponentState::Active);
+        assert_eq!(state.status.overlay, GameSessionComponentState::Pending);
+        // The fixture started replay as Pending; the OpenGL backend no longer
+        // forces it Unavailable, so the component state is preserved.
+        assert_eq!(state.status.replay, GameSessionComponentState::Pending);
+        assert_eq!(state.status.phase, GameSessionPhase::Running);
+
+        capture
+            .accept(CaptureMessage::OverlayStatus {
+                session_id,
+                status: OverlayRuntimeStatus::Requested,
+            })
+            .expect("OpenGL overlay requested");
+        capture
+            .accept(CaptureMessage::OverlayStatus {
+                session_id,
+                status: OverlayRuntimeStatus::Active,
+            })
+            .expect("OpenGL overlay active");
+        apply_capture_snapshot(&mut state, &capture.snapshot());
+        assert_eq!(state.status.overlay, GameSessionComponentState::Active);
     }
 
     #[test]
@@ -1407,6 +1506,18 @@ mod tests {
     #[test]
     fn replay_menu_refuses_mouse_capture_without_a_live_game_render_target() {
         assert!(!replay_menu_has_render_target(&CoordinatorState::default()));
+    }
+
+    #[test]
+    fn lost_render_target_closes_an_open_menu_before_the_next_pointer_ping() {
+        let coordinator = ProductionGameSessionCoordinator::new(
+            std::env::temp_dir().join("redunar-menu-target-loss-unused"),
+        );
+        let now = Instant::now();
+        lock_unpoisoned(&coordinator.inner.replay_menu).toggle(now);
+        assert!(coordinator.replay_menu_is_visible());
+        assert!(coordinator.replay_menu_watchdog(now));
+        assert!(!coordinator.replay_menu_is_visible());
     }
 
     #[test]

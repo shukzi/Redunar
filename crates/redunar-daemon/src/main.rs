@@ -10,7 +10,7 @@ fn main() {
             }
         }
         Err(error) => {
-            eprintln!("Redunar could not inspect this machine: {error}");
+            redunar_daemon::log_op!("Redunar could not inspect this machine: {error}");
             std::process::exit(1);
         }
     }

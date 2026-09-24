@@ -1,22 +1,26 @@
 use redunar_capture::OverlayRuntimeStatus;
 use redunar_capture_vulkan::replay_video::{VulkanVideoH264Device, VulkanVideoH264Request};
 use redunar_core::{
-    GameId, GlobalGameProfile, Inheritable, OverlayCorner, OverlayMetricSet, OverlayOpacity,
-    OverlayPreset, OverlayScale, PerGameProfile, ReplayFrameRate, ReplaySettings,
+    GameId, GlobalGameProfile, Inheritable, OverlayCorner, OverlayLayout, OverlayMetricSet,
+    OverlayOpacity, OverlayPalette, OverlayPreset, OverlayScale, PerGameProfile, ReplayDuration,
+    ReplayFrameRate, ReplaySettings,
 };
 use redunar_daemon::{
     AddGameRequest, CapturePhase, CaptureSessionConfig, CaptureSessionHandle, CaptureSnapshot,
-    DmaBufReplayFrame, RedunarService, ReplayBudget, ReplayClipStore, ReplayHardwarePipeline,
-    StoredReplayClip, VulkanVideoH264Backend,
+    DmaBufReplayFrame, GameSessionFeatureRequest, GameSessionRequest,
+    ProductionGameSessionCoordinator, RedunarService, ReplayBudget, ReplayClipStore,
+    ReplayHardwarePipeline, ReplayOutputFormat, ReplayPhase, ReplayRuntimeStatus, StoredReplayClip,
+    VulkanVideoH264Backend,
 };
 use redunar_platform::ReplayTransferLaunchConfig;
 use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, BufRead, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,27 +49,57 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let runtime_root = runtime_root()?;
     let probe_state = ProbeState::new(&runtime_root)?;
-    let service = RedunarService::with_state_directory(&probe_state.directory);
+    let production_replay_requested = env::var("REDUNAR_CAPTURE_PROBE_PRODUCTION_REPLAY")
+        .ok()
+        .as_deref()
+        == Some("1");
+    let service = if production_replay_requested {
+        RedunarService::for_isolated_replay_probe(&probe_state.directory)
+    } else {
+        RedunarService::with_state_directory(&probe_state.directory)
+    };
     let arguments = default_arguments(&executable)?;
+    let steam_bridge = env::var("REDUNAR_CAPTURE_PROBE_STEAM_BRIDGE")
+        .ok()
+        .as_deref()
+        == Some("1");
     let display_name = executable
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("Capture probe")
         .to_owned();
-    let mut request = AddGameRequest::new(display_name, &executable);
-    request.launch.arguments = arguments;
+    let request = if steam_bridge {
+        let mut request = AddGameRequest::new(display_name, "/usr/bin/steam");
+        request.launch.arguments = vec![OsString::from("-applaunch"), OsString::from("413150")];
+        request
+    } else {
+        let mut request = AddGameRequest::new(display_name, &executable);
+        request.launch.arguments.clone_from(&arguments);
+        request
+    };
     let added = service.add_game(request)?;
     let overlay_enabled = env::var("REDUNAR_CAPTURE_PROBE_OVERLAY").ok().as_deref() == Some("1");
     let replay_encode_requested = env::var("REDUNAR_CAPTURE_PROBE_REPLAY_ENCODE")
         .ok()
         .as_deref()
         == Some("1");
+    let hold_replay_releases = env::var("REDUNAR_CAPTURE_PROBE_HOLD_REPLAY_RELEASES")
+        .ok()
+        .as_deref()
+        == Some("1");
     let replay_candidate_requested = replay_encode_requested
+        || production_replay_requested
         || env::var("REDUNAR_CAPTURE_PROBE_REPLAY_CANDIDATE")
             .ok()
             .as_deref()
             == Some("1");
     configure_overlay(&service, added.id, overlay_enabled)?;
+    if production_replay_requested {
+        let mut global = service.load_game_catalog()?.global_profile;
+        global.instant_replay = true;
+        global.replay.frame_rate = replay_probe_frame_rate()?;
+        service.update_global_game_profile(global)?;
+    }
     let catalog = service.load_game_catalog()?;
     let game = catalog
         .games
@@ -73,30 +107,86 @@ fn main() -> Result<(), Box<dyn Error>> {
         .find(|game| game.id == added.id)
         .ok_or_else(|| io::Error::other("persisted probe game is missing"))?;
 
-    let config = CaptureSessionConfig::new(&runtime_root, capture_library()?);
+    let mut config = CaptureSessionConfig::new(&runtime_root, capture_library()?);
+    if let Some(opengl_library) = opengl_capture_library()? {
+        config = config.with_opengl_library(opengl_library);
+    }
     let mut session = service.start_capture_session(&config)?;
     let environment = env::vars_os().collect::<BTreeMap<_, _>>();
     if overlay_enabled {
         session.update_overlay_hardware(Some(&service.snapshot()?))?;
+        session.update_overlay_config(&game.profile.resolve(catalog.global_profile))?;
     }
-    let plan = if overlay_enabled {
-        session.game_launch_plan_for_profile(game, catalog.global_profile, &environment)?
+    let plan = if steam_bridge {
+        None
+    } else if overlay_enabled || production_replay_requested {
+        Some(session.game_launch_plan_for_profile(game, catalog.global_profile, &environment)?)
     } else {
-        session.game_launch_plan(&game.launch, &environment)?
+        Some(session.game_launch_plan(&game.launch, &environment)?)
     };
     // Diagnostic-only override. Production profile planning always keeps this
     // request off until every Replay readiness gate has passed.
-    let plan = if replay_candidate_requested {
-        plan.with_replay_transfer_config(ReplayTransferLaunchConfig::new(
-            true,
-            replay_probe_frame_rate()?,
-        ))
+    let plan = if replay_candidate_requested && !production_replay_requested && !steam_bridge {
+        Some(
+            plan.expect("direct probe has a launch plan")
+                .with_replay_transfer_config(ReplayTransferLaunchConfig::new(
+                    true,
+                    replay_probe_frame_rate()?,
+                )),
+        )
     } else {
         plan
     };
-    let mut command = plan.command();
+    let mut command = if steam_bridge {
+        if replay_candidate_requested {
+            session.publish_steam_activation_for_replay_diagnostic(
+                game,
+                catalog.global_profile,
+                Duration::from_secs(30),
+                ReplayTransferLaunchConfig::new(true, replay_probe_frame_rate()?),
+            )?;
+        } else {
+            session.publish_steam_activation_for_profile(
+                game,
+                catalog.global_profile,
+                Duration::from_secs(30),
+            )?;
+        }
+        let mut command = Command::new(steam_wrapper()?);
+        command
+            .arg("--app-id")
+            .arg("413150")
+            .arg("--")
+            .arg(&executable)
+            .args(&arguments);
+        let isolated_xdg = runtime_root
+            .parent()
+            .ok_or_else(|| io::Error::other("Steam probe runtime has no XDG parent directory"))?;
+        command.env("XDG_RUNTIME_DIR", isolated_xdg);
+        command
+    } else {
+        plan.expect("direct probe has a launch plan").command()
+    };
     configure_diagnostic_environment(&mut command);
     command.stdout(Stdio::null()).stderr(Stdio::inherit());
+
+    if production_replay_requested {
+        if steam_bridge {
+            return Err(io::Error::other(
+                "production Replay probe currently requires a direct launch",
+            )
+            .into());
+        }
+        return run_production_replay_probe(
+            &service,
+            game.id,
+            game.display_name.as_str(),
+            session,
+            command,
+            overlay_enabled,
+            &probe_state.directory,
+        );
+    }
 
     println!("receiver_pid={}", std::process::id());
     println!("catalog_game_id={}", game.id.get());
@@ -104,10 +194,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("overlay_requested={overlay_enabled}");
     println!("replay_candidate_requested={replay_candidate_requested}");
     println!("replay_encode_requested={replay_encode_requested}");
+    println!("hold_replay_releases={hold_replay_releases}");
+    println!("steam_bridge_requested={steam_bridge}");
     let start_process = process_sample()?;
     let started = Instant::now();
     let mut child = command.spawn()?;
-    let (status, replay_clip) = if replay_encode_requested {
+    let (status, replay_clip) = if hold_replay_releases {
+        let status = run_replay_backpressure_validation(&mut child, &session, child_timeout()?)?;
+        (status, None)
+    } else if replay_encode_requested {
         let settings = ReplaySettings {
             frame_rate: replay_probe_frame_rate()?,
             ..ReplaySettings::default()
@@ -160,6 +255,328 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_replay_backpressure_validation(
+    child: &mut Child,
+    session: &CaptureSessionHandle,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+    let mut held = Vec::new();
+    let status = loop {
+        while let Some((sequence, _frame)) = session.take_replay_validation_export()? {
+            // Deliberately retain the daemon's ownership token. The game
+            // must keep presenting and drop Replay work at the six-slot cap.
+            held.push(sequence);
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(
+                io::Error::new(io::ErrorKind::TimedOut, "backpressure probe timed out").into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
+    println!("held_replay_exports={}", held.len());
+    for sequence in held {
+        session.release_replay_validation_export(sequence)?;
+    }
+    Ok(status)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the hardware probe keeps launch, native state polling, save, and teardown in one auditable sequence"
+)]
+fn run_production_replay_probe(
+    service: &RedunarService,
+    game_id: GameId,
+    game_name: &str,
+    session: CaptureSessionHandle,
+    mut command: Command,
+    overlay_enabled: bool,
+    state_directory: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let coordinator = service.game_session_coordinator();
+    let (fds_before, threads_before) = process_resources()?;
+    let catalog = service.load_game_catalog()?;
+    let settings = catalog.global_profile.replay;
+    let mut effective_profile = catalog
+        .games
+        .iter()
+        .find(|game| game.id == game_id)
+        .ok_or_else(|| io::Error::other("production probe game is missing"))?
+        .profile
+        .resolve(catalog.global_profile);
+    if env::var("REDUNAR_CAPTURE_PROBE_REPLAY_FORMAT")
+        .ok()
+        .as_deref()
+        == Some("mp4")
+    {
+        service.set_replay_output_format(ReplayOutputFormat::Mp4)?;
+    }
+    coordinator.begin(
+        GameSessionRequest {
+            game_id: Some(game_id),
+            game_name: game_name.to_owned(),
+            metrics: GameSessionFeatureRequest::Enabled,
+            overlay: overlay_enabled.into(),
+            replay: GameSessionFeatureRequest::Enabled,
+        },
+        Some(session),
+        ReplayRuntimeStatus::validation_candidate(settings),
+    )?;
+    let mut cleanup = ProductionProbeCleanup {
+        coordinator: coordinator.clone(),
+        child: None,
+    };
+    service.start_replay_validation_candidate()?;
+    let start_process = process_sample()?;
+    let started = Instant::now();
+    cleanup.child = Some(command.spawn()?);
+    coordinator.mark_running();
+    let deadline = started + child_timeout()?;
+    let mut requested_save = false;
+    let mut saved_notice_published = false;
+    let mut menu_checked = false;
+    let mut visibility_checked = false;
+    let mut saw_buffering = false;
+    let mut saw_saving = false;
+    let preferred_format = if env::var("REDUNAR_CAPTURE_PROBE_REPLAY_FORMAT")
+        .ok()
+        .as_deref()
+        == Some("mp4")
+    {
+        ReplayOutputFormat::Mp4
+    } else {
+        ReplayOutputFormat::Matroska
+    };
+    let status = loop {
+        let replay = coordinator.replay_runtime().status();
+        if requested_save && !saved_notice_published && replay.completed_save_revision > 0 {
+            service.publish_replay_saved_notice()?;
+            saved_notice_published = true;
+        }
+        saw_buffering |= replay.phase == ReplayPhase::Buffering && replay.encoded_packet_count > 0;
+        saw_saving |= replay.phase == ReplayPhase::Saving;
+        if !menu_checked && replay.buffered_duration_ns >= 1_000_000_000 {
+            check_replay_menu_control(state_directory, preferred_format)?;
+            if service.replay_preferences()?.output_format != preferred_format {
+                return Err(io::Error::other("menu format choice did not persist").into());
+            }
+            menu_checked = true;
+        }
+        if !visibility_checked && replay.buffered_duration_ns >= 1_500_000_000 {
+            effective_profile.overlay_visible = !overlay_enabled;
+            coordinator.update_overlay_config(&effective_profile)?;
+            effective_profile.overlay_visible = overlay_enabled;
+            coordinator.update_overlay_config(&effective_profile)?;
+            if coordinator.replay_runtime().status().phase != ReplayPhase::Buffering {
+                return Err(io::Error::other("overlay visibility interrupted Replay").into());
+            }
+            visibility_checked = true;
+        }
+        if !requested_save && replay.buffered_duration_ns >= 2_000_000_000 {
+            if env::var("REDUNAR_CAPTURE_PROBE_SAVE_VIA_MENU")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                expect_replay_control(state_directory, "MENU TOGGLE\n", "OK GRAB\n")?;
+                expect_replay_control(state_directory, "MENU MOVE 4000 3500\n", "OK\n")?;
+                expect_replay_control(state_directory, "MENU BUTTON 1\n", "OK\n")?;
+                expect_replay_control(state_directory, "MENU BUTTON 0\n", "OK RELEASE\n")?;
+            } else if env::var("REDUNAR_CAPTURE_PROBE_SAVE_VIA_CONTROL")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                expect_replay_control(state_directory, "SAVE 15\n", "OK\n")?;
+            } else {
+                service.save_replay(ReplayDuration::Seconds15)?;
+            }
+            requested_save = true;
+            // A successful request enters Saving synchronously; the small
+            // synthetic clip can finish before the next polling interval.
+            saw_saving = true;
+        }
+        if let Some(status) = cleanup
+            .child
+            .as_mut()
+            .expect("probe child spawned")
+            .try_wait()?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "production Replay probe timed out",
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let save_deadline = Instant::now() + Duration::from_secs(10);
+    while requested_save
+        && coordinator
+            .replay_runtime()
+            .status()
+            .completed_save_revision
+            == 0
+    {
+        let replay = coordinator.replay_runtime().status();
+        saw_saving |= replay.phase == ReplayPhase::Saving;
+        if replay.phase == ReplayPhase::Failed || Instant::now() >= save_deadline {
+            return Err(
+                io::Error::other(format!("production Replay save failed: {replay:?}")).into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let replay = coordinator.replay_runtime().status();
+    let snapshot = coordinator
+        .capture_snapshot()
+        .ok_or_else(|| io::Error::other("capture missing"))?;
+    print_snapshot(
+        &snapshot,
+        started.elapsed(),
+        start_process,
+        process_sample()?,
+    );
+    println!("production_replay_buffering={saw_buffering}");
+    println!("production_replay_saving={saw_saving}");
+    println!("production_replay_menu_control={menu_checked}");
+    println!("production_replay_visibility_toggle={visibility_checked}");
+    println!("production_replay_saved_notice={saved_notice_published}");
+    println!(
+        "production_replay_completed_save_revision={}",
+        replay.completed_save_revision
+    );
+    println!(
+        "production_replay_encoded_packets={}",
+        replay.encoded_packet_count
+    );
+    println!(
+        "production_replay_buffered_ns={}",
+        replay.buffered_duration_ns
+    );
+    let save_directory = service.replay_save_directory()?;
+    let clip = std::fs::read_dir(&save_directory)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("mkv" | "mp4")
+            )
+        })
+        .ok_or_else(|| io::Error::other("production Replay committed no clip"))?;
+    println!("replay_encoded_clip={}", clip.display());
+    println!("replay_encoded_bytes={}", clip.metadata()?.len());
+    coordinator.end()?;
+    let (fds_after, threads_after) = process_resources()?;
+    println!("production_replay_fds_before={fds_before}");
+    println!("production_replay_fds_after={fds_after}");
+    println!("production_replay_threads_before={threads_before}");
+    println!("production_replay_threads_after={threads_after}");
+    service.remove_game(game_id)?;
+    if !status.success()
+        || snapshot.phase != CapturePhase::Completed
+        || !saw_buffering
+        || !saw_saving
+        || !menu_checked
+        || !visibility_checked
+        || !saved_notice_published
+        || !requested_save
+        || replay.completed_save_revision == 0
+        || fds_after > fds_before.saturating_add(4)
+        || threads_after > threads_before.saturating_add(1)
+    {
+        return Err(io::Error::other("production Replay lifecycle did not complete").into());
+    }
+    if !state_directory.exists() {
+        return Err(io::Error::other("probe state unexpectedly disappeared").into());
+    }
+    Ok(())
+}
+
+fn process_resources() -> io::Result<(usize, usize)> {
+    Ok((
+        std::fs::read_dir("/proc/self/fd")?.count(),
+        std::fs::read_dir("/proc/self/task")?.count(),
+    ))
+}
+
+fn replay_control_command(state_directory: &Path, command: &str) -> io::Result<String> {
+    let mut stream = UnixStream::connect(state_directory.join("replay-control-v1.sock"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    stream.write_all(command.as_bytes())?;
+    let mut response = String::new();
+    io::BufReader::new(stream).read_line(&mut response)?;
+    Ok(response)
+}
+
+fn expect_replay_control(state_directory: &Path, command: &str, expected: &str) -> io::Result<()> {
+    let response = replay_control_command(state_directory, command)?;
+    if response != expected {
+        return Err(io::Error::other(format!("{command:?}: {response:?}")));
+    }
+    Ok(())
+}
+
+fn check_replay_menu_control(state_directory: &Path, format: ReplayOutputFormat) -> io::Result<()> {
+    for (command, expected) in [
+        ("MENU TOGGLE\n", "OK GRAB\n"),
+        ("MENU MOVE -2000 3500\n", "OK\n"),
+        ("MENU BUTTON 1\n", "OK\n"),
+        ("MENU BUTTON 0\n", "OK\n"),
+    ] {
+        expect_replay_control(state_directory, command, expected)?;
+    }
+    if format == ReplayOutputFormat::Matroska {
+        expect_replay_control(state_directory, "MENU MOVE -2000 0\n", "OK\n")?;
+        expect_replay_control(state_directory, "MENU BUTTON 1\n", "OK\n")?;
+        expect_replay_control(state_directory, "MENU BUTTON 0\n", "OK\n")?;
+    }
+    let move_to_duration = if format == ReplayOutputFormat::Mp4 {
+        "MENU MOVE -2000 -3500\n"
+    } else {
+        "MENU MOVE 0 -3500\n"
+    };
+    for (command, expected) in [
+        (move_to_duration, "OK\n"),
+        ("MENU BUTTON 1\n", "OK\n"),
+        ("MENU BUTTON 0\n", "OK\n"),
+        ("MENU PING\n", "OK\n"),
+        ("MENU ESCAPE\n", "OK RELEASE\n"),
+        ("MENU PING\n", "OK RELEASE\n"),
+    ] {
+        expect_replay_control(state_directory, command, expected)?;
+    }
+    Ok(())
+}
+
+struct ProductionProbeCleanup {
+    coordinator: ProductionGameSessionCoordinator,
+    child: Option<Child>,
+}
+
+impl Drop for ProductionProbeCleanup {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut()
+            && matches!(child.try_wait(), Ok(None))
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = self.coordinator.end();
+    }
+}
+
 fn run_replay_encode_validation(
     child: &mut Child,
     session: &CaptureSessionHandle,
@@ -169,6 +586,9 @@ fn run_replay_encode_validation(
 ) -> Result<(std::process::ExitStatus, StoredReplayClip), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     let mut pipeline = None;
+    let mut submit_count = 0_u64;
+    let mut submit_total = Duration::ZERO;
+    let mut submit_max = Duration::ZERO;
     let status = loop {
         while let Some((sequence, frame)) = session.take_replay_validation_export()? {
             if pipeline.is_none() {
@@ -184,7 +604,13 @@ fn run_replay_encode_validation(
                 recorder.reset(Box::new(replacement))?;
                 release_completed_validation_exports(session, recorder)?;
             }
-            if let Err(error) = recorder.submit_frame(sequence, frame) {
+            let submit_started = Instant::now();
+            let submit_result = recorder.submit_frame(sequence, frame);
+            let submit_elapsed = submit_started.elapsed();
+            submit_count = submit_count.saturating_add(1);
+            submit_total = submit_total.saturating_add(submit_elapsed);
+            submit_max = submit_max.max(submit_elapsed);
+            if let Err(error) = submit_result {
                 let _ = recorder.shutdown();
                 release_completed_validation_exports(session, recorder)?;
                 let _ = child.kill();
@@ -224,6 +650,9 @@ fn run_replay_encode_validation(
     })?;
     let clip = pipeline.save_replay()?;
     release_completed_validation_exports(session, &mut pipeline)?;
+    println!("replay_submit_count={submit_count}");
+    println!("replay_submit_total_us={}", submit_total.as_micros());
+    println!("replay_submit_max_us={}", submit_max.as_micros());
     pipeline.shutdown()?;
     release_completed_validation_exports(session, &mut pipeline)?;
     Ok((status, clip))
@@ -282,8 +711,19 @@ fn configure_diagnostic_environment(command: &mut std::process::Command) {
         .ok()
         .as_deref()
         == Some("1")
+        || env::var("REDUNAR_CAPTURE_PROBE_LOG_REPLAY_POOL")
+            .ok()
+            .as_deref()
+            == Some("1")
     {
         command.env("REDUNAR_REPLAY_DIAGNOSTIC_EXPORT_DMABUF", "1");
+    }
+    if env::var("REDUNAR_CAPTURE_PROBE_REPLAY_CANDIDATE")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        command.env("REDUNAR_REPLAY_DIAGNOSTIC_OPENGL_READBACK", "1");
     }
     if env::var("REDUNAR_CAPTURE_PROBE_ADD_TRANSFER_SRC")
         .ok()
@@ -298,6 +738,9 @@ fn configure_diagnostic_environment(command: &mut std::process::Command) {
         == Some("1")
     {
         command.env("REDUNAR_REPLAY_DIAGNOSTIC_FAIL_COPY_SETUP", "1");
+    }
+    if let Some(stage) = env::var_os("REDUNAR_CAPTURE_PROBE_GL_FAIL") {
+        command.env("REDUNAR_REPLAY_GL_FAIL", stage);
     }
 }
 
@@ -317,6 +760,22 @@ fn configure_overlay(
             Some("custom") => OverlayPreset::Custom,
             _ => OverlayPreset::Compact,
         },
+        overlay_layout: match env::var("REDUNAR_CAPTURE_PROBE_LAYOUT").ok().as_deref() {
+            Some("ribbon") => OverlayLayout::Ribbon,
+            Some("telemetry") => OverlayLayout::Telemetry,
+            _ => OverlayLayout::Grid,
+        },
+        overlay_palette: match env::var("REDUNAR_CAPTURE_PROBE_PALETTE").ok().as_deref() {
+            Some("glacier") => OverlayPalette::Glacier,
+            Some("ember") => OverlayPalette::Ember,
+            Some("mint") => OverlayPalette::Mint,
+            Some("mono") => OverlayPalette::Mono,
+            Some("amethyst") => OverlayPalette::Amethyst,
+            Some("solar") => OverlayPalette::Solar,
+            Some("rose") => OverlayPalette::Rose,
+            _ => OverlayPalette::Redunar,
+        },
+        overlay_branding: env::var("REDUNAR_CAPTURE_PROBE_BRANDING").ok().as_deref() != Some("0"),
         overlay_metrics: env::var("REDUNAR_CAPTURE_PROBE_METRICS")
             .ok()
             .and_then(|value| value.parse::<u16>().ok())
@@ -338,6 +797,14 @@ fn configure_overlay(
             .and_then(|value| value.parse::<u8>().ok())
             .and_then(OverlayScale::new)
             .unwrap_or_default(),
+        instant_replay: env::var("REDUNAR_CAPTURE_PROBE_REPLAY_CANDIDATE")
+            .ok()
+            .as_deref()
+            == Some("1")
+            || env::var("REDUNAR_CAPTURE_PROBE_REPLAY_ENCODE")
+                .ok()
+                .as_deref()
+                == Some("1"),
         ..GlobalGameProfile::default()
     })?;
     service.update_game_profile(
@@ -365,6 +832,7 @@ fn replay_probe_frame_rate() -> Result<ReplayFrameRate, Box<dyn Error>> {
 
 struct ProbeState {
     directory: PathBuf,
+    runtime_root: PathBuf,
 }
 
 impl ProbeState {
@@ -372,16 +840,35 @@ impl ProbeState {
         std::fs::create_dir_all(runtime_root)?;
         let directory = runtime_root.join(format!("game-catalog-{}", std::process::id()));
         std::fs::create_dir(&directory)?;
-        Ok(Self { directory })
+        Ok(Self {
+            directory,
+            runtime_root: runtime_root.to_path_buf(),
+        })
     }
 }
 
 impl Drop for ProbeState {
     fn drop(&mut self) {
+        if env::var("REDUNAR_CAPTURE_PROBE_KEEP_STATE").ok().as_deref() == Some("1") {
+            eprintln!(
+                "Redunar capture probe retained state at {}",
+                self.directory.display()
+            );
+            return;
+        }
         // The probe may create an encoded-replay directory below its isolated
         // state root. Remove the whole private tree so repeated diagnostics do
         // not accumulate clips under XDG_RUNTIME_DIR.
         let _ = std::fs::remove_dir_all(&self.directory);
+        let _ = std::fs::remove_dir(&self.runtime_root);
+        if self
+            .runtime_root
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name.to_string_lossy().starts_with("redunar-steam-probe-"))
+        {
+            let _ = std::fs::remove_dir(self.runtime_root.parent().expect("checked parent"));
+        }
     }
 }
 
@@ -395,7 +882,48 @@ fn runtime_root() -> Result<PathBuf, Box<dyn Error>> {
                 "XDG_RUNTIME_DIR is unavailable or not absolute",
             )
         })?;
-    Ok(root.join("redunar-capture-probe"))
+    if env::var("REDUNAR_CAPTURE_PROBE_STEAM_BRIDGE")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        Ok(root
+            .join(format!("redunar-steam-probe-{}", std::process::id()))
+            .join("redunar"))
+    } else {
+        Ok(root.join("redunar-capture-probe"))
+    }
+}
+
+fn steam_wrapper() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(wrapper) = env::var_os("REDUNAR_CAPTURE_PROBE_STEAM_WRAPPER").map(PathBuf::from) {
+        if wrapper.is_absolute() && wrapper.is_file() {
+            return Ok(wrapper);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "REDUNAR_CAPTURE_PROBE_STEAM_WRAPPER must be an absolute executable file",
+        )
+        .into());
+    }
+    let executable = env::current_exe()?;
+    let profile_directory = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| io::Error::other("capture probe has no build profile directory"))?;
+    let wrapper = profile_directory.join("redunar-steam-launch");
+    if wrapper.is_file() {
+        Ok(wrapper)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "build redunar-steam-launch first; no wrapper at {}",
+                wrapper.display()
+            ),
+        )
+        .into())
+    }
 }
 
 fn capture_library() -> Result<PathBuf, Box<dyn Error>> {
@@ -423,6 +951,22 @@ fn capture_library() -> Result<PathBuf, Box<dyn Error>> {
         ),
     )
     .into())
+}
+
+fn opengl_capture_library() -> Result<Option<PathBuf>, Box<dyn Error>> {
+    let executable = env::current_exe()?;
+    let executable_directory = executable
+        .parent()
+        .ok_or_else(|| io::Error::other("capture probe has no executable directory"))?;
+    let direct = executable_directory.join("libredunar_capture_opengl.so");
+    if direct.is_file() {
+        return Ok(Some(direct));
+    }
+    let profile_directory = executable_directory
+        .parent()
+        .ok_or_else(|| io::Error::other("capture probe has no build profile directory"))?;
+    let profile_library = profile_directory.join("libredunar_capture_opengl.so");
+    Ok(profile_library.is_file().then_some(profile_library))
 }
 
 fn default_arguments(executable: &Path) -> Result<Vec<OsString>, Box<dyn Error>> {
@@ -488,6 +1032,7 @@ mod tests {
 
         drop(ProbeState {
             directory: root.clone(),
+            runtime_root: root.clone(),
         });
 
         assert!(!root.exists());
@@ -632,6 +1177,7 @@ fn print_snapshot(
 ) {
     println!("phase={:?}", snapshot.phase);
     println!("producer_pid={:?}", snapshot.producer_process_id);
+    println!("capture_api={:?}", snapshot.capture_api);
     println!("frames={}", snapshot.received_frame_count);
     println!("drops={}", snapshot.dropped_frame_count);
     println!("rejects={}", snapshot.rejected_message_count);
@@ -671,6 +1217,10 @@ fn print_snapshot(
     println!(
         "replay_copied_frames={}",
         snapshot.replay_copied_frame_count
+    );
+    println!(
+        "replay_exported_frames={}",
+        snapshot.replay_exported_frame_count
     );
     if let Some(source) = snapshot.replay_latest_copy_source {
         println!("replay_latest_copy_width={}", source.width);

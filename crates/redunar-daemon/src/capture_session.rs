@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
@@ -42,6 +42,7 @@ const REPLAY_PRODUCER_CONFIRMATION_EXPORTS: u16 = 3;
 const REPLAY_PRODUCER_CANDIDATE_CAPACITY: usize = 8;
 const REPLAY_PRODUCER_STALE_NS: u64 = 1_000_000_000;
 const CAPTURE_LIBRARY_FILE: &str = "libredunar_capture_vulkan.so";
+const OPENGL_CAPTURE_LIBRARY_FILE: &str = "libredunar_capture_opengl.so";
 const STEAM_LAUNCH_WRAPPER_FILE: &str = "redunar-steam-launch";
 const OVERLAY_TELEMETRY_FILE: &str = "overlay-telemetry-v1.bin";
 // Steam may compile or refresh shaders before the first Vulkan frame reaches the
@@ -101,6 +102,7 @@ impl SteamBridgeSetup {
 pub struct CaptureSessionConfig {
     runtime_root: PathBuf,
     layer_library: PathBuf,
+    opengl_library: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,17 +149,27 @@ impl CaptureSessionConfig {
         Self {
             runtime_root: runtime_root.into(),
             layer_library: layer_library.into(),
+            opengl_library: None,
         }
     }
 
+    /// Add the launch-scoped GLX/EGL observer used by direct and native Steam games.
+    #[must_use]
+    pub fn with_opengl_library(mut self, library: impl Into<PathBuf>) -> Self {
+        self.opengl_library = Some(library.into());
+        self
+    }
+
     /// Locate development/packaged capture components without installing a
-    /// Vulkan layer globally.
+    /// graphics layer or provider globally. The Vulkan layer is required for
+    /// the established runtime; the OpenGL observer is enabled when its
+    /// adjacent sidecar is present.
     ///
     /// # Errors
     ///
     /// Returns [`CaptureSessionError`] when `XDG_RUNTIME_DIR` is missing or
     /// relative, the current executable cannot be resolved, or the adjacent
-    /// layer library is unavailable.
+    /// Vulkan layer library is unavailable.
     pub fn for_current_build() -> Result<Self, CaptureSessionError> {
         let runtime_root = env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
@@ -179,7 +191,13 @@ impl CaptureSessionConfig {
                 executable_directory.join(CAPTURE_LIBRARY_FILE).display()
             )));
         };
-        Ok(Self::new(runtime_root, layer_library))
+        let mut config = Self::new(runtime_root, layer_library);
+        if let Some(opengl_library) =
+            find_adjacent_library(&executable, OPENGL_CAPTURE_LIBRARY_FILE)
+        {
+            config = config.with_opengl_library(opengl_library);
+        }
+        Ok(config)
     }
 
     #[must_use]
@@ -241,6 +259,11 @@ impl CaptureSessionConfig {
         &self.layer_library
     }
 
+    #[must_use]
+    pub fn opengl_library(&self) -> Option<&Path> {
+        self.opengl_library.as_deref()
+    }
+
     /// Verify the exact sibling wrapper and build the bounded app-ID-specific
     /// Steam Launch Options snippet. This reads package metadata only.
     #[must_use]
@@ -297,15 +320,27 @@ impl CaptureSessionConfig {
 }
 
 fn find_layer_library(executable: &Path) -> Option<PathBuf> {
+    find_adjacent_library(executable, CAPTURE_LIBRARY_FILE)
+}
+
+fn find_adjacent_library(executable: &Path, file_name: &str) -> Option<PathBuf> {
     let executable_directory = executable.parent()?;
+    let cargo_example_profile = (executable_directory.file_name() == Some(OsStr::new("examples")))
+        .then(|| {
+            executable_directory
+                .parent()
+                .map(|parent| parent.join(file_name))
+        })
+        .flatten();
     [
-        executable_directory.join(CAPTURE_LIBRARY_FILE),
+        executable_directory.join(file_name),
         // `cargo tauri dev` leaves shared libraries in the debug `deps`
         // directory beside the development executable. Keep this fallback
         // local so development uses the same private launch contract.
-        executable_directory.join("deps").join(CAPTURE_LIBRARY_FILE),
+        executable_directory.join("deps").join(file_name),
     ]
     .into_iter()
+    .chain(cargo_example_profile)
     .find(|candidate| candidate.is_file())
 }
 
@@ -332,6 +367,7 @@ pub struct CaptureSessionHandle {
     session_id: CaptureSessionId,
     session_directory: PathBuf,
     layer_manifest_directory: PathBuf,
+    opengl_library: Option<PathBuf>,
     socket_path: PathBuf,
     reply_socket_path: PathBuf,
     overlay_telemetry_path: PathBuf,
@@ -361,9 +397,15 @@ impl CaptureSessionHandle {
         config: &CaptureSessionConfig,
         module_gates: CaptureModuleGates,
     ) -> Result<Self, CaptureSessionError> {
-        if !config.runtime_root.is_absolute() || !config.layer_library.is_absolute() {
+        if !config.runtime_root.is_absolute()
+            || !config.layer_library.is_absolute()
+            || config
+                .opengl_library
+                .as_ref()
+                .is_some_and(|library| !library.is_absolute())
+        {
             return Err(CaptureSessionError::new(
-                "capture runtime and layer paths must be absolute",
+                "capture runtime and library paths must be absolute",
             ));
         }
         let session_id = random_session_id()?;
@@ -373,6 +415,14 @@ impl CaptureSessionHandle {
         let layer_manifest_directory =
             prepare_vulkan_layer_directory(&session_directory, &config.layer_library)
                 .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
+        let opengl_library = config
+            .opengl_library
+            .as_deref()
+            .map(|library| prepare_opengl_capture_library(&session_directory, library))
+            .transpose()
+            .inspect_err(|_| {
+                cleanup_session_directory(&session_directory);
+            })?;
         let (overlay_telemetry_path, overlay_telemetry_file) =
             create_overlay_telemetry_file(&session_directory).map_err(|error| {
                 cleanup_session_directory(&session_directory);
@@ -433,6 +483,7 @@ impl CaptureSessionHandle {
             session_id,
             session_directory,
             layer_manifest_directory,
+            opengl_library,
             socket_path,
             reply_socket_path,
             overlay_telemetry_path,
@@ -579,7 +630,7 @@ impl CaptureSessionHandle {
         arguments: impl IntoIterator<Item = OsString>,
         inherited_environment: &BTreeMap<OsString, OsString>,
     ) -> Result<CaptureLaunchPlan, redunar_platform::CaptureLaunchError> {
-        Ok(CaptureLaunchPlan::new(
+        let plan = CaptureLaunchPlan::new(
             executable,
             arguments,
             &self.layer_manifest_directory,
@@ -587,7 +638,8 @@ impl CaptureSessionHandle {
             self.session_id,
             inherited_environment,
         )?
-        .with_capture_reply_socket(&self.reply_socket_path))
+        .with_capture_reply_socket(&self.reply_socket_path);
+        self.with_opengl_capture(plan, inherited_environment)
     }
 
     /// Build a shell-free capture plan from a persisted local game record.
@@ -601,7 +653,7 @@ impl CaptureSessionHandle {
         launch: &GameLaunchConfig,
         inherited_environment: &BTreeMap<OsString, OsString>,
     ) -> Result<CaptureLaunchPlan, redunar_platform::CaptureLaunchError> {
-        CaptureLaunchPlan::new(
+        let plan = CaptureLaunchPlan::new(
             launch.executable.clone(),
             launch.arguments.clone(),
             &self.layer_manifest_directory,
@@ -610,7 +662,23 @@ impl CaptureSessionHandle {
             inherited_environment,
         )?
         .with_capture_reply_socket(&self.reply_socket_path)
-        .with_working_directory(launch.working_directory.clone())
+        .with_working_directory(launch.working_directory.clone())?;
+        self.with_opengl_capture(plan, inherited_environment)
+    }
+
+    fn with_opengl_capture(
+        &self,
+        plan: CaptureLaunchPlan,
+        inherited_environment: &BTreeMap<OsString, OsString>,
+    ) -> Result<CaptureLaunchPlan, redunar_platform::CaptureLaunchError> {
+        let Some(library) = self.configured_opengl_library() else {
+            return Ok(plan);
+        };
+        plan.with_opengl_capture_library(library, inherited_environment)
+    }
+
+    fn configured_opengl_library(&self) -> Option<&Path> {
+        self.opengl_library.as_deref()
     }
 
     /// Build a shell-free child plan from one persisted game and its resolved
@@ -664,6 +732,35 @@ impl CaptureSessionHandle {
         global_profile: GlobalGameProfile,
         ttl: Duration,
     ) -> Result<(), CaptureSessionError> {
+        self.publish_steam_activation(game, global_profile, ttl, None)
+    }
+
+    /// Publish a native-Steam activation with an explicit Replay transfer
+    /// request for a bounded capture diagnostic. Production callers must use
+    /// [`Self::publish_steam_activation_for_profile`] so module readiness and
+    /// the effective profile remain authoritative.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureSessionError`] under the same activation, path, and
+    /// ownership failures as the production profile method.
+    pub fn publish_steam_activation_for_replay_diagnostic(
+        &mut self,
+        game: &GameRecord,
+        global_profile: GlobalGameProfile,
+        ttl: Duration,
+        replay: ReplayTransferLaunchConfig,
+    ) -> Result<(), CaptureSessionError> {
+        self.publish_steam_activation(game, global_profile, ttl, Some(replay))
+    }
+
+    fn publish_steam_activation(
+        &mut self,
+        game: &GameRecord,
+        global_profile: GlobalGameProfile,
+        ttl: Duration,
+        replay_override: Option<ReplayTransferLaunchConfig>,
+    ) -> Result<(), CaptureSessionError> {
         if self.steam_activation_broker.is_some() {
             return Err(CaptureSessionError::new(
                 "this capture session already published a Steam activation",
@@ -683,6 +780,9 @@ impl CaptureSessionHandle {
                 }
             };
         let effective = self.resolve_profile(game.profile, global_profile);
+        let replay = replay_override.unwrap_or_else(|| {
+            ReplayTransferLaunchConfig::new(effective.instant_replay, effective.replay.frame_rate)
+        });
         let mut environment = SteamCaptureEnvironment::new(
             &self.layer_manifest_directory,
             &self.socket_path,
@@ -699,8 +799,13 @@ impl CaptureSessionHandle {
         )
         .with_overlay_style(effective.overlay_layout, effective.overlay_palette)
         .with_overlay_branding(effective.overlay_branding)
-        .with_replay_requested(effective.instant_replay)
-        .with_replay_frame_rate(effective.replay.frame_rate);
+        .with_replay_requested(replay.is_requested())
+        .with_replay_frame_rate(replay.frame_rate());
+        if let Some(library) = self.configured_opengl_library() {
+            environment = environment
+                .with_opengl_library(library)
+                .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
+        }
         environment = environment
             .with_overlay_telemetry_path(&self.overlay_telemetry_path)
             .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
@@ -1363,11 +1468,16 @@ fn receiver_loop(socket: &UnixDatagram, shared: &CaptureShared, session_id: Capt
             Ok(received) => match decode_message(&buffer[..received.length]) {
                 Ok(redunar_capture::CaptureMessage::FrameBatch {
                     session_id,
+                    api,
                     first_sequence,
                     frame_intervals_ns,
                 }) => {
-                    let _ =
-                        model.accept_frame_batch(session_id, first_sequence, &frame_intervals_ns);
+                    let _ = model.accept_frame_batch(
+                        session_id,
+                        api,
+                        first_sequence,
+                        &frame_intervals_ns,
+                    );
                 }
                 Ok(message) => accept_capture_message(
                     &mut model,
@@ -1516,7 +1626,7 @@ impl ReplayProducerSelector {
             {
                 return false;
             }
-            eprintln!(
+            crate::log_op!(
                 "Redunar Replay: the previous capture producer became idle; validating its replacement"
             );
             self.selected = None;
@@ -1541,7 +1651,7 @@ impl ReplayProducerSelector {
         if candidate.exports < REPLAY_PRODUCER_CONFIRMATION_EXPORTS {
             return false;
         }
-        eprintln!(
+        crate::log_op!(
             "Redunar Replay: capture producer confirmed after {} exports",
             candidate.exports
         );
@@ -1681,6 +1791,10 @@ fn write_overlay_hardware(
     file.write_all_at(&bytes, 0)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixed wire layout has eight independent fields"
+)]
 fn pack_overlay_config(
     corner: u8,
     preset: u8,
@@ -1783,6 +1897,53 @@ fn cleanup_session_directory(directory: &Path) {
         }
     }
     let _ = fs::remove_dir(directory);
+}
+
+fn prepare_opengl_capture_library(
+    session_directory: &Path,
+    source: &Path,
+) -> Result<PathBuf, CaptureSessionError> {
+    if !source.is_absolute() {
+        return Err(CaptureSessionError::new(
+            "OpenGL capture library path must be absolute",
+        ));
+    }
+    let metadata = fs::symlink_metadata(source).map_err(|error| {
+        CaptureSessionError::owned(format!(
+            "could not inspect OpenGL capture library {}: {error}",
+            source.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CaptureSessionError::new(
+            "OpenGL capture library must be a regular file",
+        ));
+    }
+    let destination = session_directory.join(OPENGL_CAPTURE_LIBRARY_FILE);
+    let mut input = File::open(source).map_err(|error| {
+        CaptureSessionError::owned(format!(
+            "could not open OpenGL capture library {}: {error}",
+            source.display()
+        ))
+    })?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o500)
+        .open(&destination)
+        .map_err(|error| {
+            CaptureSessionError::owned(format!(
+                "could not prepare private OpenGL capture library: {error}"
+            ))
+        })?;
+    if let Err(error) = io::copy(&mut input, &mut output).and_then(|_| output.sync_all()) {
+        drop(output);
+        let _ = fs::remove_file(&destination);
+        return Err(CaptureSessionError::owned(format!(
+            "could not copy private OpenGL capture library: {error}"
+        )));
+    }
+    Ok(destination)
 }
 
 /// Resolve the current uid from /proc/self, matching the ownership checks
@@ -1904,6 +2065,32 @@ mod tests {
     }
 
     #[test]
+    fn opengl_library_is_copied_into_the_private_session_directory() {
+        let fixture = Fixture::new();
+        let source = fixture.root.join(OPENGL_CAPTURE_LIBRARY_FILE);
+        fs::write(&source, b"OpenGL interposer fixture").expect("write OpenGL fixture");
+        let session = fixture.root.join("private-session");
+        fs::create_dir(&session).expect("create private session");
+
+        let prepared =
+            prepare_opengl_capture_library(&session, &source).expect("prepare OpenGL library");
+
+        assert_eq!(prepared, session.join(OPENGL_CAPTURE_LIBRARY_FILE));
+        assert_eq!(
+            fs::read(&prepared).expect("read prepared library"),
+            b"OpenGL interposer fixture"
+        );
+        assert_eq!(
+            fs::metadata(&prepared)
+                .expect("prepared metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o500
+        );
+    }
+
+    #[test]
     fn development_executable_can_use_capture_layer_from_debug_dependencies() {
         let fixture = Fixture::new();
         fs::remove_file(&fixture.library).expect("remove packaged layer fixture");
@@ -1913,6 +2100,21 @@ mod tests {
         let fallback = deps.join(CAPTURE_LIBRARY_FILE);
         fs::write(&fallback, b"fixture").expect("write fallback layer");
         let located = find_layer_library(&executable).expect("locate development capture layer");
+        assert_eq!(located, fallback);
+    }
+
+    #[test]
+    fn cargo_example_can_use_capture_library_from_its_profile_directory() {
+        let fixture = Fixture::new();
+        fs::remove_file(&fixture.library).expect("remove packaged layer fixture");
+        let examples = fixture.root.join("examples");
+        fs::create_dir_all(&examples).expect("create examples fixture");
+        let executable = examples.join("capture_probe");
+        let fallback = fixture.root.join(CAPTURE_LIBRARY_FILE);
+        fs::write(&fallback, b"fixture").expect("write profile layer");
+
+        let located = find_layer_library(&executable).expect("locate profile capture layer");
+
         assert_eq!(located, fallback);
     }
 

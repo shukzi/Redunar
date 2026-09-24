@@ -60,6 +60,7 @@ for required_path in \
   usr/bin/redunar-tauri \
   usr/bin/redunar-steam-launch \
   usr/bin/libredunar_capture_vulkan.so \
+  usr/bin/libredunar_capture_opengl.so \
   usr/libexec/redunar-hotkey-helper \
   usr/lib/udev/rules.d/70-redunar-hotkeys.rules
 do

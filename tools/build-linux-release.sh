@@ -23,7 +23,7 @@ if [[ ! -d "$HOME/.cargo/registry" ]]; then
   exit 1
 fi
 
-podman build --pull=missing --tag "$image_name" --file "$containerfile" \
+podman build --pull=never --network=none --tag "$image_name" --file "$containerfile" \
   "$(dirname -- "$containerfile")"
 
 mkdir -p "$local_build_root"
@@ -51,6 +51,7 @@ artifacts=(
   "$release_root/redunar-steam-launch"
   "$release_root/redunar-hotkey-helper"
   "$release_root/libredunar_capture_vulkan.so"
+  "$release_root/libredunar_capture_opengl.so"
 )
 
 mkdir -p "$workspace_root/target"

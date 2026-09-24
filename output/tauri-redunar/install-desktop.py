@@ -23,6 +23,7 @@ if hashlib.sha256(build_binary.read_bytes()).digest() != hashlib.sha256(binary.r
 # register a launcher that would look healthy but silently lose those paths.
 for name, installed in (
     ("libredunar_capture_vulkan.so", Path("/usr/bin/libredunar_capture_vulkan.so")),
+    ("libredunar_capture_opengl.so", Path("/usr/bin/libredunar_capture_opengl.so")),
     ("redunar-steam-launch", Path("/usr/bin/redunar-steam-launch")),
     ("redunar-hotkey-helper", Path("/usr/libexec/redunar-hotkey-helper")),
 ):

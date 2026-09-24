@@ -35,8 +35,9 @@ disk cannot update an already-running process.
 ## Active layout and privilege boundary
 
 - `/usr/bin/redunar-tauri`, with its embedded frontend.
-- `/usr/bin/redunar-steam-launch` and `libredunar_capture_vulkan.so` beside the
-  app, resolved into a private per-launch Vulkan/Steam configuration.
+- `/usr/bin/redunar-steam-launch`, `libredunar_capture_vulkan.so`, and
+  `libredunar_capture_opengl.so` beside the app, resolved into private
+  per-launch graphics capture configuration.
 - `/usr/libexec/redunar-hotkey-helper`, running as the logged-in user.
 - `/usr/lib/udev/rules.d/70-redunar-hotkeys.rules`, giving the active graphical
   session keyboard and mouse event access through logind `uaccess`.
@@ -68,10 +69,10 @@ client utilities (`pactl` and `parec`), Opus, the `/usr/bin/ffmpeg` and
 by WebKit, in addition to discovered binary dependencies. A tray provider is optional; missing registration must leave normal window closing usable.
 
 Replay capture uses the hardware Vulkan Video path. An FFmpeg encoder name is
-not evidence that live hardware recording is supported. Audio records the
-default output through `parec` against either PulseAudio or PipeWire's Pulse
-server, with direct `pw-cat` capture available when PipeWire has no Pulse
-compatibility service. Opus encoding uses `libopus.so.0`; see
+not evidence that live hardware recording is supported. Audio prefers native
+PipeWire default-output capture through `pw-cat` when its node is available,
+then falls back to the output monitor through `parec` against PulseAudio or
+PipeWire's Pulse server. Opus encoding uses `libopus.so.0`; see
 [REPLAY.md](../REPLAY.md).
 
 Playback preparation and trimmed export invoke FFmpeg separately from recording.
@@ -138,7 +139,10 @@ fallback artifact. Native package construction does not replace the outstanding
 installation/runtime validation on those systems.
 
 `tools/build-install-assets.sh` builds five stable asset names, adjacent checksum
-files, `SHA256SUMS`, and its RSA/SHA-256 signature. It requires a private-key
+files, a `VERSION` file matching the Tauri and RPM package versions,
+`SHA256SUMS`, and its RSA/SHA-256 signature. The native updater requires
+`VERSION` to have an entry in the signed manifest before offering a package.
+The build requires a private-key
 path and refuses a key that does not match
 [`release-signing-public.pem`](release-signing-public.pem). The private key stays
 outside the source tree. The installer authenticates the manifest before using

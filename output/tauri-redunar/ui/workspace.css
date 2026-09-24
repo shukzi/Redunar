@@ -61,7 +61,8 @@ body[data-page=replay-menu] .replay-menu-panel{background:#0e0e0e;border-color:#
 .update-check-row small{display:block;margin-top:8px;font-size:9px;color:#d09199}
 .update-check-row small:empty{display:none}
 .update-check-row .button{align-self:center}
+.update-check-actions{display:grid;gap:8px}
 .updates-panel>.field{margin-top:2px}
 .update-note{font-size:10px;line-height:1.7;color:var(--muted);padding-top:18px}
 .updates-panel .button{white-space:nowrap}
-@media(max-width:700px){.update-check-row{grid-template-columns:auto minmax(0,1fr)}.update-check-row .button{grid-column:1/-1;width:100%}.updates-heading{align-items:center}}
+@media(max-width:700px){.update-check-row{grid-template-columns:auto minmax(0,1fr)}.update-check-actions{grid-column:1/-1}.update-check-row .button{width:100%}.updates-heading{align-items:center}}

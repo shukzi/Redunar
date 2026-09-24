@@ -55,6 +55,7 @@ pub struct ReplayRuntimeDto {
     recorder_health: String,
     can_save: bool,
     failure: Option<String>,
+    unavailable_reason: Option<String>,
     received_frame_count: u64,
     encoded_packet_count: u64,
     audio_packet_count: u64,
@@ -138,10 +139,23 @@ pub fn end_session(sessions: tauri::State<'_, crate::sessions::Sessions>) -> Res
 pub fn replay_runtime_status() -> Result<ReplayRuntimeDto, String> {
     // Poll the cached runtime; this path must not reread the catalog or
     // reconfigure replay at the monitor cadence.
-    let status = crate::backend::service()
-        .game_session_coordinator()
-        .replay_runtime()
-        .status();
+    let coordinator = crate::backend::service().game_session_coordinator();
+    let status = coordinator.replay_runtime().status();
+    let capture = if matches!(
+        status.phase,
+        redunar_daemon::ReplayPhase::Unavailable | redunar_daemon::ReplayPhase::Inactive
+    ) {
+        coordinator.capture_snapshot()
+    } else {
+        None
+    };
+    let rejection = capture
+        .as_ref()
+        .and_then(|snapshot| snapshot.replay_source_rejection);
+    let active_game = matches!(
+        coordinator.status().phase,
+        redunar_daemon::GameSessionPhase::Launching | redunar_daemon::GameSessionPhase::Running
+    );
     Ok(ReplayRuntimeDto {
         phase: format!("{:?}", status.phase),
         capability: format!("{:?}", status.capability),
@@ -152,13 +166,65 @@ pub fn replay_runtime_status() -> Result<ReplayRuntimeDto, String> {
         can_save: status.phase == redunar_daemon::ReplayPhase::Buffering
             && status.recorder_health == redunar_daemon::ReplayRecorderHealth::Healthy
             && status.buffered_duration_ns >= 1_000_000_000,
-        failure: status.last_failure.map(|failure| format!("{failure:?}")),
+        failure: status.last_failure.map(replay_failure_copy),
+        unavailable_reason: matches!(
+            status.phase,
+            redunar_daemon::ReplayPhase::Unavailable | redunar_daemon::ReplayPhase::Inactive
+        )
+        .then(|| replay_unavailable_copy(rejection, active_game, status.phase).to_owned()),
         received_frame_count: status.received_frame_count,
         encoded_packet_count: status.encoded_packet_count,
         audio_packet_count: status.audio_packet_count,
         audio_byte_count: status.audio_byte_count,
         audio_active: status.audio_active,
     })
+}
+
+fn replay_failure_copy(failure: redunar_daemon::ReplayFailure) -> String {
+    use redunar_daemon::ReplayFailure;
+    match failure {
+        ReplayFailure::FrameSourceLost => {
+            "The game stopped sending Replay frames. Restart the game through Redunar.".into()
+        }
+        ReplayFailure::EncoderFailed | ReplayFailure::ContainerFailed => {
+            "The video encoder stopped. Check Replay hardware support, then relaunch the game."
+                .into()
+        }
+        ReplayFailure::StorageFailed => {
+            "The replay could not be saved. Check the replay folder and free disk space.".into()
+        }
+        ReplayFailure::ResourceBudgetExceeded => {
+            "Replay exceeded its resource limit. Lower the recording resolution or frame rate."
+                .into()
+        }
+    }
+}
+
+fn replay_unavailable_copy(
+    rejection: Option<redunar_daemon::ReplaySourceRejection>,
+    active_game: bool,
+    phase: redunar_daemon::ReplayPhase,
+) -> &'static str {
+    use redunar_daemon::ReplaySourceRejection;
+    match rejection {
+        Some(ReplaySourceRejection::DimensionsUnsupported) =>
+            "This game resolution cannot be recorded. Use a supported window size and relaunch the game.",
+        Some(ReplaySourceRejection::PixelFormatUnsupported) =>
+            "This game's pixel format cannot be recorded. Try a standard 8-bit display mode.",
+        Some(ReplaySourceRejection::ExternalMemoryUnsupported) =>
+            "This OpenGL driver cannot share Replay frames with the encoder. Check graphics driver support.",
+        Some(ReplaySourceRejection::EncoderBackendUnavailable | ReplaySourceRejection::VideoEncodeUnsupported) =>
+            "The hardware video encoder is unavailable. Check Replay hardware support.",
+        Some(ReplaySourceRejection::ProtectedSwapchain) =>
+            "This game's protected display cannot be recorded.",
+        Some(ReplaySourceRejection::TransferSourceUsageMissing | ReplaySourceRejection::ArrayLayersUnsupported | ReplaySourceRejection::InvalidStructure) =>
+            "This game's graphics surface cannot be recorded. Try another display mode.",
+        None if active_game && phase == redunar_daemon::ReplayPhase::Unavailable =>
+            "Replay hardware is unavailable for this session. Check GPU and driver support; metrics remain available.",
+        None if active_game =>
+            "Waiting for recordable game frames. Try another display mode or relaunch the game through Redunar.",
+        None => "Launch a supported game through Redunar to start Replay.",
+    }
 }
 
 #[tauri::command]
@@ -253,6 +319,8 @@ pub struct AppPreferencesDto {
     window_width: i32,
     window_height: i32,
     window_maximized: bool,
+    diagnostic_log: bool,
+    diagnostic_log_path: Option<String>,
 }
 
 impl From<redunar_daemon::AppPreferences> for AppPreferencesDto {
@@ -263,6 +331,8 @@ impl From<redunar_daemon::AppPreferences> for AppPreferencesDto {
             window_width: value.window_width,
             window_height: value.window_height,
             window_maximized: value.window_maximized,
+            diagnostic_log: value.diagnostic_log,
+            diagnostic_log_path: None,
         }
     }
 }
@@ -287,8 +357,24 @@ pub struct UpdateCheckStatusDto {
 }
 
 #[tauri::command]
-pub async fn check_for_updates() -> UpdateCheckStatusDto {
-    match tauri::async_runtime::spawn_blocking(crate::updates::check_for_updates).await {
+pub async fn check_for_updates(refresh_pending: Option<bool>) -> UpdateCheckStatusDto {
+    // Reconciliation and refresh replace shared cache files, so only the
+    // process that owns the backend session may perform an update check.
+    if let Err(message) = crate::backend::ensure_write_access() {
+        return UpdateCheckStatusDto {
+            current_version: env!("CARGO_PKG_VERSION").into(),
+            state: "error".into(),
+            message,
+            latest_version: None,
+            package_kind: None,
+            asset_name: None,
+        };
+    }
+    match tauri::async_runtime::spawn_blocking(move || {
+        crate::updates::check_for_updates(refresh_pending.unwrap_or(false))
+    })
+    .await
+    {
         Ok(status) => UpdateCheckStatusDto {
             current_version: status.current_version,
             state: status.state,
@@ -316,6 +402,12 @@ pub struct UpdateInstallStatusDto {
 
 #[tauri::command]
 pub async fn install_update() -> UpdateInstallStatusDto {
+    if let Err(message) = crate::backend::ensure_write_access() {
+        return UpdateInstallStatusDto {
+            state: "error".into(),
+            message,
+        };
+    }
     match tauri::async_runtime::spawn_blocking(crate::updates::install_update).await {
         Ok(status) => UpdateInstallStatusDto {
             state: status.state,
@@ -330,10 +422,48 @@ pub async fn install_update() -> UpdateInstallStatusDto {
 
 #[tauri::command]
 pub fn app_preferences() -> Result<AppPreferencesDto, String> {
-    crate::backend::service()
+    let service = crate::backend::service();
+    let mut dto: AppPreferencesDto = service
         .app_preferences()
         .map(Into::into)
+        .map_err(|error| error.to_string())?;
+    let path = service.diagnostic_log_path();
+    if path.is_file() {
+        dto.diagnostic_log_path = Some(path.display().to_string());
+    }
+    Ok(dto)
+}
+
+#[tauri::command]
+pub fn set_diagnostic_log(enabled: bool) -> Result<AppPreferencesDto, String> {
+    crate::backend::ensure_write_access()?;
+    crate::backend::service()
+        .set_diagnostic_log_enabled(enabled)
+        .map(Into::into)
         .map_err(|error| error.to_string())
+}
+
+/// Open the folder containing the diagnostic log so the owner can attach it
+/// to a report.
+#[tauri::command]
+pub fn open_diagnostic_log_folder() -> Result<(), String> {
+    let path = crate::backend::service().diagnostic_log_path();
+    let Some(parent) = path.parent() else {
+        return Err("The diagnostic log has no folder yet".to_string());
+    };
+    if !parent.is_dir() {
+        return Err(
+            "No diagnostic log exists yet. Enable logging and restart Redunar first.".to_string(),
+        );
+    }
+    let mut child = std::process::Command::new("xdg-open")
+        .arg(parent)
+        .spawn()
+        .map_err(|_| "The desktop could not open the diagnostic log folder")?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[tauri::command]

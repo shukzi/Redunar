@@ -13,6 +13,8 @@ const PREFERENCES_HEADER_V2: &str = "redunar-app-preferences-v2";
 const PREFERENCES_HEADER_V3: &str = "redunar-app-preferences-v3";
 const PREFERENCES_HEADER_V4: &str = "redunar-app-preferences-v4";
 const PREFERENCES_HEADER_V5: &str = "redunar-app-preferences-v5";
+const PREFERENCES_HEADER_V6: &str = "redunar-app-preferences-v6";
+const PREFERENCES_HEADER_V7: &str = "redunar-app-preferences-v7";
 const MAX_PREFERENCES_BYTES: u64 = 1_024;
 const MIN_WINDOW_WIDTH: i32 = 800;
 const MAX_WINDOW_WIDTH: i32 = 7_680;
@@ -23,6 +25,10 @@ static PREFERENCES_OPERATIONS: Mutex<()> = Mutex::new(());
 
 /// Daemon-owned application behavior that is independent of game profiles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each persisted preference is an independent user-facing toggle; grouping them would obscure the saved format"
+)]
 pub struct AppPreferences {
     /// Hide a closed window only while a desktop tray item is confirmed live.
     pub close_to_tray: bool,
@@ -32,6 +38,13 @@ pub struct AppPreferences {
     pub window_width: i32,
     pub window_height: i32,
     pub window_maximized: bool,
+    /// Older files saved physical pixels; Tauri converts them once on restore.
+    /// Keep this bit across unrelated preference writes until geometry is saved.
+    pub window_size_is_physical: bool,
+    /// Opt-in diagnostic logging of Redunar's operational messages to a
+    /// bounded private file. Off by default; the file may contain game names,
+    /// session identifiers, and failure detail useful for debugging.
+    pub diagnostic_log: bool,
 }
 
 impl Default for AppPreferences {
@@ -46,6 +59,8 @@ impl Default for AppPreferences {
             window_width: 1_280,
             window_height: 720,
             window_maximized: false,
+            window_size_is_physical: false,
+            diagnostic_log: false,
         }
     }
 }
@@ -98,6 +113,17 @@ pub(crate) fn set_automatic_updates(
     Ok(preferences)
 }
 
+pub(crate) fn set_diagnostic_log(
+    state_directory: &Path,
+    enabled: bool,
+) -> Result<AppPreferences, AppPreferencesError> {
+    let _operation = lock_operations();
+    let mut preferences = load_unlocked(state_directory)?;
+    preferences.diagnostic_log = enabled;
+    save_unlocked(state_directory, preferences)?;
+    Ok(preferences)
+}
+
 pub(crate) fn set_window_state(
     state_directory: &Path,
     width: i32,
@@ -116,6 +142,7 @@ pub(crate) fn set_window_state(
     preferences.window_width = width;
     preferences.window_height = height;
     preferences.window_maximized = maximized;
+    preferences.window_size_is_physical = false;
     save_unlocked(state_directory, preferences)?;
     Ok(preferences)
 }
@@ -189,7 +216,7 @@ fn save_unlocked(
 
 fn serialize(preferences: AppPreferences) -> String {
     format!(
-        "{PREFERENCES_HEADER_V5}\nclose-to-tray={}\nwindow-width={}\nwindow-height={}\nwindow-maximized={}\nautomatic-updates={}\n",
+        "{PREFERENCES_HEADER_V7}\nclose-to-tray={}\nwindow-width={}\nwindow-height={}\nwindow-maximized={}\nautomatic-updates={}\nwindow-size-units={}\ndiagnostic-log={}\n",
         if preferences.close_to_tray {
             "on"
         } else {
@@ -203,6 +230,16 @@ fn serialize(preferences: AppPreferences) -> String {
             "off"
         },
         if preferences.automatic_updates {
+            "on"
+        } else {
+            "off"
+        },
+        if preferences.window_size_is_physical {
+            "physical"
+        } else {
+            "logical"
+        },
+        if preferences.diagnostic_log {
             "on"
         } else {
             "off"
@@ -238,6 +275,8 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         && version != PREFERENCES_HEADER_V3
         && version != PREFERENCES_HEADER_V4
         && version != PREFERENCES_HEADER_V5
+        && version != PREFERENCES_HEADER_V6
+        && version != PREFERENCES_HEADER_V7
     {
         return Err("unsupported preferences version");
     }
@@ -249,10 +288,28 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
     if version == PREFERENCES_HEADER_V3 {
         parse_compatibility_bool(lines.next())?;
     }
-    let automatic_updates = if version == PREFERENCES_HEADER_V5 {
+    let automatic_updates = if version == PREFERENCES_HEADER_V5
+        || version == PREFERENCES_HEADER_V6
+        || version == PREFERENCES_HEADER_V7
+    {
         parse_bool(lines.next(), "automatic-updates")?
     } else {
         true
+    };
+    let window_size_is_physical =
+        if version == PREFERENCES_HEADER_V6 || version == PREFERENCES_HEADER_V7 {
+            match lines.next() {
+                Some("window-size-units=physical") => true,
+                Some("window-size-units=logical") => false,
+                _ => return Err("preferences contain invalid window size units"),
+            }
+        } else {
+            true
+        };
+    let diagnostic_log = if version == PREFERENCES_HEADER_V7 {
+        parse_bool(lines.next(), "diagnostic-log")?
+    } else {
+        false
     };
     if lines.next().is_some()
         || !(MIN_WINDOW_WIDTH..=MAX_WINDOW_WIDTH).contains(&width)
@@ -266,6 +323,8 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         window_width: width,
         window_height: height,
         window_maximized: maximized,
+        window_size_is_physical,
+        diagnostic_log,
     })
 }
 
@@ -451,12 +510,48 @@ mod tests {
                 window_width: 1_320,
                 window_height: 840,
                 window_maximized: false,
+                window_size_is_physical: true,
+                diagnostic_log: false,
             }
         );
         let serialized = serialize(parsed);
-        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V5));
+        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V7));
         assert!(!serialized.contains("compatibility-switch"));
         assert!(serialized.contains("automatic-updates=on"));
+        assert!(serialized.contains("window-size-units=physical"));
+    }
+
+    #[test]
+    fn legacy_physical_size_survives_unrelated_write_until_geometry_is_saved() {
+        let root = fixture();
+        fs::create_dir_all(&root).expect("fixture directory");
+        fs::write(
+            root.join(PREFERENCES_FILE),
+            concat!(
+                "redunar-app-preferences-v5\n",
+                "close-to-tray=off\n",
+                "window-width=2560\n",
+                "window-height=1440\n",
+                "window-maximized=off\n",
+                "automatic-updates=on\n",
+            ),
+        )
+        .expect("legacy preferences");
+        let migrated = set_automatic_updates(&root, false).expect("unrelated preference write");
+        assert!(migrated.window_size_is_physical);
+        assert!(
+            fs::read_to_string(root.join(PREFERENCES_FILE))
+                .expect("migrated preferences")
+                .contains("window-size-units=physical")
+        );
+        let saved = set_window_state(&root, 1_280, 720, false).expect("logical geometry write");
+        assert!(!saved.window_size_is_physical);
+        assert!(
+            !load(&root)
+                .expect("reloaded geometry")
+                .window_size_is_physical
+        );
+        fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]
@@ -474,6 +569,8 @@ mod tests {
                 window_width: 1_320,
                 window_height: 840,
                 window_maximized: false,
+                window_size_is_physical: false,
+                diagnostic_log: false,
             }
         );
 
@@ -498,6 +595,8 @@ mod tests {
                 window_width: 1_440,
                 window_height: 900,
                 window_maximized: true,
+                window_size_is_physical: false,
+                diagnostic_log: false,
             }
         );
         assert!(tray.automatic_updates);

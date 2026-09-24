@@ -410,6 +410,35 @@ impl CaptureLaunchPlan {
         Ok(self)
     }
 
+    /// Preload Redunar's GLX/EGL presentation observer into this direct child.
+    /// Existing preload entries are preserved in their original order after
+    /// Redunar's library. The library is launch-scoped and never installed as
+    /// a global OpenGL provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureLaunchError`] when the library path is relative,
+    /// contains a NUL byte, or cannot be combined with the inherited preload
+    /// list.
+    pub fn with_opengl_capture_library(
+        mut self,
+        library: impl Into<PathBuf>,
+        inherited_environment: &BTreeMap<OsString, OsString>,
+    ) -> Result<Self, CaptureLaunchError> {
+        let library = library.into();
+        validate_absolute("OpenGL capture library", &library)?;
+        validate_no_nul("OpenGL capture library", library.as_os_str())?;
+        let preload = prepend_search_path(
+            &library,
+            inherited_environment.get(OsStr::new("LD_PRELOAD")),
+        )?;
+        self.environment
+            .insert(OsString::from("LD_PRELOAD"), preload);
+        // Leave SDL's provider selection to the game. A forced dynapi path can
+        // change the SDL instance used by its audio backend (including FAudio).
+        Ok(self)
+    }
+
     /// Add Redunar's bounded overlay configuration to the child environment.
     /// The parent process environment is never mutated.
     #[must_use]
@@ -1051,6 +1080,42 @@ mod tests {
         assert_eq!(
             inherited.get(OsStr::new(REDUNAR_REPLAY_FRAME_RATE_ENV)),
             Some(&OsString::from("999"))
+        );
+    }
+
+    #[test]
+    fn opengl_capture_preload_is_child_only_and_preserves_existing_entries() {
+        let mut inherited = BTreeMap::new();
+        inherited.insert(
+            OsString::from("LD_PRELOAD"),
+            OsString::from("/opt/other/first.so:/opt/other/second.so"),
+        );
+        let plan = CaptureLaunchPlan::new(
+            "/usr/bin/game",
+            [],
+            "/opt/redunar/layers",
+            "/run/user/1000/redunar/capture.sock",
+            session_id(),
+            &inherited,
+        )
+        .expect("launch plan")
+        .with_opengl_capture_library("/opt/redunar/libredunar_capture_opengl.so", &inherited)
+        .expect("OpenGL preload");
+
+        assert_eq!(
+            plan.environment().get(OsStr::new("LD_PRELOAD")),
+            Some(&OsString::from(
+                "/opt/redunar/libredunar_capture_opengl.so:/opt/other/first.so:/opt/other/second.so"
+            ))
+        );
+        assert!(
+            !plan
+                .environment()
+                .contains_key(OsStr::new("SDL_DYNAMIC_API"))
+        );
+        assert_eq!(
+            inherited.get(OsStr::new("LD_PRELOAD")),
+            Some(&OsString::from("/opt/other/first.so:/opt/other/second.so"))
         );
     }
 

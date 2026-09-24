@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
     window.bridge={calls:[],pending:[],thumbnails:[],hold:false,thumbnailCalls:0,errors:[]};
     window.addEventListener('error',event=>bridge.errors.push(event.message));
     window.addEventListener('unhandledrejection',event=>bridge.errors.push(String(event.reason)));
-    window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
+    window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async(command,args)=>{
       if(command==='replay_clips')return Array.from({length:24},(_,i)=>({file_name:i===0?'redunar-replay-1789223687-940555037-1-with-a-very-long-local-recording-filename.mp4':`clip-${i}.mp4`,title:`Clip ${String(i).padStart(2,'0')}`,game_name:i===15?'Fixture game':null,bytes:1024,modified_unix_ns:'1000000000'}));
       if(command==='clip_playback_path'){
         bridge.calls.push(args.fileName);
@@ -108,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
       if(command==='export_replay_clip'){bridge.exported=args;return {file_name:args.fileName,duration_seconds:args.endSeconds-args.startSeconds,bytes:1024};}
       if(command==='replay_storage_status')return {used_bytes:24576};
       if(command==='catalog_games'||command==='session_history')return [];
-      if(command==='replay_runtime_status')return {phase:'Standby',completed_save_revision:0};
+      if(command==='replay_runtime_status')return {phase:'Unavailable',unavailable_reason:'OpenGL capture is unavailable for this game',completed_save_revision:0};
       if(command==='module_statuses')return {instant_replay:'Enabled'};
       if(command==='app_preferences')return {close_to_tray:false};
       if(command==='replay_preferences')return {initial_save_duration_seconds:30};
@@ -154,8 +154,10 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
     try:
         view.load_uri(origin + "/#replay")
         pump(1800)
+        screenshot("replay-initial.png")
         js("""
         check(document.querySelectorAll('[data-clip]').length===24,'fixture loaded');
+        check(document.querySelector('#replay-phase').textContent.includes('OpenGL capture is unavailable for this game'),'native replay reason is visible');
         window.rail=document.querySelector('.clip-list');
         check(rail.scrollWidth<=rail.clientWidth+1,'long filename does not overflow rail');
         check(getComputedStyle(document.querySelector('.clip-select strong')).whiteSpace==='normal','filenames wrap');
@@ -228,17 +230,19 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         bridge.hold=false;
         """)
 
-        # On a narrow window the document scrolls instead of the clip rail.
+        # The window content scrolls independently from the document and rail.
         window.resize(900, 850)
         pump(300)
+        screenshot("replay-narrow.png")
         js("""
+        window.workspaceScroll=document.querySelector('.window-content');
         const next=document.querySelector('[data-clip="clip-19.mp4"]');
-        next.scrollIntoView({block:'center'});window.pageTop=scrollY;
+        next.scrollIntoView({block:'center'});window.pageTop=workspaceScroll.scrollTop;
         next.click();
-        check(pageTop>0&&scrollY===pageTop,'selection retained document scroll');
+        check(pageTop>0&&workspaceScroll.scrollTop===pageTop,'selection retained workspace scroll');
         """)
         pump(600)
-        js("check(scrollY===pageTop,'metadata retained document scroll');check(bridge.errors.length===0,bridge.errors.join(';'))")
+        js("check(workspaceScroll.scrollTop===pageTop,'metadata retained workspace scroll');check(bridge.errors.length===0,bridge.errors.join(';'))")
         js("""
         bridge.hold=true;
         document.querySelector('[data-clip="clip-18.mp4"]').click();

@@ -12,6 +12,7 @@ mod app_preferences;
 mod capture;
 mod capture_lifecycle;
 mod capture_session;
+pub mod diagnostic_log;
 mod game_catalog;
 mod game_session;
 mod kms_replay_source;
@@ -63,7 +64,7 @@ pub use monitor::{
     MonitorConfig, MonitorConfigError, MonitorDiagnostics, MonitorHandle, MonitorReader,
     MonitorSnapshot,
 };
-pub use redunar_capture::{OverlayFailureReason, OverlayRuntimeStatus};
+pub use redunar_capture::{OverlayFailureReason, OverlayRuntimeStatus, ReplaySourceRejection};
 pub use redunar_capture_kms::{KmsCapturePlan, KmsProbe, KmsProbeBlocker};
 pub use redunar_platform::{
     CaptureLaunchSupport, CaptureLaunchUnavailableReason, DEFAULT_STEAM_ACTIVATION_TTL,
@@ -192,10 +193,32 @@ impl RedunarService {
         }
     }
 
+    /// Isolated hardware probe with production Replay capability checks.
+    /// Unlike the ordinary test constructor, this permits the real encoder
+    /// path while retaining private state, output, and a private control socket
+    /// that cannot collide with the login-session socket.
+    #[must_use]
+    pub fn for_isolated_replay_probe(state_directory: impl Into<PathBuf>) -> Self {
+        let mut service = Self::with_state_directory(state_directory);
+        service.allow_validation_candidate = true;
+        service.replay_control_path = Some(service.state_directory.join("replay-control-v1.sock"));
+        service
+    }
+
     /// Construct the service used by the Tauri shell.
     #[must_use]
     pub fn for_tauri() -> Self {
         Self::default()
+    }
+
+    /// A second Tauri process may show a read-only window while another app
+    /// owns the login session. It must not compete for that app's Replay socket.
+    #[must_use]
+    pub fn for_tauri_read_only() -> Self {
+        Self {
+            replay_control_path: None,
+            ..Self::default()
+        }
     }
 
     /// Capture the current read-only hardware state.
@@ -242,6 +265,35 @@ impl RedunarService {
         enabled: bool,
     ) -> Result<AppPreferences, AppPreferencesError> {
         app_preferences::set_automatic_updates(&self.state_directory, enabled)
+    }
+
+    /// Persist the opt-in diagnostic logging switch. Enabling takes effect on
+    /// the next app start; the running process keeps its current stream.
+    ///
+    /// # Errors
+    ///
+    /// Propagates preference persistence failures.
+    pub fn set_diagnostic_log_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<AppPreferences, AppPreferencesError> {
+        app_preferences::set_diagnostic_log(&self.state_directory, enabled)
+    }
+
+    /// Start the bounded diagnostic log tee when the saved preference enables
+    /// it. Silent on failure: diagnostics must never block startup.
+    pub fn start_diagnostic_log_if_enabled(&self) {
+        if let Ok(preferences) = app_preferences::load(&self.state_directory)
+            && preferences.diagnostic_log
+        {
+            diagnostic_log::start(&self.state_directory);
+        }
+    }
+
+    /// The bounded diagnostic log file path, for the settings folder action.
+    #[must_use]
+    pub fn diagnostic_log_path(&self) -> PathBuf {
+        diagnostic_log::log_path(&self.state_directory)
     }
 
     /// Persist the last usable window size and maximized state.
@@ -296,8 +348,9 @@ impl RedunarService {
         MonitorHandle::start(config)
     }
 
-    /// Report whether the separately built Vulkan capture layer is available
-    /// beside the current executable and a private runtime directory exists.
+    /// Report whether the required Vulkan capture layer is available beside
+    /// the current executable and a private runtime directory exists. The
+    /// optional OpenGL observer is discovered separately by the launch plan.
     #[must_use]
     pub fn capture_runtime_status(&self) -> CaptureRuntimeStatus {
         Self::raw_capture_runtime_status()
@@ -888,6 +941,7 @@ impl RedunarService {
 
     /// Start one daemon-owned local capture receiver. This prepares only a
     /// private socket and explicit-layer manifest; it does not launch a game.
+    /// Direct launch plans also preload the optional adjacent OpenGL observer.
     ///
     /// # Errors
     ///
@@ -1386,6 +1440,13 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn read_only_tauri_service_cannot_claim_the_primary_replay_socket() {
+        let secondary = RedunarService::for_tauri_read_only();
+        assert!(secondary.replay_control_path.is_none());
+        assert!(secondary.runtime.replay_control.get().is_none());
+    }
 
     #[test]
     fn replay_recording_settings_lock_tracks_the_complete_game_lifecycle() {

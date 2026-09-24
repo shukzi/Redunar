@@ -43,7 +43,7 @@ let selectedGame = null, selectedClip = null, selectedSession = 0;
 let overviewMetric = 'frame';
 let historyMetric = 'fps', historyCompare = false, historyCursor = null;
 let globalTab = 'overlay', libraryTab = 'profile';
-let preferences = {tray:null,automaticUpdates:true};
+let preferences = {tray:null,automaticUpdates:true,diagnosticLog:false,diagnosticLogPath:null};
 let updateStatus = null;
 let startupUpdateCheckStarted = false;
 let toastTimer;
@@ -365,10 +365,10 @@ function historyRows(filter='') {
 }
 function settings() {
  const version=updateStatus?.current_version||$('.build-label')?.textContent?.replace(/^Version\s+/,'')||'Current build';
- const updateState=updateStatus?.state==='not-configured'?'Source pending':updateStatus?.state==='available'?`Verified ${String(updateStatus.package_kind||'').toUpperCase()} package`:updateStatus?.state==='up-to-date'?'Already up to date':updateStatus?.state==='error'?'Update check failed':'';
- const updateAction=updateStatus?.state==='available'?button('Install update','install-update',true,!native||busy?'disabled':''):button('Check for updates','check-for-updates',true,!native||busy?'disabled':'');
+ const updateState=updateStatus?.state==='not-configured'?'Source pending':updateStatus?.state==='restart-needed'?'Package installed · restart Redunar':updateStatus?.state==='handoff'?'Installer requested · installation unconfirmed':updateStatus?.state==='available'?`Verified ${String(updateStatus.package_kind||'').toUpperCase()} package`:updateStatus?.state==='up-to-date'?'Already up to date':updateStatus?.state==='error'?'Update check failed':'';
+ const updateAction=updateStatus?.state==='restart-needed'?button('Check again','check-for-updates',false,!native||busy?'disabled':''):updateStatus?.state==='handoff'?`${button('Reopen installer','install-update',true,!native||busy?'disabled':'')}${button('Check again','check-for-updates',false,!native||busy?'disabled':'')}`:updateStatus?.state==='available'?button('Install update','install-update',true,!native||busy?'disabled':''):button('Check for updates','check-for-updates',true,!native||busy?'disabled':'');
  return heading('Settings','Application behavior and software updates.')+
-`<div class="settings-grid"><section class="panel controls-panel"><h2>Application behavior</h2><p>Choose how Redunar behaves on your desktop.</p>${field('Close to tray','Show a tray icon and keep Redunar running when the window closes',switchControl('tray','Close to tray',preferences.tray===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">When enabled, closing hides this window only while its tray icon is registered. Use the tray menu to reopen Redunar or quit. Disabling this removes the tray icon immediately; closing the window then quits Redunar.</div></section><section class="panel controls-panel updates-panel"><div class="updates-heading"><div><h2>Software updates</h2><p>Keep the app up-to-date with automatic updates.</p></div><span class="pill">Version ${escape(version)}</span></div><div class="update-check-row"><span class="update-emblem">${icon('download')}</span><div><strong>Check for update manually.</strong><p>Manually check for updates for the Redunar app.</p><small data-update-state>${escape(updateState)}</small></div>${updateAction}</div>${field('Check for updates automatically.','Automatically check for updates on app startup and install them.',switchControl('automatic-updates','Check for updates automatically',preferences.automaticUpdates!==false,'preference',!native||!loaded.preferences||busy))}<div class="update-note">Redunar will ask before installing. The system package manager performs the update and your local settings, clips, and history stay in place.</div></section></div>`;
+`<div class="settings-grid"><section class="panel controls-panel"><h2>Application behavior</h2><p>Choose how Redunar behaves on your desktop.</p>${field('Close to tray','Show a tray icon and keep Redunar running when the window closes',switchControl('tray','Close to tray',preferences.tray===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">When enabled, closing hides this window only while its tray icon is registered. Use the tray menu to reopen Redunar or quit. Disabling this removes the tray icon immediately; closing the window then quits Redunar.</div></section><section class="panel controls-panel updates-panel"><div class="updates-heading"><div><h2>Software updates</h2><p>Check for signed Redunar releases.</p></div><span class="pill">Version ${escape(version)}</span></div><div class="update-check-row"><span class="update-emblem">${icon('download')}</span><div><strong>Check for updates manually.</strong><p>Check for a verified package for this system.</p><small data-update-state>${escape(updateState)}</small></div><div class="update-check-actions">${updateAction}</div></div>${field('Check for updates automatically','Check for updates on app startup; installation always needs your action.',switchControl('automatic-updates','Check for updates automatically',preferences.automaticUpdates!==false,'preference',!native||!loaded.preferences||busy))}<div class="update-note">Your system package installer handles installation. Fully quit and reopen Redunar afterward to load the new version. <section class="panel controls-panel"><h2>Debug log</h2><p>Optional file logging for support reports.</p>${field('Debug log','Record Redunar operational messages to a private file. The file can include game names and session details.',switchControl('diagnostic-log','Debug log',preferences.diagnosticLog===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">Changes apply on the next Redunar start. ${preferences.diagnosticLogPath?`<button class="button" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:'The log file appears after the first logged run.'}</div></div></section></div>`;
 }
 
 function diagnosticsCard() {
@@ -751,6 +751,9 @@ function updateObservedElements() {
  if(tray){tray.checked=preferences.tray===true;tray.disabled=!native||!loaded.preferences||busy;}
  const automaticUpdates=$('[data-preference="automatic-updates"]');
  if(automaticUpdates){automaticUpdates.checked=preferences.automaticUpdates!==false;automaticUpdates.disabled=!native||!loaded.preferences||busy;}
+ const diagnosticLog=$('[data-preference="diagnostic-log"]');
+ if(diagnosticLog){diagnosticLog.checked=preferences.diagnosticLog===true;diagnosticLog.disabled=!native||!loaded.preferences||busy;}
+ for(const updateAction of document.querySelectorAll('[data-action="check-for-updates"], [data-action="install-update"]'))updateAction.disabled=!native||busy;
 
  const values={
   'session-timer':time(activeSession?.elapsed_seconds),
@@ -773,7 +776,7 @@ function updateObservedElements() {
   'session-note':activeSession?.message||(active()?'':'Launch a saved game from Library to begin a session.'),
   'live-phase':activeSession?.phase==='Ended'?'Session ended':activeSession?.measurements?.phase||'Awaiting telemetry',
   'session-name':activeSession?.game||'No active game', 'session-phase':activeSession?.phase||'Unavailable',
-  'replay-status-title':replayStatusCopy(runtime).title, 'replay-phase':runtime?.failure||(!runtime?.can_save?replayStatusCopy(runtime).detail:''), 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—',
+  'replay-status-title':replayStatusCopy(runtime).title, 'replay-phase':runtime?.can_save?'':replayStatusCopy(runtime).detail, 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—',
   'overview-replay-status':runtime?`${runtime.phase} · ${measurement(runtime.buffered_seconds)} s buffered`:'Replay status unavailable',
  };
  for(const [id,text] of Object.entries(values)){ const el=document.getElementById(id);if(el&&el.textContent!==text)el.textContent=text; }
@@ -848,7 +851,9 @@ async function checkUpdatesOnStartup() {
  try {
   const status=await call('check_for_updates');
   updateStatus=status;
-  if(status.state==='available')notify(status.message);
+  if(status.state==='available')notify('A Redunar update is available. Open Settings to install it.');
+  if(status.state==='handoff')notify('A Redunar update is waiting for installation or an app restart. Open Settings for details.');
+  if(status.state==='restart-needed')notify('A Redunar update is installed. Fully quit and reopen Redunar to load it.');
  } catch(error) {
   updateStatus={current_version:'',state:'error',message:message(error),latest_version:null,package_kind:null,asset_name:null};
  }
@@ -902,7 +907,7 @@ const reloaders={
  'reload-clips':async()=>{await readSection('clips','replay_clips',acceptClips);try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}},
  'reload-history':async()=>{const loadedHistory=await readSection('history','session_history',data=>{sessions=mapSessions(data);selectedSession=0;historyCursor=null;loaded.history=true;});if(loadedHistory&&activeSession)lastLoadedHistoryRevision=activeSession.history_revision;return loadedHistory;},
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
- 'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;loaded.preferences=true;}),
+ 'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
  'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot');delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
 };
@@ -978,10 +983,10 @@ document.addEventListener('click',event=>{
  if(action==='clear-shortcuts'){draftShortcuts=Array(9).fill('');render();return;}
  if(!action)return;
  if(action==='check-for-updates'){
-  perform(async()=>{updateStatus=await call('check_for_updates');render();notify(updateStatus.message);});return;
+  perform(async()=>{updateStatus=await call('check_for_updates',{refreshPending:true});render();notify(updateStatus.message);});return;
  }
  if(action==='install-update'){
-  perform(async()=>{updateStatus=await call('install_update');render();notify(updateStatus.message);});return;
+  perform(async()=>{updateStatus={...updateStatus,...await call('install_update')};render();notify(updateStatus.message);});return;
  }
  if(action==='discard-global'){if(!globalProfileChanged()&&!globalShortcutsChanged())return;draft=structuredClone(defaults);draftShortcuts=[...shortcuts];render();return;}
  if(action==='discard-game'){game().overrides={...savedGameOverrides.get(game().id)};game().revision=game().savedRevision??game().revision;render();return;}
@@ -1022,6 +1027,10 @@ document.addEventListener('click',event=>{
   }
   if(action==='folder')await call('open_replay_folder');
   if(action==='open-clip-external'){if(!clip())throw new Error('Select a clip first.');await call('open_clip_external',{fileName:clip().file_name});notify('Opened the selected clip in your desktop player.');}
+  if(action==='open-diagnostic-log-folder'){
+  perform(async()=>{await call('open_diagnostic_log_folder');});
+  return;
+ }
   if(action==='change-replay-folder'){
    modal('Choose replay folder','<form id="replay-folder-form"><label class="form-label">Parent directory<input name="parent" required maxlength="4096" placeholder="/home/you/Videos"></label><p class="small-note">Redunar will create and own a <code>Redunar Replays</code> folder inside this directory. Existing clips stay where they are.</p><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Save folder</button></div></form>');
   }
@@ -1134,6 +1143,18 @@ document.addEventListener('change',event=>{
    const saved=await call('set_close_to_tray',{enabled:requested});
    preferences.tray=saved.close_to_tray;
    notify(preferences.tray?'Close to tray enabled.':'Close to tray disabled. Closing will quit Redunar.');
+  });
+  return;
+ }
+ if(t.dataset.preference==='diagnostic-log'){
+  const requested=t.checked;
+  t.checked=preferences.diagnosticLog===true;
+  if(!native||!loaded.preferences||busy)return;
+  perform(async()=>{
+   const saved=await call('set_diagnostic_log',{enabled:requested});
+   preferences.diagnosticLog=saved.diagnostic_log===true;
+   notify(preferences.diagnosticLog?'Debug log enabled. Restart Redunar to start recording.':'Debug log disabled. Recording stops after the next restart.');
+   render();
   });
   return;
  }

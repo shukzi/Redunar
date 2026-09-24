@@ -288,6 +288,7 @@ install_portable_payload() {
     usr/bin/redunar-tauri \
     usr/bin/redunar-steam-launch \
     usr/bin/libredunar_capture_vulkan.so \
+    usr/bin/libredunar_capture_opengl.so \
     usr/libexec/redunar-hotkey-helper \
     usr/lib/udev/rules.d/70-redunar-hotkeys.rules \
     usr/share/applications/com.redunar.Redunar.desktop \
@@ -309,6 +310,7 @@ install_portable_payload() {
   run_as_root install -m 0755 "$payload_directory/usr/bin/redunar-tauri" /usr/bin/redunar-tauri
   run_as_root install -m 0755 "$payload_directory/usr/bin/redunar-steam-launch" /usr/bin/redunar-steam-launch
   run_as_root install -m 0755 "$payload_directory/usr/bin/libredunar_capture_vulkan.so" /usr/bin/libredunar_capture_vulkan.so
+  run_as_root install -m 0755 "$payload_directory/usr/bin/libredunar_capture_opengl.so" /usr/bin/libredunar_capture_opengl.so
   run_as_root install -m 0755 "$payload_directory/usr/libexec/redunar-hotkey-helper" /usr/libexec/redunar-hotkey-helper
   run_as_root install -m 0644 "$payload_directory/usr/lib/udev/rules.d/70-redunar-hotkeys.rules" /usr/lib/udev/rules.d/70-redunar-hotkeys.rules
   run_as_root install -m 0644 "$payload_directory/usr/share/applications/com.redunar.Redunar.desktop" /usr/share/applications/com.redunar.Redunar.desktop

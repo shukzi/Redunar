@@ -14,7 +14,7 @@ pub use overlay::{
 use std::error::Error;
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 pub const MAX_FRAME_INTERVALS: usize = 128;
 pub const MAX_REPLAY_SOURCE_WIDTH: u32 = 3_840;
 pub const MAX_REPLAY_SOURCE_HEIGHT: u32 = 2_160;
@@ -103,12 +103,14 @@ impl CaptureSessionId {
 #[repr(u8)]
 pub enum CaptureApi {
     Vulkan = 1,
+    OpenGl = 2,
 }
 
 impl CaptureApi {
     fn from_wire(value: u8) -> Result<Self, ProtocolError> {
         match value {
             1 => Ok(Self::Vulkan),
+            2 => Ok(Self::OpenGl),
             _ => Err(ProtocolError::new("unsupported capture API")),
         }
     }
@@ -133,7 +135,7 @@ impl GoodbyeReason {
     }
 }
 
-/// Bounded renderer failures that the Vulkan layer can observe directly.
+/// Bounded renderer failures that an in-process graphics backend can observe.
 /// These describe only Redunar's optional overlay; presentation remains
 /// fail-open and the game continues normally.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,6 +144,7 @@ pub enum OverlayFailureReason {
     RequiredVulkanFunctionsUnavailable = 1,
     GraphicsQueueUnavailable = 2,
     RendererCapacityReached = 3,
+    RequiredOpenGlFunctionsUnavailable = 4,
 }
 
 impl OverlayFailureReason {
@@ -150,13 +153,15 @@ impl OverlayFailureReason {
             1 => Ok(Self::RequiredVulkanFunctionsUnavailable),
             2 => Ok(Self::GraphicsQueueUnavailable),
             3 => Ok(Self::RendererCapacityReached),
+            4 => Ok(Self::RequiredOpenGlFunctionsUnavailable),
             _ => Err(ProtocolError::new("overlay failure reason is unsupported")),
         }
     }
 }
 
-/// Authoritative overlay state reported by the in-process Vulkan layer.
-/// `Active` is emitted only after an overlay command buffer was submitted.
+/// Authoritative overlay state reported by an in-process graphics backend.
+/// `Active` is emitted only after the backend submitted or executed overlay
+/// drawing commands against the game's presentation target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OverlayRuntimeStatus {
     Requested,
@@ -258,11 +263,13 @@ pub enum CaptureMessage {
     },
     FrameBatch {
         session_id: CaptureSessionId,
+        api: CaptureApi,
         first_sequence: u64,
         frame_intervals_ns: Vec<u64>,
     },
     Goodbye {
         session_id: CaptureSessionId,
+        api: CaptureApi,
         last_sequence: u64,
         reason: GoodbyeReason,
     },
@@ -422,6 +429,7 @@ fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), Pro
             write_u64(output, HEADER_BYTES + 8, *producer_started_monotonic_ns);
         }
         CaptureMessage::FrameBatch {
+            api,
             first_sequence,
             frame_intervals_ns,
             ..
@@ -430,6 +438,7 @@ fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), Pro
             let frame_count = u16::try_from(frame_intervals_ns.len())
                 .map_err(|_| ProtocolError::new("capture frame count exceeds wire field"))?;
             write_u16(output, HEADER_BYTES + 8, frame_count);
+            output[HEADER_BYTES + 10] = *api as u8;
             for (index, interval) in frame_intervals_ns.iter().enumerate() {
                 write_u64(
                     output,
@@ -439,12 +448,14 @@ fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), Pro
             }
         }
         CaptureMessage::Goodbye {
+            api,
             last_sequence,
             reason,
             ..
         } => {
             write_u64(output, HEADER_BYTES, *last_sequence);
             output[HEADER_BYTES + 8] = *reason as u8;
+            output[HEADER_BYTES + 9] = *api as u8;
         }
         CaptureMessage::ReplaySourceCandidate { candidate, .. } => {
             write_u32(output, HEADER_BYTES, candidate.width);
@@ -531,6 +542,7 @@ fn encode_replay_frame_copied(
 /// insufficient output buffer.
 pub fn encode_frame_batch(
     session_id: CaptureSessionId,
+    api: CaptureApi,
     first_sequence: u64,
     frame_intervals_ns: &[u64],
     output: &mut [u8],
@@ -554,6 +566,7 @@ pub fn encode_frame_batch(
     output[16..32].copy_from_slice(&session_id.as_bytes());
     write_u64(output, HEADER_BYTES, first_sequence);
     write_u16(output, HEADER_BYTES + 8, frame_count);
+    output[HEADER_BYTES + 10] = api as u8;
     for (index, interval) in frame_intervals_ns.iter().enumerate() {
         write_u64(
             output,
@@ -665,7 +678,7 @@ fn decode_frame_batch(
     session_id: CaptureSessionId,
     payload_bytes: usize,
 ) -> Result<CaptureMessage, ProtocolError> {
-    if input[HEADER_BYTES + 10..HEADER_BYTES + FRAME_BATCH_PREFIX_BYTES]
+    if input[HEADER_BYTES + 11..HEADER_BYTES + FRAME_BATCH_PREFIX_BYTES]
         .iter()
         .any(|byte| *byte != 0)
     {
@@ -689,6 +702,7 @@ fn decode_frame_batch(
     validate_intervals(&intervals)?;
     Ok(CaptureMessage::FrameBatch {
         session_id,
+        api: CaptureApi::from_wire(input[HEADER_BYTES + 10])?,
         first_sequence: read_u64(input, HEADER_BYTES),
         frame_intervals_ns: intervals,
     })
@@ -698,7 +712,7 @@ fn decode_goodbye(
     input: &[u8],
     session_id: CaptureSessionId,
 ) -> Result<CaptureMessage, ProtocolError> {
-    if input[HEADER_BYTES + 9..HEADER_BYTES + GOODBYE_BYTES]
+    if input[HEADER_BYTES + 10..HEADER_BYTES + GOODBYE_BYTES]
         .iter()
         .any(|byte| *byte != 0)
     {
@@ -708,6 +722,7 @@ fn decode_goodbye(
     }
     Ok(CaptureMessage::Goodbye {
         session_id,
+        api: CaptureApi::from_wire(input[HEADER_BYTES + 9])?,
         last_sequence: read_u64(input, HEADER_BYTES),
         reason: GoodbyeReason::from_wire(input[HEADER_BYTES + 8])?,
     })
@@ -979,13 +994,21 @@ mod tests {
             api: CaptureApi::Vulkan,
             producer_started_monotonic_ns: 9_000,
         });
+        round_trip(&CaptureMessage::Hello {
+            session_id: session_id(),
+            process_id: 43,
+            api: CaptureApi::OpenGl,
+            producer_started_monotonic_ns: 10_000,
+        });
         round_trip(&CaptureMessage::FrameBatch {
             session_id: session_id(),
+            api: CaptureApi::Vulkan,
             first_sequence: 11,
             frame_intervals_ns: vec![16_000_000, 17_000_000],
         });
         round_trip(&CaptureMessage::Goodbye {
             session_id: session_id(),
+            api: CaptureApi::Vulkan,
             last_sequence: 12,
             reason: GoodbyeReason::Normal,
         });
@@ -1072,6 +1095,7 @@ mod tests {
     fn encoding_is_bounded_and_requires_caller_storage() {
         let too_many = CaptureMessage::FrameBatch {
             session_id: session_id(),
+            api: CaptureApi::Vulkan,
             first_sequence: 0,
             frame_intervals_ns: vec![1; MAX_FRAME_INTERVALS + 1],
         };
@@ -1101,14 +1125,21 @@ mod tests {
         let intervals = [8_000_000, 9_000_000, 10_000_000];
         let message = CaptureMessage::FrameBatch {
             session_id: session_id(),
+            api: CaptureApi::Vulkan,
             first_sequence: 7,
             frame_intervals_ns: intervals.to_vec(),
         };
         let mut message_bytes = [0; MAX_MESSAGE_BYTES];
         let mut borrowed_bytes = [0; MAX_MESSAGE_BYTES];
         let message_length = encode_message(&message, &mut message_bytes).expect("encode message");
-        let borrowed_length = encode_frame_batch(session_id(), 7, &intervals, &mut borrowed_bytes)
-            .expect("encode borrowed batch");
+        let borrowed_length = encode_frame_batch(
+            session_id(),
+            CaptureApi::Vulkan,
+            7,
+            &intervals,
+            &mut borrowed_bytes,
+        )
+        .expect("encode borrowed batch");
         assert_eq!(borrowed_length, message_length);
         assert_eq!(
             &borrowed_bytes[..borrowed_length],
@@ -1120,6 +1151,7 @@ mod tests {
     fn decoding_rejects_non_canonical_and_malformed_messages() {
         let message = CaptureMessage::FrameBatch {
             session_id: session_id(),
+            api: CaptureApi::Vulkan,
             first_sequence: 0,
             frame_intervals_ns: vec![16_000_000],
         };

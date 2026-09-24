@@ -14,6 +14,12 @@ test -x tools/run-tauri-vulkan-replay-acceptance.sh
 bash -n tools/run-tauri-vulkan-replay-acceptance.sh
 test -x tools/run-tauri-release-local.sh
 bash -n tools/run-tauri-release-local.sh
+test -x tools/run-opengl-overlay-acceptance.sh
+bash -n tools/run-opengl-overlay-acceptance.sh
+test -x tools/run-opengl-replay-foundation.sh
+bash -n tools/run-opengl-replay-foundation.sh
+test -x tools/run-opengl-production-replay.sh
+bash -n tools/run-opengl-production-replay.sh
 bash -n tools/check-local-replay-codecs.sh
 test -x tools/check-flatpak-replay-codecs.sh
 bash -n tools/check-flatpak-replay-codecs.sh
@@ -36,12 +42,18 @@ test -x tools/build-tauri-opensuse-rpm.sh
 bash -n tools/build-tauri-opensuse-rpm.sh
 test -x tools/sign-release-assets.sh
 bash -n tools/sign-release-assets.sh
+test -x tools/write-release-version.sh
+bash -n tools/write-release-version.sh
 test -x tools/build-install-assets.sh
 bash -n tools/build-install-assets.sh
 test -x tools/render-public-installer.sh
 bash -n tools/render-public-installer.sh
 test -x tools/test-installer.sh
 bash -n tools/test-installer.sh
+test -x tools/test-updater-rpm-flow.sh
+bash -n tools/test-updater-rpm-flow.sh
+test -x tools/test-updater-versioned-rpm.sh
+bash -n tools/test-updater-versioned-rpm.sh
 tools/test-installer.sh
 
 tools/build-linux-release.sh
@@ -68,6 +80,7 @@ tools/stage-tauri-package.sh "$staging_root"
 test -x "$staging_root/usr/bin/redunar-tauri"
 test -x "$staging_root/usr/bin/redunar-steam-launch"
 test -f "$staging_root/usr/bin/libredunar_capture_vulkan.so"
+test -f "$staging_root/usr/bin/libredunar_capture_opengl.so"
 test -x "$staging_root/usr/libexec/redunar-hotkey-helper"
 test -f "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
 grep -Fq 'ENV{ID_INPUT_KEYBOARD}=="1"' "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
@@ -98,6 +111,7 @@ tools/build-tauri-deb.sh "$installer_output"
 tools/build-tauri-portable.sh "$installer_output"
 tools/build-tauri-arch-package.sh "$installer_output"
 tools/build-tauri-opensuse-rpm.sh "$installer_output"
+tools/write-release-version.sh "$installer_output"
 test -f "$installer_output/redunar-app-linux-amd64.deb"
 test -f "$installer_output/redunar-app-linux-x86_64.tar.gz"
 test -f "$installer_output/redunar-app-linux-x86_64.pkg.tar.zst"
@@ -112,6 +126,7 @@ grep -Fxq usr/bin/redunar-tauri <<<"$arch_members"
 tools/sign-release-assets.sh "$installer_output" "$test_private_key" "$test_public_key"
 test -s "$installer_output/SHA256SUMS"
 test -s "$installer_output/SHA256SUMS.sig"
+grep -Eq "^[[:xdigit:]]{64}  VERSION$" "$installer_output/SHA256SUMS"
 openssl dgst -sha256 -verify "$test_public_key" \
   -signature "$installer_output/SHA256SUMS.sig" \
   "$installer_output/SHA256SUMS" >/dev/null

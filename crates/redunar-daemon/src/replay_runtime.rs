@@ -398,7 +398,7 @@ impl ProductionReplayRuntime {
                         // Clip assembly is isolated from the active encoder and
                         // spool. A storage failure must not discard otherwise
                         // healthy rolling history or force the counter to zero.
-                        eprintln!("Redunar could not save the Replay clip: {error}");
+                        crate::log_op!("Redunar could not save the Replay clip: {error}");
                         state.status.phase = ReplayPhase::Buffering;
                         state.status.last_failure = Some(ReplayFailure::StorageFailed);
                     }

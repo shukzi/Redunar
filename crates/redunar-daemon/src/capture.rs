@@ -1,5 +1,5 @@
 use redunar_capture::{
-    CaptureMessage, CaptureSessionId, OverlayRuntimeStatus, ReplaySourceCandidate,
+    CaptureApi, CaptureMessage, CaptureSessionId, OverlayRuntimeStatus, ReplaySourceCandidate,
     ReplaySourceRejection,
 };
 use std::collections::VecDeque;
@@ -32,6 +32,7 @@ pub struct CaptureSnapshot {
     pub session_id: CaptureSessionId,
     pub phase: CapturePhase,
     pub producer_process_id: Option<u32>,
+    pub capture_api: Option<CaptureApi>,
     pub received_frame_count: u64,
     pub dropped_frame_count: u64,
     pub rejected_message_count: u64,
@@ -64,6 +65,7 @@ pub struct CaptureSessionModel {
     session_id: CaptureSessionId,
     phase: CapturePhase,
     producer_process_id: Option<u32>,
+    capture_api: Option<CaptureApi>,
     next_sequence: Option<u64>,
     received_frame_count: u64,
     dropped_frame_count: u64,
@@ -98,6 +100,7 @@ impl CaptureSessionModel {
             session_id,
             phase: CapturePhase::Armed,
             producer_process_id: None,
+            capture_api: None,
             next_sequence: None,
             received_frame_count: 0,
             dropped_frame_count: 0,
@@ -140,15 +143,19 @@ impl CaptureSessionModel {
         match message {
             CaptureMessage::Hello {
                 process_id,
+                api,
                 producer_started_monotonic_ns,
                 ..
-            } => self.accept_hello(process_id, producer_started_monotonic_ns),
+            } => self.accept_hello(process_id, api, producer_started_monotonic_ns),
             CaptureMessage::FrameBatch {
+                api,
                 first_sequence,
                 frame_intervals_ns,
                 ..
-            } => self.accept_frames(first_sequence, &frame_intervals_ns),
-            CaptureMessage::Goodbye { last_sequence, .. } => self.accept_goodbye(last_sequence),
+            } => self.accept_frames(api, first_sequence, &frame_intervals_ns),
+            CaptureMessage::Goodbye {
+                api, last_sequence, ..
+            } => self.accept_goodbye(api, last_sequence),
             CaptureMessage::ReplaySourceCandidate { candidate, .. } => {
                 self.accept_replay_source_candidate(candidate)
             }
@@ -192,13 +199,14 @@ impl CaptureSessionModel {
     pub(crate) fn accept_frame_batch(
         &mut self,
         session_id: CaptureSessionId,
+        api: CaptureApi,
         first_sequence: u64,
         frame_intervals_ns: &[u64],
     ) -> Result<(), CaptureStateError> {
         if session_id != self.session_id {
             return self.reject("capture message belongs to a different session");
         }
-        self.accept_frames(first_sequence, frame_intervals_ns)
+        self.accept_frames(api, first_sequence, frame_intervals_ns)
     }
 
     /// Mark an active session failed after a transport or producer error.
@@ -225,6 +233,7 @@ impl CaptureSessionModel {
             session_id: self.session_id,
             phase: self.phase,
             producer_process_id: self.producer_process_id,
+            capture_api: self.capture_api,
             received_frame_count: self.received_frame_count,
             dropped_frame_count: self.dropped_frame_count,
             rejected_message_count: self.rejected_message_count,
@@ -253,6 +262,7 @@ impl CaptureSessionModel {
     fn accept_hello(
         &mut self,
         process_id: u32,
+        api: CaptureApi,
         producer_started_monotonic_ns: u64,
     ) -> Result<(), CaptureStateError> {
         if !matches!(self.phase, CapturePhase::Armed | CapturePhase::Completed) {
@@ -269,6 +279,7 @@ impl CaptureSessionModel {
         }
         self.phase = CapturePhase::Capturing;
         self.producer_process_id = Some(process_id);
+        self.capture_api = Some(api);
         self.next_sequence = None;
         self.replay_source_candidate = None;
         self.replay_announced_sources.clear();
@@ -294,11 +305,15 @@ impl CaptureSessionModel {
 
     fn accept_frames(
         &mut self,
+        api: CaptureApi,
         first_sequence: u64,
         frame_intervals_ns: &[u64],
     ) -> Result<(), CaptureStateError> {
         if self.phase != CapturePhase::Capturing {
             return self.reject("capture frames require an active producer");
+        }
+        if self.capture_api != Some(api) {
+            return self.reject("capture frames do not match the active graphics API");
         }
         if frame_intervals_ns.is_empty() || frame_intervals_ns.contains(&0) {
             return self.reject("capture frames must contain positive intervals");
@@ -331,9 +346,16 @@ impl CaptureSessionModel {
         Ok(())
     }
 
-    fn accept_goodbye(&mut self, last_sequence: u64) -> Result<(), CaptureStateError> {
+    fn accept_goodbye(
+        &mut self,
+        api: CaptureApi,
+        last_sequence: u64,
+    ) -> Result<(), CaptureStateError> {
         if self.phase != CapturePhase::Capturing {
             return self.reject("capture goodbye requires an active producer");
+        }
+        if self.capture_api != Some(api) {
+            return self.reject("capture goodbye does not match the active graphics API");
         }
         if let Some(expected) = self.next_sequence {
             let accepted_last = expected.saturating_sub(1);
@@ -438,6 +460,16 @@ impl CaptureSessionModel {
         timestamp_ns: u64,
         duration_ns: u64,
     ) -> Result<(), CaptureStateError> {
+        // Both native producers export DMA-BUF descriptors through the same
+        // SCM_RIGHTS contract; the GL producer uses GBM RA24 (LINEAR) and the
+        // Vulkan producer uses its LinearBuffer allocation. The metadata
+        // checks below, not the backend identity, guard the route.
+        if !matches!(
+            self.capture_api,
+            Some(CaptureApi::Vulkan | CaptureApi::OpenGl)
+        ) {
+            return self.reject("replay frame export requires a native capture backend");
+        }
         if self.phase != CapturePhase::Capturing
             || !self.replay_announced_sources.contains(&source)
             || fd_number < 3
@@ -468,6 +500,9 @@ impl CaptureSessionModel {
         &mut self,
         status: OverlayRuntimeStatus,
     ) -> Result<(), CaptureStateError> {
+        if self.capture_api.is_none() {
+            return self.reject("overlay status requires a capture backend");
+        }
         if self.phase != CapturePhase::Capturing {
             return self.reject("overlay status requires an active producer");
         }
@@ -576,6 +611,7 @@ mod tests {
         session
             .accept(CaptureMessage::FrameBatch {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 first_sequence: 10,
                 frame_intervals_ns: vec![10_000_000; 100],
             })
@@ -583,6 +619,7 @@ mod tests {
         session
             .accept(CaptureMessage::Goodbye {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 last_sequence: 109,
                 reason: GoodbyeReason::Normal,
             })
@@ -590,11 +627,134 @@ mod tests {
 
         let snapshot = session.snapshot();
         assert_eq!(snapshot.phase, CapturePhase::Completed);
+        assert_eq!(snapshot.capture_api, Some(CaptureApi::Vulkan));
         assert_eq!(snapshot.received_frame_count, 100);
         assert_eq!(snapshot.recent_frame_intervals_ns.len(), 100);
         let metrics = snapshot.metrics.expect("frame metrics");
         assert!((metrics.average_fps - 100.0).abs() < 0.001);
         assert!((metrics.one_percent_low_fps - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the protocol fixture checks the full OpenGL copy and exported-frame sequence"
+    )]
+    fn opengl_producer_uses_diagnostic_copies_and_the_shared_dma_buf_export_route() {
+        let mut session = CaptureSessionModel::new(session_id());
+        session
+            .accept(CaptureMessage::Hello {
+                session_id: session_id(),
+                process_id: 42,
+                api: CaptureApi::OpenGl,
+                producer_started_monotonic_ns: 1,
+            })
+            .expect("OpenGL hello");
+        session
+            .accept(CaptureMessage::FrameBatch {
+                session_id: session_id(),
+                api: CaptureApi::OpenGl,
+                first_sequence: 0,
+                frame_intervals_ns: vec![16_000_000; 16],
+            })
+            .expect("OpenGL frame metrics");
+        assert!(
+            session
+                .accept(CaptureMessage::FrameBatch {
+                    session_id: session_id(),
+                    api: CaptureApi::Vulkan,
+                    first_sequence: 16,
+                    frame_intervals_ns: vec![16_000_000],
+                })
+                .is_err(),
+            "a second injected API must not corrupt the selected producer timeline"
+        );
+        assert!(
+            session
+                .accept(CaptureMessage::Goodbye {
+                    session_id: session_id(),
+                    api: CaptureApi::Vulkan,
+                    last_sequence: 16,
+                    reason: GoodbyeReason::Normal,
+                })
+                .is_err(),
+            "a second injected API must not complete the selected producer"
+        );
+        let source = ReplaySourceCandidate {
+            width: 640,
+            height: 480,
+            pixel_format: redunar_capture::ReplayPixelFormat::Rgba8Unorm,
+            target_frames_per_second: 60,
+        };
+        session
+            .accept(CaptureMessage::ReplaySourceCandidate {
+                session_id: session_id(),
+                candidate: source,
+            })
+            .expect("OpenGL diagnostic source");
+        session
+            .accept(CaptureMessage::ReplayFrameCopied {
+                session_id: session_id(),
+                sequence: 0,
+                source,
+                copied_bytes: 640 * 480 * 4,
+                sample_checksum: 0x1234,
+            })
+            .expect("OpenGL diagnostic copy");
+        session
+            .accept(CaptureMessage::ReplayFrameExported {
+                session_id: session_id(),
+                sequence: 1,
+                fd_number: 7,
+                source,
+                offset: 0,
+                stride: 640 * 4,
+                modifier: 0,
+                timestamp_ns: 1,
+                duration_ns: 16_666_667,
+            })
+            .expect("OpenGL DMA-BUF export accepted");
+        // A descriptor below the protocol floor is still rejected regardless
+        // of backend, so the shared route keeps its ownership guard.
+        assert!(
+            session
+                .accept(CaptureMessage::ReplayFrameExported {
+                    session_id: session_id(),
+                    sequence: 2,
+                    fd_number: 2,
+                    source,
+                    offset: 0,
+                    stride: 640 * 4,
+                    modifier: 0,
+                    timestamp_ns: 2,
+                    duration_ns: 16_666_667,
+                })
+                .is_err(),
+            "invalid descriptors are rejected on every backend"
+        );
+        session
+            .accept(CaptureMessage::OverlayStatus {
+                session_id: session_id(),
+                status: OverlayRuntimeStatus::Requested,
+            })
+            .expect("OpenGL overlay requested");
+        session
+            .accept(CaptureMessage::OverlayStatus {
+                session_id: session_id(),
+                status: OverlayRuntimeStatus::Active,
+            })
+            .expect("OpenGL overlay active");
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.capture_api, Some(CaptureApi::OpenGl));
+        assert_eq!(snapshot.received_frame_count, 16);
+        assert!(snapshot.metrics.is_some());
+        assert_eq!(snapshot.overlay_status, Some(OverlayRuntimeStatus::Active));
+        assert_eq!(snapshot.replay_source_candidate, Some(source));
+        assert_eq!(snapshot.replay_copied_frame_count, 1);
+        // The fd_number=2 probe above was rejected, so only the first export
+        // is counted.
+        assert_eq!(snapshot.replay_exported_frame_count, 1);
     }
 
     #[test]
@@ -604,6 +764,7 @@ mod tests {
         session
             .accept(CaptureMessage::FrameBatch {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 first_sequence: 0,
                 frame_intervals_ns: vec![10_000_000; 128],
             })
@@ -611,6 +772,7 @@ mod tests {
         session
             .accept(CaptureMessage::FrameBatch {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 first_sequence: 130,
                 frame_intervals_ns: vec![20_000_000; 128],
             })
@@ -635,6 +797,7 @@ mod tests {
             session
                 .accept(CaptureMessage::FrameBatch {
                     session_id: session_id(),
+                    api: CaptureApi::Vulkan,
                     first_sequence: 0,
                     frame_intervals_ns: vec![1],
                 })
@@ -763,6 +926,7 @@ mod tests {
         session
             .accept(CaptureMessage::FrameBatch {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 first_sequence: 0,
                 frame_intervals_ns: vec![10_000_000; 2],
             })
@@ -770,6 +934,7 @@ mod tests {
         session
             .accept(CaptureMessage::Goodbye {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 last_sequence: 1,
                 reason: GoodbyeReason::Normal,
             })
@@ -779,6 +944,7 @@ mod tests {
         session
             .accept(CaptureMessage::FrameBatch {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 first_sequence: 0,
                 frame_intervals_ns: vec![20_000_000; 2],
             })
@@ -798,6 +964,7 @@ mod tests {
             session
                 .accept(CaptureMessage::FrameBatch {
                     session_id: session_id(),
+                    api: CaptureApi::Vulkan,
                     first_sequence: 0,
                     frame_intervals_ns: vec![0],
                 })
@@ -806,6 +973,7 @@ mod tests {
         session
             .accept(CaptureMessage::FrameBatch {
                 session_id: session_id(),
+                api: CaptureApi::Vulkan,
                 first_sequence: 64,
                 frame_intervals_ns: vec![10_000_000; 2],
             })

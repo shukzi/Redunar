@@ -149,6 +149,10 @@ impl SteamLaunchOptionsDetector {
             Ok(status) => status,
             Err(reason) => return SteamLaunchOptionsStatus::Unavailable(reason),
         };
+        self.combine(disk_status)
+    }
+
+    fn combine(&self, disk_status: SteamLaunchOptionsStatus) -> SteamLaunchOptionsStatus {
         match steam_process_state(&self.proc_root) {
             Ok(SteamProcessState::Stopped) => disk_status,
             Ok(SteamProcessState::Running) => match disk_status {

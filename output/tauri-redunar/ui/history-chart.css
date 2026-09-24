@@ -60,3 +60,13 @@
   margin: 0;
 }
 .history-timeline-chart .timeline-observation { vector-effect: non-scaling-stroke; }
+
+/* Put the native scrollbar in the grid gap while keeping the session cards at
+   their current width. Overlay scrollbars then cannot cover a hovered card. */
+@media (min-width: 1001px) {
+  .history-catalog { overflow: visible; }
+  .history-catalog #session-list {
+    width: calc(100% + 14px);
+    padding-right: 22px;
+  }
+}

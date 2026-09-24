@@ -1,8 +1,8 @@
 //! Bounded system-output audio capture for Instant Replay.
 //!
 //! Redunar records the default output monitor: the same mixed system audio the
-//! user hears. It uses PulseAudio (including PipeWire's Pulse server) when
-//! available and direct PipeWire otherwise, then produces fixed 48 kHz stereo
+//! user hears. It uses `PulseAudio` (including `PipeWire`'s Pulse server) when
+//! available and direct `PipeWire` otherwise, then produces fixed 48 kHz stereo
 //! PCM and independent 20 ms Opus packets.
 
 mod node;

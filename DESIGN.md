@@ -100,10 +100,27 @@ cleared.
 
 Settings contains the current application preferences, including Close to tray
 and software updates. Automatic update checks default on; the user can disable
-them or request a manual check. Installation always requires a clear user action
-and remains native-owned. Close to tray immediately controls tray icon visibility
-and closing behavior. Keep this page limited to current user-configurable
-behavior and runtime diagnostics.
+them or request a manual check. Automatic checks do not install packages.
+When a verified update package is already cached, an automatic check keeps it
+available. A manual check refreshes the signed release channel so a newer
+version can replace that pending package; an unavailable channel leaves the
+verified cached package available with an honest status.
+When a startup check finds an update, direct the user to Settings to install it;
+keep package-verification details in the Settings status. Installation always
+requires a clear user action and remains native-owned. Opening the system
+package installer is a handoff, not proof of installation; Settings must allow
+the user to reopen it after cancellation and say when a restart is needed.
+Close to tray immediately controls tray icon visibility and closing behavior.
+Keep this page limited to current user-configurable behavior and runtime
+diagnostics.
+
+Settings also owns the optional Debug log switch. It is off by default and
+takes effect on the next Redunar start. When enabled, Redunar records its
+operational messages, timestamped, into a private bounded file in the state
+directory, rotating to at most two bounded files. The settings copy states
+plainly that the file can include game names and session details, and offers
+an Open log folder action once the file exists. The log never contains clip
+media. Sharing it is always the owner's explicit choice.
 
 ## Instant Replay
 
@@ -129,6 +146,8 @@ preview is exposed because it cannot represent the production Vulkan presentatio
 See REPLAY for compositor limitations.
 Successful in-game saves use the bottom-left Moment saved pill with saved length
 and Local library, even when the metrics display is hidden.
+An unavailable Replay state uses one stable, actionable reason from native
+capture or encoder status; an inactive recorder never implies a populated buffer.
 
 ## History and honest data
 

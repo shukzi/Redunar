@@ -689,7 +689,7 @@ fn run_worker(
                     // temporary file is removed, advertised buffered duration
                     // resets honestly, and the next independently decodable
                     // keyframe starts a fresh segment.
-                    eprintln!("Redunar Replay: disk spool dropped a segment: {error}");
+                    crate::log_op!("Redunar Replay: disk spool dropped a segment: {error}");
                     if let Some(writer) = current.take() {
                         let _ = fs::remove_file(writer.temporary_path);
                     }
@@ -703,7 +703,7 @@ fn run_worker(
                     // slowness drains the bounded queue, and the existing
                     // queue-full discontinuity path drops replay work exactly
                     // as a stall should, without ending the recording session.
-                    eprintln!(
+                    crate::log_op!(
                         "Redunar Replay: disk spool exceeded the bounded write latency; \
                          disk history is degrading through bounded drops"
                     );
@@ -718,7 +718,7 @@ fn run_worker(
                     // The partial file is abandoned rather than retried. It
                     // stays invisible to snapshots because the index is
                     // cleared below, and the next spool open removes leftovers.
-                    eprintln!(
+                    crate::log_op!(
                         "Redunar Replay: disk spool could not remove the active segment on reset: {error}"
                     );
                 }
@@ -726,7 +726,7 @@ fn run_worker(
                     // A half-cleared index could let a new codec epoch save
                     // old-epoch segments, so this stays terminal. The export
                     // pump re-arms a fresh spool, which retries the reset.
-                    eprintln!("Redunar Replay: completed spool cleanup failed: {error}");
+                    crate::log_op!("Redunar Replay: completed spool cleanup failed: {error}");
                     shared
                         .phase
                         .store(ReplaySpoolPhase::Failed.code(), Ordering::Release);

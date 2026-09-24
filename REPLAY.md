@@ -1,6 +1,6 @@
 # Instant Replay contract
 
-Current Tauri behavior, reviewed September 20, 2026. Recording and saving remain
+Current Tauri behavior, reviewed September 22, 2026. Recording and saving remain
 local. This guide owns replay behavior; [DESIGN.md](DESIGN.md) owns presentation
 and [PERFORMANCE.md](PERFORMANCE.md) owns resource budgets.
 
@@ -11,7 +11,8 @@ settings configure the buffer without a separate activation switch. Capability
 and runtime validation still apply;
 unsupported launches must not claim that a buffer exists.
 
-The prepared Vulkan runtime also permits showing/hiding metrics during that game.
+The prepared Vulkan or supported desktop-OpenGL runtime also permits
+showing/hiding metrics during that game.
 Hiding metrics does not dismantle capture or disable future visibility changes.
 This does not allow attaching a runtime to an unrelated running game.
 
@@ -45,16 +46,19 @@ not request Polkit authorization or edit desktop-global shortcuts. The RPM's
 logind `uaccess` rule supplies access where supported; unavailable permissions
 must be reported honestly. Native dispatch works with the main webview hidden.
 
-The shortcut opens the Replay menu inside the captured game: the Vulkan layer
-renders the panel into the game's own swapchain, so compositor stacking rules
-and fullscreen focus games cannot hide it behind the game window. There is no
+The shortcut opens the Replay menu inside the captured game: the active Vulkan
+or OpenGL capture backend renders the panel into the game's own presentation
+target, so compositor stacking rules and fullscreen focus games cannot hide it
+behind the game window. There is no
 desktop menu window. The helper owns the pointer: while the menu is open it
 grabs every mouse through the kernel so the game receives no pointer input, and
 streams coalesced `MENU MOVE`/`MENU BUTTON` events over the replay control
 socket; the daemon hit-tests them and answers `OK GRAB`/`OK RELEASE`. Escape,
 any unrelated key (so Alt+Tab is never stranded), the helper's inactivity
 timeout, and the daemon's command watchdog all release the mice and close the
-menu. Some login sessions grant keyboard access without granting raw mouse
+menu. Capture teardown also closes the menu, and a subsequent pointer ping
+receives RELEASE if the render target disappears. Some login sessions grant
+keyboard access without granting raw mouse
 access. In that case the menu still renders in a view-only fallback, the save
 shortcuts remain active, and the shortcuts panel reports that pointer control
 is unavailable; a transient kernel mouse-grab failure uses the same fallback
@@ -62,7 +66,7 @@ instead of cancelling the menu. Composite keyboard interfaces are evaluated in
 one bounded chord window so modifier and function-key reader scheduling cannot
 drop a configured chord. Pressing the assigned menu chord again or any unrelated
 key closes it. The menu renders even
-when the metrics overlay is hidden. Its Vulkan surface and bounded control
+when the metrics overlay is hidden. Its bounded game-rendered surface and control
 outlines use rounded corners, and measured labels are centered within their
 cells so scaling cannot push shortcut or status text across a divider. The menu
 shows the current menu chord and the selected duration's direct-save chord from
@@ -70,7 +74,7 @@ live persisted preferences; cleared bindings show as unassigned. Its format
 picker persists MKV or MP4 and updates the active save runtime. A replay menu
 requires a running captured session, and without one the helper reports the rejection and the shortcuts
 panel shows it. The app does not expose a desktop preview because the production
-menu is rendered by the Vulkan layer inside the captured game.
+menu is rendered by the capture backend inside the captured game.
 
 A completed save drives the bottom-left **Moment saved** pill in the game,
 including duration and Local library. It is independent of metrics visibility.
@@ -79,16 +83,34 @@ save lifecycle. Buffer readiness, saving, unavailable, and failure are distinct.
 
 ## Capture and encoding
 
-The production path is the private game-owned Vulkan export route, not KMS or
-desktop screen scraping. Bounded DMA-BUF exports pass to a daemon-owned worker
-for GPU conversion and hardware H.264 encoding, then local muxing and spooling.
-Supported formats include the implemented 8-bit and packed 10-bit swapchain
-paths; support still depends on usage flags, device, queue, and driver features.
+The production path uses private game-owned graphics exports, not KMS or desktop
+screen scraping. Vulkan supports its implemented 8-bit and packed 10-bit
+swapchain paths. On the validated AMD/RADV host, desktop OpenGL uses a fixed
+six-slot pool of linear GBM RGBA8 buffers per bounded context, imported through
+`GL_EXT_memory_object_fd`;
+fence-ready descriptors pass to the same daemon-owned GPU conversion and
+hardware H.264 worker. EGL/OpenGL ES Replay remains unsupported. Every route
+still depends on format, dimensions, device, queue, driver, and encoder gates.
 
 Backpressure drops replay work rather than waiting for an encoder on the game's
-presentation path. Resize/reset retires resources safely. Audio or recorder
+presentation path. Resize starts a fresh codec epoch: completed old-generation
+copies are discarded locally, already-exported buffers remain release-gated,
+and the replacement source is announced only after its bounded pool exists.
+Context destruction closes producer ownership while transferred DMA-BUF
+duplicates remain valid in the daemon. Audio or recorder
 failure must not stall the game. Recording has no software-video fallback;
 FFmpeg's role in playback/export below is separate from live capture.
+If the daemon exits, the game continues presenting; telemetry batches reset
+after failed sends and exported OpenGL slots remain bounded while release
+messages are unavailable. A restarted daemon starts a new capture session,
+so Replay requires a new Redunar game launch rather than attaching the old
+game process to a different session. Startup sweeps stale private capture
+socket directories.
+
+When a process presents from multiple OpenGL contexts, the largest current
+viewport owns metrics and Replay. Context destruction clears that choice so a
+replacement context can take over immediately. OpenGL renderer and diagnostic
+readback bookkeeping also relinquish the destroyed context's bounded slots.
 
 A save assembles available retained history, including the active spool tail,
 into a private local MKV or MP4. It requires a healthy populated buffer and
@@ -111,10 +133,15 @@ access. This deliberately includes other applications that play through the
 same output, so it must be described as system-output audio rather than isolated
 game audio.
 
-`crates/redunar-capture-audio/src/source.rs` prefers the PulseAudio monitor API.
-That works with a native PulseAudio server and with PipeWire's Pulse server. If
-Pulse compatibility is absent, Redunar resolves the active PipeWire output with
-`wpctl` and records it directly with `pw-cat`. Both paths produce fixed 48 kHz
+`crates/redunar-capture-audio/src/source.rs` prefers the native PipeWire route:
+when the PipeWire registry exposes a default output node, Redunar records it
+directly with `pw-cat`. Recording through pipewire-pulse's compatibility layer
+instead was observed on 2026-09-24 to disturb a game's own Pulse client
+(Stardew's music went silent while a Pulse monitor recorder was attached during
+a Redunar session and returned once the recorder was removed), so the Pulse
+monitor API now serves as the fallback for hosts without a usable native
+PipeWire route; it still works with a native PulseAudio server and with
+PipeWire's Pulse server. Both paths produce fixed 48 kHz
 stereo PCM, bounded 20 ms Opus packets, and timestamped muxing. The worker
 rechecks the default route every two seconds, reconnects within 250 ms after a
 route change or capture failure, and treats three seconds without samples as a

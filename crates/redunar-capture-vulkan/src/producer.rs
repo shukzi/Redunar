@@ -365,6 +365,7 @@ impl Producer {
         let mut buffer = [0; MAX_MESSAGE_BYTES];
         if let Ok(length) = encode_frame_batch(
             session_id,
+            CaptureApi::Vulkan,
             self.first_sequence,
             &self.intervals[..self.interval_count],
             &mut buffer,
@@ -379,6 +380,7 @@ impl Producer {
         if let (Some(socket), Some(session_id)) = (&self.socket, self.session_id) {
             let goodbye = CaptureMessage::Goodbye {
                 session_id,
+                api: CaptureApi::Vulkan,
                 last_sequence: self.previous_sequence.unwrap_or(0),
                 reason: GoodbyeReason::Normal,
             };

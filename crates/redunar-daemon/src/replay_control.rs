@@ -52,7 +52,7 @@ impl ReplayControlServer {
                     },
                     Err(error) => {
                         let _ = fs::remove_file(&worker_path);
-                        eprintln!("Redunar Replay control: worker could not start: {error}");
+                        crate::log_op!("Redunar Replay control: worker could not start: {error}");
                         Self {
                             path: None,
                             stop,
@@ -62,7 +62,7 @@ impl ReplayControlServer {
                 }
             }
             Err(error) => {
-                eprintln!("Redunar Replay control: socket could not start: {error}");
+                crate::log_op!("Redunar Replay control: socket could not start: {error}");
                 Self {
                     path: None,
                     stop,
@@ -141,7 +141,7 @@ fn run_control(
         match socket.accept() {
             Ok((mut stream, _)) => handle_connection(&mut stream, coordinator),
             Err(error) => {
-                eprintln!("Redunar Replay control: receive failed: {error}");
+                crate::log_op!("Redunar Replay control: receive failed: {error}");
                 break;
             }
         }
@@ -174,7 +174,7 @@ fn handle_connection(stream: &mut UnixStream, coordinator: &ProductionGameSessio
             Err(error) => format!("ERROR {error}\n"),
         };
         if let Err(error) = stream.write_all(response.as_bytes()) {
-            eprintln!("Redunar Replay control: response failed: {error}");
+            crate::log_op!("Redunar Replay control: response failed: {error}");
             return;
         }
         if release {
@@ -273,7 +273,11 @@ fn apply_command(
             .map(|visible| if visible { "OK GRAB\n" } else { "OK RELEASE\n" }),
         ReplayControlCommand::Move(dx, dy) => {
             coordinator.move_replay_menu_cursor(dx, dy, now);
-            Ok("OK\n")
+            Ok(if coordinator.replay_menu_is_visible() {
+                "OK\n"
+            } else {
+                "OK RELEASE\n"
+            })
         }
         ReplayControlCommand::Button(pressed) => coordinator
             .replay_menu_button(pressed, now)
@@ -284,7 +288,11 @@ fn apply_command(
         }
         ReplayControlCommand::Ping => {
             coordinator.replay_menu_heartbeat(now);
-            Ok("OK\n")
+            Ok(if coordinator.replay_menu_is_visible() {
+                "OK\n"
+            } else {
+                "OK RELEASE\n"
+            })
         }
     }
 }
@@ -354,5 +362,21 @@ mod tests {
         );
         assert!(parse_command(b"MENU MOVE 4097 0\n").is_err());
         assert!(parse_command(b"MENU MOVE 1 2 3\n").is_err());
+    }
+
+    #[test]
+    fn ping_releases_a_helper_after_the_game_menu_has_closed() {
+        let coordinator = ProductionGameSessionCoordinator::new(
+            std::env::temp_dir().join("redunar-control-release-unused"),
+        );
+        assert_eq!(
+            apply_command(
+                ReplayControlCommand::Ping,
+                &coordinator,
+                std::time::Instant::now()
+            )
+            .expect("release response"),
+            "OK RELEASE\n"
+        );
     }
 }

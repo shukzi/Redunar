@@ -31,6 +31,7 @@ try:
 finally:
     index.write_text(index_source)
 run(["cargo", "build", "--release", "--offline", "-p", "redunar-capture-vulkan", "--lib", "--target-dir", str(runtime_target)], workspace)
+run(["cargo", "build", "--release", "--offline", "-p", "redunar-capture-opengl", "--lib", "--target-dir", str(runtime_target)], workspace)
 run(["cargo", "build", "--release", "--offline", "-p", "redunar-platform", "--bin", "redunar-steam-launch", "--target-dir", str(runtime_target)], workspace)
 run(["cargo", "build", "--release", "--offline", "-p", "redunar-hotkeys", "--bin", "redunar-hotkey-helper", "--target-dir", str(runtime_target)], workspace)
 release_environment = os.environ.copy()
@@ -46,7 +47,7 @@ run(
 
 destination = native / "src-tauri/target/release"
 hashes = {}
-for name in ("libredunar_capture_vulkan.so", "redunar-steam-launch", "redunar-hotkey-helper"):
+for name in ("libredunar_capture_vulkan.so", "libredunar_capture_opengl.so", "redunar-steam-launch", "redunar-hotkey-helper"):
     source = runtime_target / "release" / name
     temporary = destination / f".{name}.stage"
     # Atomic replacement preserves the old inode if a running game still has
@@ -55,4 +56,4 @@ for name in ("libredunar_capture_vulkan.so", "redunar-steam-launch", "redunar-ho
     os.replace(temporary, destination / name)
     hashes[name] = hashlib.sha256(source.read_bytes()).hexdigest()
 (destination / "capture-components.json").write_text(json.dumps(hashes, indent=2) + "\n")
-print("Built Tauri with its local capture library, Steam wrapper, and shortcut helper.")
+print("Built Tauri with its local capture libraries, Steam wrapper, and shortcut helper.")

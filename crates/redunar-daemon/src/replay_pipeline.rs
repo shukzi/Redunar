@@ -638,6 +638,7 @@ mod tests {
         shutdowns: Arc<AtomicUsize>,
         fail_encode: bool,
         fail_drain: bool,
+        fail_shutdown: bool,
         completion_delay: usize,
         pending: VecDeque<(u64, u64, u64, bool)>,
     }
@@ -659,6 +660,7 @@ mod tests {
                 shutdowns,
                 fail_encode: false,
                 fail_drain: false,
+                fail_shutdown: false,
                 completion_delay: 0,
                 pending: VecDeque::new(),
             }
@@ -674,6 +676,14 @@ mod tests {
         fn drain_failing(width: u32, height: u32, shutdowns: Arc<AtomicUsize>) -> Self {
             Self {
                 fail_drain: true,
+                ..Self::new(width, height, shutdowns)
+            }
+        }
+
+        fn shutdown_failing(width: u32, height: u32, shutdowns: Arc<AtomicUsize>) -> Self {
+            Self {
+                fail_shutdown: true,
+                completion_delay: MAX_HARDWARE_INPUTS_IN_FLIGHT,
                 ..Self::new(width, height, shutdowns)
             }
         }
@@ -764,6 +774,11 @@ mod tests {
 
         fn shutdown(&mut self) -> Result<(), ReplayEncoderError> {
             self.shutdowns.fetch_add(1, Ordering::Relaxed);
+            if self.fail_shutdown {
+                return Err(ReplayEncoderError::BackendFailed(
+                    "injected shutdown failure".to_owned(),
+                ));
+            }
             Ok(())
         }
     }
@@ -1123,6 +1138,31 @@ mod tests {
                 .is_keyframe()
         );
         pipeline.shutdown().expect("shutdown");
+        assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn shutdown_failure_keeps_unfinished_export_ownership_and_is_idempotent() {
+        let fixture = Fixture::new();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let mut pipeline = ReplayHardwarePipeline::new(
+            ReplaySettings::default(),
+            fixture.store(),
+            Box::new(FakeBackend::shutdown_failing(
+                1_920,
+                1_080,
+                Arc::clone(&shutdowns),
+            )),
+        )
+        .expect("pipeline");
+        pipeline
+            .submit_frame(1, frame(&fixture.root, 1, 1_920, 1_080))
+            .expect("in-flight frame");
+        assert!(pipeline.shutdown().is_err());
+        assert_eq!(pipeline.phase(), ReplayPipelinePhase::Shutdown);
+        // A failed device-idle shutdown cannot prove GPU ownership ended.
+        assert!(pipeline.take_completed_inputs().is_empty());
+        pipeline.shutdown().expect("second shutdown is idempotent");
         assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
     }
 

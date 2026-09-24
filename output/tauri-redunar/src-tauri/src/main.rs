@@ -21,15 +21,51 @@ const APP_ID: &str = "com.redunar.Redunar";
 #[cfg(target_os = "linux")]
 const WEBKIT_DMABUF_ENV: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
 
-fn persistable_window_state(width: u32, height: u32, maximized: bool) -> Option<(i32, i32, bool)> {
-    if width == 0 || height == 0 {
+fn persistable_window_state(
+    physical_width: u32,
+    physical_height: u32,
+    scale_factor: f64,
+    maximized: bool,
+) -> Option<(i32, i32, bool)> {
+    if physical_width == 0
+        || physical_height == 0
+        || !scale_factor.is_finite()
+        || scale_factor <= 0.0
+    {
         return None;
     }
-    Some((
-        i32::try_from(width).ok()?,
-        i32::try_from(height).ok()?,
-        maximized,
-    ))
+    // Tauri reports the live inner size in physical pixels, while the saved
+    // window preference and set_size below use logical desktop coordinates.
+    let logical =
+        tauri::PhysicalSize::new(physical_width, physical_height).to_logical::<i32>(scale_factor);
+    if logical.width <= 0 || logical.height <= 0 {
+        return None;
+    }
+    Some((logical.width, logical.height, maximized))
+}
+
+fn restorable_window_size(
+    saved_width: i32,
+    saved_height: i32,
+    legacy_physical: bool,
+    scale_factor: f64,
+) -> Option<(i32, i32)> {
+    if saved_width <= 0 || saved_height <= 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return None;
+    }
+    if !legacy_physical {
+        return Some((saved_width, saved_height));
+    }
+    let logical = tauri::PhysicalSize::new(saved_width as u32, saved_height as u32)
+        .to_logical::<i32>(scale_factor);
+    // Older builds could persist a tiny physical window on HiDPI desktops.
+    // Do not reproduce an unusably small viewport during the one-time migration.
+    if logical.width < 800 || logical.height < 600 {
+        let defaults = redunar_daemon::AppPreferences::default();
+        Some((defaults.window_width, defaults.window_height))
+    } else {
+        Some((logical.width, logical.height))
+    }
 }
 
 fn persist_window_state(window: &tauri::Window) {
@@ -39,15 +75,30 @@ fn persist_window_state(window: &tauri::Window) {
     let Ok(size) = window.inner_size() else {
         return;
     };
+    let Ok(scale_factor) = window.scale_factor() else {
+        return;
+    };
     let Ok(maximized) = window.is_maximized() else {
         return;
     };
     let Some((width, height, maximized)) =
-        persistable_window_state(size.width, size.height, maximized)
+        persistable_window_state(size.width, size.height, scale_factor, maximized)
     else {
         return;
     };
     let _ = backend::service().set_window_state(width, height, maximized);
+}
+
+fn tauri_context(read_only_instance: bool) -> tauri::Context<tauri::Wry> {
+    let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    if read_only_instance {
+        // A second GTK application with the primary app ID reactivates the
+        // first Tauri event loop. Tauri then runs setup twice and panics while
+        // recreating its `main` webview. Keep the same product identity but
+        // register only this read-only secondary as a non-unique GTK app.
+        context.config_mut().app.enable_gtk_app_id = false;
+    }
+    context
 }
 
 #[cfg(target_os = "linux")]
@@ -64,24 +115,50 @@ fn configure_webkit_renderer() {
 
 #[cfg(test)]
 mod tests {
-    use super::persistable_window_state;
+    use super::{persistable_window_state, restorable_window_size};
 
     #[test]
     fn window_state_persists_maximized_flag() {
         assert_eq!(
-            persistable_window_state(1_280, 720, true),
+            persistable_window_state(1_280, 720, 1.0, true),
             Some((1_280, 720, true))
         );
         assert_eq!(
-            persistable_window_state(1_280, 720, false),
+            persistable_window_state(1_280, 720, 1.0, false),
             Some((1_280, 720, false))
         );
     }
 
     #[test]
     fn zero_sized_window_is_not_persisted() {
-        assert_eq!(persistable_window_state(0, 720, false), None);
-        assert_eq!(persistable_window_state(1_280, 0, true), None);
+        assert_eq!(persistable_window_state(0, 720, 1.0, false), None);
+        assert_eq!(persistable_window_state(1_280, 0, 1.0, true), None);
+    }
+
+    #[test]
+    fn scaled_physical_size_saves_logical_desktop_size() {
+        assert_eq!(
+            persistable_window_state(2_560, 1_440, 2.0, false),
+            Some((1_280, 720, false))
+        );
+        assert_eq!(persistable_window_state(1_280, 720, 0.0, false), None);
+    }
+
+    #[test]
+    fn legacy_physical_window_size_migrates_without_shrinking_the_viewport() {
+        assert_eq!(
+            restorable_window_size(2_560, 1_440, true, 2.0),
+            Some((1_280, 720))
+        );
+        assert_eq!(
+            restorable_window_size(1_280, 720, true, 2.0),
+            Some((1_280, 720))
+        );
+        assert_eq!(
+            restorable_window_size(1_280, 720, false, 2.0),
+            Some((1_280, 720))
+        );
+        assert_eq!(restorable_window_size(1_280, 720, false, 0.0), None);
     }
 }
 
@@ -94,6 +171,9 @@ fn main() {
     // icon. This must run before Tauri initializes GTK or creates a window.
     #[cfg(target_os = "linux")]
     gtk::glib::set_prgname(Some(APP_ID));
+    // Opt-in diagnostic logging starts before the first startup message so a
+    // shared report includes the whole session from process start.
+    backend::service().start_diagnostic_log_if_enabled();
     // A previous instance that crashed or was killed cannot run its own
     // cleanup: private capture-session sockets and multi-hundred-megabyte
     // playback copies stay behind. Sweep them once, but only while no other
@@ -120,11 +200,18 @@ fn main() {
                 if let Ok(saved) = backend::service().app_preferences() {
                     if saved.window_maximized {
                         let _ = window.maximize();
-                    } else {
-                        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                            saved.window_width as u32,
-                            saved.window_height as u32,
-                        )));
+                    } else if let Ok(scale_factor) = window.scale_factor() {
+                        if let Some((width, height)) = restorable_window_size(
+                            saved.window_width,
+                            saved.window_height,
+                            saved.window_size_is_physical,
+                            scale_factor,
+                        ) {
+                            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                                f64::from(width),
+                                f64::from(height),
+                            )));
+                        }
                     }
                 }
             }
@@ -165,6 +252,8 @@ fn main() {
             backend::diagnostics_snapshot,
             runtime::app_preferences,
             runtime::set_close_to_tray,
+            runtime::set_diagnostic_log,
+            runtime::open_diagnostic_log_folder,
             runtime::set_automatic_updates,
             runtime::check_for_updates,
             runtime::install_update,
@@ -212,7 +301,7 @@ fn main() {
             runtime::save_replay,
             runtime::delete_replay_clip,
         ])
-        .build(tauri::generate_context!())
+        .build(tauri_context(backend::other_owner()))
         .expect("Could not open Redunar");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
@@ -250,8 +339,12 @@ mod identity_tests {
 
     #[test]
     fn runtime_identity_matches_the_tauri_identifier() {
-        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
-        assert_eq!(context.config().identifier, APP_ID);
+        let primary = super::tauri_context(false);
+        assert_eq!(primary.config().identifier, APP_ID);
+        assert!(primary.config().app.enable_gtk_app_id);
+        let secondary = super::tauri_context(true);
+        assert_eq!(secondary.config().identifier, APP_ID);
+        assert!(!secondary.config().app.enable_gtk_app_id);
     }
 
     #[cfg(target_os = "linux")]

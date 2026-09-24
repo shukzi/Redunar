@@ -11,6 +11,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SOURCE_ENV: &str = "REDUNAR_UPDATE_SOURCE_URL";
@@ -21,6 +22,9 @@ const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const UPDATE_CACHE_FOLDER: &str = "redunar/updates";
 const PENDING_UPDATE_FILE: &str = "pending-update.txt";
+// Startup and manual checks may overlap. Serialize cache replacement and
+// installer handoff so an old check cannot overwrite a newer verified package.
+static UPDATE_OPERATION: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateCheckStatus {
@@ -38,46 +42,131 @@ pub struct UpdateInstallStatus {
     pub message: String,
 }
 
-pub fn check_for_updates() -> UpdateCheckStatus {
+pub fn check_for_updates(refresh_pending: bool) -> UpdateCheckStatus {
+    let _operation = UPDATE_OPERATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let current_version = env!("CARGO_PKG_VERSION").to_owned();
-    if let Some(status) = reconcile_pending_update(&current_version) {
-        return status;
+    let retained = reconcile_pending_update(&current_version);
+    if let Some(status) = retained
+        .as_ref()
+        .filter(|status| hold_pending(status, refresh_pending))
+    {
+        return status.clone();
     }
     let Some(source) = env::var(SOURCE_ENV)
         .ok()
         .or_else(|| RELEASE_SOURCE.map(str::to_owned))
     else {
-        return unavailable(
-            current_version,
-            "Signed update checking is not configured in this build yet.",
-        );
+        return retained.unwrap_or_else(|| {
+            unavailable(
+                current_version,
+                "Signed update checking is not configured in this build yet.",
+            )
+        });
     };
     let source = source.trim_end_matches('/').to_owned();
     if source.is_empty() {
-        return unavailable(
-            current_version,
-            "Signed update checking is not configured in this build yet.",
-        );
+        return retained.unwrap_or_else(|| {
+            unavailable(
+                current_version,
+                "Signed update checking is not configured in this build yet.",
+            )
+        });
     }
     if !is_allowed_source(&source) {
-        return error_status(current_version, "Update sources must use HTTPS.");
+        return retained_or_error(
+            retained,
+            error_status(current_version, "Update sources must use HTTPS."),
+        );
     }
 
     let temporary_directory = match temporary_directory() {
         Ok(path) => path,
         Err(error) => {
-            return error_status(
-                current_version,
-                &format!("Could not prepare update verification: {error}"),
+            return retained_or_error(
+                retained,
+                error_status(
+                    current_version,
+                    &format!("Could not prepare update verification: {error}"),
+                ),
             )
         }
     };
-    let result = check_source(&source, &current_version, &temporary_directory);
+    let result = check_source(
+        &source,
+        &current_version,
+        &temporary_directory,
+        retained.as_ref(),
+    );
     let _ = fs::remove_dir_all(&temporary_directory);
-    result
+    if result.state == "error" {
+        retained_or_error(retained, result)
+    } else {
+        result
+    }
 }
 
-fn check_source(source: &str, current_version: &str, directory: &Path) -> UpdateCheckStatus {
+fn retained_or_error(
+    retained: Option<UpdateCheckStatus>,
+    failure: UpdateCheckStatus,
+) -> UpdateCheckStatus {
+    retained.map_or(failure, |mut status| {
+        status.message.push_str(
+            " A newer release could not be checked; the retained verified package remains available.",
+        );
+        status
+    })
+}
+
+fn hold_pending(status: &UpdateCheckStatus, refresh_pending: bool) -> bool {
+    status.state == "restart-needed" || (status.state == "handoff" && !refresh_pending)
+}
+
+fn retain_if_latest_not_newer(
+    retained: Option<&UpdateCheckStatus>,
+    release_version: &str,
+) -> Option<UpdateCheckStatus> {
+    retained
+        .filter(|status| {
+            status
+                .latest_version
+                .as_deref()
+                .is_some_and(|cached| !is_newer_version(release_version, cached))
+        })
+        .cloned()
+}
+
+fn check_source(
+    source: &str,
+    current_version: &str,
+    directory: &Path,
+    retained: Option<&UpdateCheckStatus>,
+) -> UpdateCheckStatus {
+    let allow_insecure = env::var(ALLOW_INSECURE_ENV).ok().as_deref() == Some("1");
+    check_source_with(
+        source,
+        current_version,
+        directory,
+        retained,
+        PUBLIC_KEY_PEM,
+        allow_insecure,
+        persist_verified_package,
+    )
+}
+
+fn check_source_with<Persist>(
+    source: &str,
+    current_version: &str,
+    directory: &Path,
+    retained: Option<&UpdateCheckStatus>,
+    public_key_pem: &str,
+    allow_insecure: bool,
+    persist: Persist,
+) -> UpdateCheckStatus
+where
+    Persist: FnOnce(&Path, PackageTarget, &str, &str) -> Result<(), String>,
+{
     let version_path = directory.join("VERSION");
     let manifest_path = directory.join("SHA256SUMS");
     let signature_path = directory.join("SHA256SUMS.sig");
@@ -86,7 +175,7 @@ fn check_source(source: &str, current_version: &str, directory: &Path) -> Update
         ("SHA256SUMS", &manifest_path),
         ("SHA256SUMS.sig", &signature_path),
     ] {
-        if let Err(error) = download(&format!("{source}/{name}"), path) {
+        if let Err(error) = download(&format!("{source}/{name}"), path, allow_insecure) {
             return error_status(
                 current_version.to_owned(),
                 &format!("Could not download signed update metadata: {error}"),
@@ -102,26 +191,34 @@ fn check_source(source: &str, current_version: &str, directory: &Path) -> Update
             )
         }
     };
-    if let Err(error) = verify_signature(&manifest_path, &signature_path, directory) {
+    if let Err(error) =
+        verify_signature_with_key(&manifest_path, &signature_path, directory, public_key_pem)
+    {
         return error_status(
             current_version.to_owned(),
             &format!("The update manifest signature is invalid: {error}"),
         );
     }
-    let latest_version = match fs::read_to_string(&version_path) {
-        Ok(value) => value.trim().to_owned(),
+    let manifest_entries = match parse_manifest(&manifest) {
+        Ok(entries) => entries,
         Err(error) => {
             return error_status(
                 current_version.to_owned(),
-                &format!("Could not read release version: {error}"),
+                &format!("The update manifest is invalid: {error}"),
             )
         }
     };
-    if !valid_version(&latest_version) {
-        return error_status(
-            current_version.to_owned(),
-            "The signed release version is invalid.",
-        );
+    let latest_version = match verified_release_version(&version_path, &manifest_entries) {
+        Ok(version) => version,
+        Err(error) => {
+            return error_status(
+                current_version.to_owned(),
+                &format!("The signed release version is invalid: {error}"),
+            )
+        }
+    };
+    if let Some(status) = retain_if_latest_not_newer(retained, &latest_version) {
+        return status;
     }
     if !is_newer_version(&latest_version, current_version) {
         return UpdateCheckStatus {
@@ -142,15 +239,6 @@ fn check_source(source: &str, current_version: &str, directory: &Path) -> Update
             )
         }
     };
-    let manifest_entries = match parse_manifest(&manifest) {
-        Ok(entries) => entries,
-        Err(error) => {
-            return error_status(
-                current_version.to_owned(),
-                &format!("The update manifest is invalid: {error}"),
-            )
-        }
-    };
     let Some(expected_digest) = manifest_entries.get(package.asset_name) else {
         return error_status(
             current_version.to_owned(),
@@ -165,6 +253,7 @@ fn check_source(source: &str, current_version: &str, directory: &Path) -> Update
         &format!("{source}/{}", package.asset_name),
         &package_path,
         MAX_PACKAGE_BYTES,
+        allow_insecure,
     ) {
         return error_status(
             current_version.to_owned(),
@@ -177,9 +266,7 @@ fn check_source(source: &str, current_version: &str, directory: &Path) -> Update
             &format!("The downloaded update package failed checksum verification: {error}"),
         );
     }
-    if let Err(error) =
-        persist_verified_package(&package_path, package, &latest_version, expected_digest)
-    {
+    if let Err(error) = persist(&package_path, package, &latest_version, expected_digest) {
         return error_status(
             current_version.to_owned(),
             &format!("The verified update package could not be retained: {error}"),
@@ -196,57 +283,93 @@ fn check_source(source: &str, current_version: &str, directory: &Path) -> Update
 }
 
 pub fn install_update() -> UpdateInstallStatus {
+    let _operation = UPDATE_OPERATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let pending = match read_pending_update() {
         Ok(update) => update,
         Err(error) => return install_error(error),
     };
-    if !is_newer_version(&pending.version, env!("CARGO_PKG_VERSION")) {
-        return install_error("The retained update is not newer than this build.".into());
-    }
     let target = match package_target() {
         Ok(target) => target,
         Err(error) => {
             return install_error(format!("This system cannot install the update: {error}"))
         }
     };
+    let directory = match update_cache_directory() {
+        Ok(directory) => directory,
+        Err(error) => return install_error(error),
+    };
+    let installed_version = installed_package_version(&pending.kind);
+    let opener = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+        .iter()
+        .map(Path::new)
+        .find(|path| path.is_file());
+    install_verified_update(
+        &directory,
+        pending,
+        target,
+        env!("CARGO_PKG_VERSION"),
+        installed_version.as_deref(),
+        opener,
+        |opener, path| {
+            Command::new(opener)
+                .arg(path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+fn install_verified_update(
+    directory: &Path,
+    pending: PendingUpdate,
+    target: PackageTarget,
+    current_version: &str,
+    installed_version: Option<&str>,
+    opener: Option<&Path>,
+    launch: impl FnOnce(&Path, &Path) -> Result<(), String>,
+) -> UpdateInstallStatus {
+    if !is_newer_version(&pending.version, current_version) {
+        return install_error("The retained update is not newer than this build.".into());
+    }
     if pending.asset_name != target.asset_name || pending.kind != target.kind {
         return install_error("The downloaded package does not match this system.".into());
     }
-    let path = match update_cache_directory() {
-        Ok(directory) => directory.join(&pending.asset_name),
-        Err(error) => return install_error(error),
-    };
+    let path = pending_package_path(directory, &pending);
     if let Err(error) = verify_checksum(&path, &pending.digest) {
         return install_error(format!(
             "The retained update package failed verification: {error}"
         ));
     }
-    let opener = ["/usr/bin/xdg-open", "/bin/xdg-open"]
-        .iter()
-        .map(Path::new)
-        .find(|path| path.is_file());
+    if package_version_at_least(&pending, installed_version) {
+        return UpdateInstallStatus {
+            state: "restart-needed".into(),
+            message: "The new Redunar package is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.".into(),
+        };
+    }
     let Some(opener) = opener else {
         return install_error("The desktop package installer (xdg-open) is not installed.".into());
     };
-    if let Err(error) = Command::new(opener)
-        .arg(&path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        return install_error(format!("Could not open the package installer: {error}"));
+    if let Err(error) = write_pending_update_in_directory(
+        directory,
+        &PendingUpdate {
+            state: "handoff".into(),
+            ..pending.clone()
+        },
+    ) {
+        return install_error(format!("Could not record the installer handoff: {error}"));
     }
-    if let Err(error) = write_pending_update(&PendingUpdate {
-        state: "handoff".into(),
-        ..pending.clone()
-    }) {
-        return install_error(format!(
-            "Package installer opened, but update state could not be saved: {error}"
-        ));
+    if let Err(error) = launch(opener, &path) {
+        let _ = write_pending_update_in_directory(directory, &pending);
+        return install_error(format!("Could not open the package installer: {error}"));
     }
     UpdateInstallStatus {
         state: "handoff".into(),
-        message: "The verified update was handed to your system package installer. Finish the installation there, then restart Redunar.".into(),
+        message: "Redunar requested your system package installer. Finish installation there, then fully quit and reopen Redunar. If you cancel, you can reopen the installer from Settings.".into(),
     }
 }
 
@@ -325,25 +448,69 @@ fn persist_verified_package(
     digest: &str,
 ) -> Result<(), String> {
     let directory = update_cache_directory()?;
-    let temporary = directory.join(format!(".{}.download", package.asset_name));
-    let destination = directory.join(package.asset_name);
+    persist_verified_package_in_directory(&directory, source, package, version, digest)
+}
+
+fn persist_verified_package_in_directory(
+    directory: &Path,
+    source: &Path,
+    package: PackageTarget,
+    version: &str,
+    digest: &str,
+) -> Result<(), String> {
+    let previous = read_pending_update_in_directory(directory)
+        .ok()
+        .map(|pending| pending_package_path(directory, &pending));
+    let destination = versioned_package_path(directory, package.asset_name, digest);
+    let temporary = directory.join(format!(".{}.{}.download", package.asset_name, digest));
+    let destination_preexisted = destination.exists();
     fs::copy(source, &temporary).map_err(|error| error.to_string())?;
     if let Err(error) = verify_checksum(&temporary, digest) {
         let _ = fs::remove_file(&temporary);
         return Err(error);
     }
-    fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
-    write_pending_update(&PendingUpdate {
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    let update = PendingUpdate {
         state: "downloaded".into(),
         version: version.to_owned(),
         kind: package.kind.to_owned(),
         asset_name: package.asset_name.to_owned(),
         digest: digest.to_owned(),
-    })
+    };
+    if let Err(error) = write_pending_update_in_directory(directory, &update) {
+        if !destination_preexisted {
+            let _ = fs::remove_file(&destination);
+        }
+        return Err(error);
+    }
+    if let Some(previous) = previous.filter(|path| path != &destination) {
+        let _ = fs::remove_file(previous);
+    }
+    Ok(())
 }
 
-fn write_pending_update(update: &PendingUpdate) -> Result<(), String> {
-    let directory = update_cache_directory()?;
+fn versioned_package_path(directory: &Path, asset_name: &str, digest: &str) -> PathBuf {
+    directory.join(format!("{asset_name}.{digest}"))
+}
+
+// Old pending metadata pointed at the unsuffixed asset. Preserve that reader
+// until the pending update is replaced or consumed.
+fn pending_package_path(directory: &Path, pending: &PendingUpdate) -> PathBuf {
+    let versioned = versioned_package_path(directory, &pending.asset_name, &pending.digest);
+    if versioned.is_file() {
+        versioned
+    } else {
+        directory.join(&pending.asset_name)
+    }
+}
+
+fn write_pending_update_in_directory(
+    directory: &Path,
+    update: &PendingUpdate,
+) -> Result<(), String> {
     let metadata = format!(
         "state={}\nversion={}\nkind={}\nasset_name={}\ndigest={}\n",
         update.state, update.version, update.kind, update.asset_name, update.digest
@@ -356,6 +523,10 @@ fn write_pending_update(update: &PendingUpdate) -> Result<(), String> {
 
 fn read_pending_update() -> Result<PendingUpdate, String> {
     let directory = update_cache_directory()?;
+    read_pending_update_in_directory(&directory)
+}
+
+fn read_pending_update_in_directory(directory: &Path) -> Result<PendingUpdate, String> {
     let metadata = fs::read_to_string(directory.join(PENDING_UPDATE_FILE))
         .map_err(|error| format!("no verified update is ready: {error}"))?;
     parse_pending_update(&metadata)
@@ -413,7 +584,7 @@ fn parse_pending_update(metadata: &str) -> Result<PendingUpdate, String> {
 fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> {
     let pending = read_pending_update().ok()?;
     let directory = update_cache_directory().ok()?;
-    let package_path = directory.join(&pending.asset_name);
+    let package_path = pending_package_path(&directory, &pending);
     if !is_newer_version(&pending.version, current_version) {
         let _ = fs::remove_file(package_path);
         let _ = fs::remove_file(directory.join(PENDING_UPDATE_FILE));
@@ -431,9 +602,15 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
         let _ = fs::remove_file(directory.join(PENDING_UPDATE_FILE));
         return None;
     }
-    let message = if pending.state == "handoff" {
+    let installed = pending.state == "handoff" && installed_version_at_least(&pending);
+    let message = if installed {
         format!(
-            "Redunar {} is waiting for the desktop package installer to finish.",
+            "Redunar {} is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.",
+            pending.version
+        )
+    } else if pending.state == "handoff" {
+        format!(
+            "Redunar {} is not confirmed installed. Reopen the desktop installer if it was cancelled, or check again after it finishes.",
             pending.version
         )
     } else {
@@ -441,7 +618,14 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
     };
     Some(UpdateCheckStatus {
         current_version: current_version.to_owned(),
-        state: "available".into(),
+        state: if installed {
+            "restart-needed"
+        } else if pending.state == "handoff" {
+            "handoff"
+        } else {
+            "available"
+        }
+        .into(),
         message,
         latest_version: Some(pending.version),
         package_kind: Some(pending.kind),
@@ -449,11 +633,54 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
     })
 }
 
-fn download(url: &str, destination: &Path) -> Result<(), String> {
-    download_with_limit(url, destination, MAX_METADATA_BYTES)
+fn installed_version_at_least(pending: &PendingUpdate) -> bool {
+    package_version_at_least(pending, installed_package_version(&pending.kind).as_deref())
 }
 
-fn download_with_limit(url: &str, destination: &Path, maximum_bytes: u64) -> Result<(), String> {
+fn package_version_at_least(pending: &PendingUpdate, installed: Option<&str>) -> bool {
+    installed.is_some_and(|version| !is_newer_version(&pending.version, version))
+}
+
+/// Read only the system package database. A desktop installer handoff is not
+/// proof of success, and an already-installed update must not be opened again.
+fn installed_package_version(kind: &str) -> Option<String> {
+    let (program, arguments): (&str, &[&str]) = match kind {
+        "rpm" => ("rpm", &["-q", "--qf", "%{VERSION}", "redunar-app"]),
+        "deb" => ("dpkg-query", &["-W", "-f=${Version}", "redunar-app"]),
+        "arch" => ("pacman", &["-Q", "redunar-app"]),
+        _ => return None,
+    };
+    let executable = [format!("/usr/bin/{program}"), format!("/bin/{program}")]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())?;
+    let output = Command::new(executable).args(arguments).output().ok()?;
+    if !output.status.success() || output.stdout.len() > 128 {
+        return None;
+    }
+    parse_installed_version(kind, std::str::from_utf8(&output.stdout).ok()?)
+}
+
+fn parse_installed_version(kind: &str, output: &str) -> Option<String> {
+    let value = output.trim();
+    let value = match kind {
+        "rpm" => value,
+        "deb" => value.rsplit(':').next()?.split('-').next()?,
+        "arch" => value.strip_prefix("redunar-app ")?.split('-').next()?,
+        _ => return None,
+    };
+    valid_version(value).then(|| value.to_owned())
+}
+
+fn download(url: &str, destination: &Path, allow_insecure: bool) -> Result<(), String> {
+    download_with_limit(url, destination, MAX_METADATA_BYTES, allow_insecure)
+}
+
+fn download_with_limit(
+    url: &str,
+    destination: &Path,
+    maximum_bytes: u64,
+    allow_insecure: bool,
+) -> Result<(), String> {
     let curl = ["/usr/bin/curl", "/bin/curl"]
         .iter()
         .map(Path::new)
@@ -475,7 +702,7 @@ fn download_with_limit(url: &str, destination: &Path, maximum_bytes: u64) -> Res
         "--output",
         output,
     ]);
-    if env::var(ALLOW_INSECURE_ENV).ok().as_deref() != Some("1") {
+    if !allow_insecure {
         command.args(["--proto", "=https", "--tlsv1.2"]);
     }
     let status = command
@@ -608,10 +835,31 @@ fn verify_checksum(path: &Path, expected: &str) -> Result<(), String> {
     }
 }
 
-fn verify_signature(manifest: &Path, signature: &Path, directory: &Path) -> Result<(), String> {
+fn verified_release_version(
+    path: &Path,
+    manifest_entries: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let digest = manifest_entries
+        .get("VERSION")
+        .ok_or("the signed manifest has no VERSION checksum")?;
+    verify_checksum(path, digest)?;
+    let version = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let version = version.trim();
+    if !valid_version(version) {
+        return Err("VERSION is not a supported version number".into());
+    }
+    Ok(version.to_owned())
+}
+
+fn verify_signature_with_key(
+    manifest: &Path,
+    signature: &Path,
+    directory: &Path,
+    public_key_pem: &str,
+) -> Result<(), String> {
     let public_key = directory.join("release-public-key.pem");
     let mut file = File::create(&public_key).map_err(|error| error.to_string())?;
-    file.write_all(PUBLIC_KEY_PEM.as_bytes())
+    file.write_all(public_key_pem.as_bytes())
         .map_err(|error| error.to_string())?;
     let openssl = ["/usr/bin/openssl", "/bin/openssl"]
         .iter()
@@ -693,10 +941,16 @@ fn is_newer_version(candidate: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_newer_version, parse_manifest, parse_pending_update, select_package, valid_version,
-        verify_checksum, PackageTarget,
+        check_source_with, hold_pending, install_verified_update, is_newer_version, package_target,
+        parse_installed_version, parse_manifest, parse_pending_update, pending_package_path,
+        persist_verified_package_in_directory, read_pending_update_in_directory,
+        retain_if_latest_not_newer, retained_or_error, select_package, valid_version,
+        verified_release_version, verify_checksum, verify_signature_with_key,
+        write_pending_update_in_directory, PackageTarget, PendingUpdate, UpdateCheckStatus,
     };
     use sha2::{Digest, Sha256};
+    use std::path::Path;
+    use std::process::{Command, Stdio};
 
     #[test]
     fn manifest_parser_accepts_sha256sum_output_and_rejects_paths() {
@@ -721,6 +975,45 @@ mod tests {
         assert!(!valid_version("1.2"));
         assert!(is_newer_version("0.2.0", "0.1.9"));
         assert!(!is_newer_version("0.1.0", "0.1.0"));
+    }
+
+    #[test]
+    fn retained_update_refreshes_only_for_a_newer_signed_release() {
+        let cached = UpdateCheckStatus {
+            current_version: "0.1.3".into(),
+            state: "available".into(),
+            message: "A verified package is cached.".into(),
+            latest_version: Some("0.1.4".into()),
+            package_kind: Some("rpm".into()),
+            asset_name: Some("redunar-app-linux-x86_64.rpm".into()),
+        };
+        assert_eq!(
+            retain_if_latest_not_newer(Some(&cached), "0.1.4"),
+            Some(cached.clone())
+        );
+        assert_eq!(
+            retain_if_latest_not_newer(Some(&cached), "0.1.3"),
+            Some(cached.clone())
+        );
+        assert_eq!(retain_if_latest_not_newer(Some(&cached), "0.1.5"), None);
+        let offline = retained_or_error(
+            Some(cached.clone()),
+            super::error_status("0.1.3", "The source is offline."),
+        );
+        assert_eq!(offline.state, "available");
+        assert!(offline.message.contains("could not be checked"));
+        let handoff = UpdateCheckStatus {
+            state: "handoff".into(),
+            ..cached.clone()
+        };
+        assert!(hold_pending(&handoff, false));
+        assert!(!hold_pending(&handoff, true));
+        let installed = UpdateCheckStatus {
+            state: "restart-needed".into(),
+            ..cached
+        };
+        assert!(hold_pending(&installed, false));
+        assert!(hold_pending(&installed, true));
     }
 
     #[test]
@@ -775,6 +1068,47 @@ mod tests {
     }
 
     #[test]
+    fn release_version_must_match_the_signed_manifest() {
+        let path = std::env::temp_dir().join(format!(
+            "redunar-update-version-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let contents = b"0.2.0\n";
+        std::fs::write(&path, contents).expect("version fixture");
+        let mut digest = Sha256::new();
+        digest.update(contents);
+        let entries = parse_manifest(&format!("{:x}  VERSION\n", digest.finalize()))
+            .expect("signed version entry");
+        assert_eq!(
+            verified_release_version(&path, &entries),
+            Ok("0.2.0".into())
+        );
+        std::fs::write(&path, b"0.3.0\n").expect("tampered version");
+        assert!(verified_release_version(&path, &entries).is_err());
+        assert!(verified_release_version(&path, &Default::default()).is_err());
+        std::fs::remove_file(path).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn installed_package_versions_require_the_expected_package_and_format() {
+        assert_eq!(
+            parse_installed_version("rpm", "0.2.0"),
+            Some("0.2.0".into())
+        );
+        assert_eq!(
+            parse_installed_version("deb", "1:0.2.0-1"),
+            Some("0.2.0".into())
+        );
+        assert_eq!(
+            parse_installed_version("arch", "redunar-app 0.2.0-1"),
+            Some("0.2.0".into())
+        );
+        assert!(parse_installed_version("arch", "another-app 0.2.0-1").is_none());
+        assert!(parse_installed_version("rpm", "not-a-version").is_none());
+    }
+
+    #[test]
     fn retained_update_metadata_is_strict_and_safe() {
         let metadata = format!(
             "state=downloaded\nversion=0.2.0\nkind=deb\nasset_name=redunar-app-linux-amd64.deb\ndigest={}\n",
@@ -787,5 +1121,367 @@ mod tests {
         )
         .is_err());
         assert!(parse_pending_update(&metadata.replace("kind=deb", "kind=portable")).is_err());
+    }
+
+    #[test]
+    fn failed_cache_commit_keeps_the_previous_verified_package() {
+        let directory = std::env::temp_dir().join(format!(
+            "redunar-update-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture time")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("cache fixture");
+        let target = PackageTarget {
+            kind: "rpm",
+            asset_name: "redunar-app-linux-x86_64.rpm",
+        };
+        let old_bytes = b"old verified package";
+        let old_digest = format!("{:x}", Sha256::digest(old_bytes));
+        let old_path = directory.join(target.asset_name);
+        std::fs::write(&old_path, old_bytes).expect("legacy cached package");
+        let old_pending = PendingUpdate {
+            state: "handoff".into(),
+            version: "0.1.4".into(),
+            kind: "rpm".into(),
+            asset_name: target.asset_name.into(),
+            digest: old_digest.clone(),
+        };
+        write_pending_update_in_directory(&directory, &old_pending).expect("old metadata");
+
+        let new_bytes = b"new verified package";
+        let new_digest = format!("{:x}", Sha256::digest(new_bytes));
+        let source = directory.join("source.rpm");
+        std::fs::write(&source, new_bytes).expect("new package fixture");
+        std::fs::create_dir(directory.join(".pending-update.txt.tmp"))
+            .expect("block metadata commit");
+        assert!(persist_verified_package_in_directory(
+            &directory,
+            &source,
+            target,
+            "0.1.5",
+            &new_digest
+        )
+        .is_err());
+        assert_eq!(
+            read_pending_update_in_directory(&directory).expect("retained metadata"),
+            old_pending
+        );
+        assert_eq!(
+            std::fs::read(pending_package_path(&directory, &old_pending))
+                .expect("retained package"),
+            old_bytes
+        );
+        std::fs::remove_dir(directory.join(".pending-update.txt.tmp"))
+            .expect("unblock metadata commit");
+
+        persist_verified_package_in_directory(&directory, &source, target, "0.1.5", &new_digest)
+            .expect("commit new package");
+        let current = read_pending_update_in_directory(&directory).expect("new metadata");
+        assert_eq!(current.version, "0.1.5");
+        assert_eq!(
+            std::fs::read(pending_package_path(&directory, &current)).expect("new package"),
+            new_bytes
+        );
+        assert!(!old_path.exists());
+        std::fs::remove_dir_all(directory).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn native_manifest_verifier_rejects_tampered_signed_metadata() {
+        let directory = std::env::temp_dir().join(format!(
+            "redunar-signed-update-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture time")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("signed fixture directory");
+        let private_key = directory.join("private.pem");
+        let public_key = directory.join("public.pem");
+        let manifest = directory.join("SHA256SUMS");
+        let signature = directory.join("SHA256SUMS.sig");
+        std::fs::write(&manifest, format!("{}  VERSION\n", "a".repeat(64)))
+            .expect("signed manifest fixture");
+        let run = |arguments: &[&str]| {
+            assert!(Command::new("openssl")
+                .args(arguments)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("OpenSSL fixture command")
+                .success());
+        };
+        run(&[
+            "genpkey",
+            "-algorithm",
+            "RSA",
+            "-pkeyopt",
+            "rsa_keygen_bits:2048",
+            "-out",
+            private_key.to_str().expect("private key path"),
+        ]);
+        run(&[
+            "pkey",
+            "-in",
+            private_key.to_str().expect("private key path"),
+            "-pubout",
+            "-out",
+            public_key.to_str().expect("public key path"),
+        ]);
+        run(&[
+            "dgst",
+            "-sha256",
+            "-sign",
+            private_key.to_str().expect("private key path"),
+            "-out",
+            signature.to_str().expect("signature path"),
+            manifest.to_str().expect("manifest path"),
+        ]);
+        let public_pem = std::fs::read_to_string(&public_key).expect("fixture public key");
+        assert!(verify_signature_with_key(&manifest, &signature, &directory, &public_pem).is_ok());
+        std::fs::write(&manifest, b"tampered manifest\n").expect("tamper manifest");
+        assert!(verify_signature_with_key(&manifest, &signature, &directory, &public_pem).is_err());
+        std::fs::remove_dir_all(directory).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn native_signed_feed_downloads_and_refreshes_only_verified_packages() {
+        let root = std::env::temp_dir().join(format!(
+            "redunar-signed-feed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture time")
+                .as_nanos()
+        ));
+        let feed = root.join("feed");
+        let work = root.join("work");
+        let cache = root.join("cache");
+        for directory in [&feed, &work, &cache] {
+            std::fs::create_dir_all(directory).expect("fixture directory");
+        }
+        let private_key = root.join("private.pem");
+        let public_key = root.join("public.pem");
+        let run = |arguments: &[&str]| {
+            assert!(Command::new("openssl")
+                .args(arguments)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("OpenSSL fixture command")
+                .success());
+        };
+        run(&[
+            "genpkey",
+            "-algorithm",
+            "RSA",
+            "-pkeyopt",
+            "rsa_keygen_bits:2048",
+            "-out",
+            private_key.to_str().expect("private key path"),
+        ]);
+        run(&[
+            "pkey",
+            "-in",
+            private_key.to_str().expect("private key path"),
+            "-pubout",
+            "-out",
+            public_key.to_str().expect("public key path"),
+        ]);
+        let public_pem = std::fs::read_to_string(public_key).expect("fixture public key");
+        let target = package_target().expect("supported updater test platform");
+        let source = format!("file://{}", feed.display());
+        let write_release = |version: &str, bytes: &[u8]| {
+            let version_bytes = format!("{version}\n");
+            std::fs::write(feed.join("VERSION"), &version_bytes).expect("release version");
+            std::fs::write(feed.join(target.asset_name), bytes).expect("release asset");
+            let manifest = format!(
+                "{:x}  {}\n{:x}  VERSION\n",
+                Sha256::digest(bytes),
+                target.asset_name,
+                Sha256::digest(version_bytes.as_bytes())
+            );
+            std::fs::write(feed.join("SHA256SUMS"), manifest).expect("release manifest");
+            run(&[
+                "dgst",
+                "-sha256",
+                "-sign",
+                private_key.to_str().expect("private key path"),
+                "-out",
+                feed.join("SHA256SUMS.sig")
+                    .to_str()
+                    .expect("signature path"),
+                feed.join("SHA256SUMS").to_str().expect("manifest path"),
+            ]);
+        };
+        let check = |retained: Option<&UpdateCheckStatus>| {
+            check_source_with(
+                &source,
+                "0.1.3",
+                &work,
+                retained,
+                &public_pem,
+                true,
+                |path, package, version, digest| {
+                    persist_verified_package_in_directory(&cache, path, package, version, digest)
+                },
+            )
+        };
+
+        write_release("0.1.4", b"first signed package");
+        let first = check(None);
+        assert_eq!(first.state, "available");
+        assert_eq!(first.latest_version.as_deref(), Some("0.1.4"));
+        let first_pending = read_pending_update_in_directory(&cache).expect("first package");
+        let first_path = pending_package_path(&cache, &first_pending);
+        assert_eq!(
+            std::fs::read(&first_path).expect("cached first package"),
+            b"first signed package"
+        );
+
+        std::fs::write(feed.join("VERSION"), b"0.1.9\n").expect("tamper version");
+        let bad_version = check(Some(&first));
+        assert_eq!(bad_version.state, "error");
+        assert_eq!(
+            retained_or_error(Some(first.clone()), bad_version).state,
+            "available"
+        );
+        assert!(first_path.exists());
+
+        write_release("0.1.5", b"newer signed package");
+        let second = check(Some(&first));
+        assert_eq!(second.state, "available");
+        assert_eq!(second.latest_version.as_deref(), Some("0.1.5"));
+        let second_pending = read_pending_update_in_directory(&cache).expect("newer package");
+        assert_eq!(
+            std::fs::read(pending_package_path(&cache, &second_pending))
+                .expect("cached newer package"),
+            b"newer signed package"
+        );
+        assert!(!first_path.exists());
+
+        write_release("0.1.6", b"expected next package");
+        std::fs::write(feed.join(target.asset_name), b"tampered next package")
+            .expect("tamper package");
+        assert_eq!(check(Some(&second)).state, "error");
+        assert_eq!(
+            read_pending_update_in_directory(&cache).expect("retained newer package"),
+            second_pending
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn installer_handoff_can_retry_and_reports_restart_only_after_package_install() {
+        let directory = std::env::temp_dir().join(format!(
+            "redunar-installer-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture time")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("installer fixture directory");
+        let target = PackageTarget {
+            kind: "rpm",
+            asset_name: "redunar-app-linux-x86_64.rpm",
+        };
+        let bytes = b"verified update package";
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        let pending = PendingUpdate {
+            state: "downloaded".into(),
+            version: "0.1.4".into(),
+            kind: target.kind.into(),
+            asset_name: target.asset_name.into(),
+            digest,
+        };
+        std::fs::write(directory.join(target.asset_name), bytes).expect("legacy cached package");
+        write_pending_update_in_directory(&directory, &pending).expect("pending metadata");
+        let opener = Path::new("/usr/bin/xdg-open");
+        let mut launches = 0;
+        for _ in 0..2 {
+            let current = read_pending_update_in_directory(&directory).expect("pending update");
+            let status = install_verified_update(
+                &directory,
+                current,
+                target,
+                "0.1.3",
+                Some("0.1.3"),
+                Some(opener),
+                |_, path| {
+                    assert_eq!(path, directory.join(target.asset_name));
+                    launches += 1;
+                    Ok(())
+                },
+            );
+            assert_eq!(status.state, "handoff");
+            assert_eq!(
+                read_pending_update_in_directory(&directory)
+                    .expect("handoff metadata")
+                    .state,
+                "handoff"
+            );
+        }
+        assert_eq!(launches, 2);
+        let versioned = directory.join(format!("{}.{}", target.asset_name, pending.digest));
+        std::fs::rename(directory.join(target.asset_name), &versioned)
+            .expect("move legacy cache to digest-named cache");
+        let versioned_handoff = install_verified_update(
+            &directory,
+            pending.clone(),
+            target,
+            "0.1.3",
+            Some("0.1.3"),
+            Some(opener),
+            |_, path| {
+                assert_eq!(path, versioned);
+                launches += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(versioned_handoff.state, "handoff");
+        assert_eq!(launches, 3);
+        let installed = install_verified_update(
+            &directory,
+            pending.clone(),
+            target,
+            "0.1.3",
+            Some("0.1.4"),
+            Some(opener),
+            |_, _| panic!("installed update must not reopen the package installer"),
+        );
+        assert_eq!(installed.state, "restart-needed");
+
+        write_pending_update_in_directory(&directory, &pending).expect("reset metadata");
+        let failed = install_verified_update(
+            &directory,
+            pending.clone(),
+            target,
+            "0.1.3",
+            Some("0.1.3"),
+            Some(opener),
+            |_, _| Err("desktop opener failed".into()),
+        );
+        assert_eq!(failed.state, "error");
+        assert_eq!(
+            read_pending_update_in_directory(&directory).expect("restored metadata"),
+            pending
+        );
+        std::fs::write(&versioned, b"tampered package").expect("tamper cached package");
+        let tampered = install_verified_update(
+            &directory,
+            pending,
+            target,
+            "0.1.3",
+            Some("0.1.4"),
+            Some(opener),
+            |_, _| panic!("tampered package must not open the installer"),
+        );
+        assert_eq!(tampered.state, "error");
+        std::fs::remove_dir_all(directory).expect("fixture cleanup");
     }
 }

@@ -1,6 +1,6 @@
 # Tauri release qualification
 
-Reviewed September 20, 2026. The active local app is implemented, but release
+Reviewed September 24, 2026. The active local app is implemented, but release
 qualification is still open. Read `packaging/redunar-app.spec` for the current
 package version; do not infer the installed or running version from this file.
 
@@ -16,6 +16,41 @@ Current design/calculation contracts are [DESIGN](../../DESIGN.md) and
 [History calculations](HISTORY-CALCULATIONS.md).
 
 ## Current automated evidence
+
+On September 23, 2026, the full offline Tauri release gate passed on an
+isolated snapshot of the current working tree. The Debian 12 build stayed
+within the glibc 2.36 baseline. The Tauri binary and native capture sidecars,
+Rust tests, strict Clippy, frontend tests, desktop metadata, package staging,
+and signed asset checks passed. The Fedora 44 updater RPM flow and the
+isolated real-binary 0.1.3→0.1.4→0.1.3 upgrade/rollback test also passed.
+
+The review bundle is under
+[`local-builds/release-candidate-local-test-signature-2026-09-23`](../../../local-builds/release-candidate-local-test-signature-2026-09-23/STATUS.txt).
+Its Fedora RPM SHA-256 is
+`705e962cecf3c62ec31b6cafe11427e89e3ace627c6f8cf12794eb486398d247`.
+Its `SHA256SUMS.sig` uses the bundle's test-only public key and is not a
+production update signature. The candidate RPM's runtime files match the
+currently installed payload. A fresh installed process passed all three
+isolated 2× Xvfb window-size cases. No installation was performed during this
+revalidation. `rpm -V redunar-app` reported only user/group ownership
+differences (`nobody:nobody` on this host); candidate payload hashes and modes
+matched.
+
+On September 24, the production WebKit workspace fixture passed 75 checks and
+the Replay fixture passed its scrolling, focus, media-readiness, decoded-frame,
+and trim/export checks in isolated Xvfb. Visual inspection covered the
+workspace and Replay fixture screenshots. This is synthetic UI evidence, not
+owner acceptance of a real game or installed release.
+
+The owner-reported Stardew Valley audio failure was resolved on September 24,
+2026 with build reference redunar-app-0.1.3-9.local.fc44: Replay's
+default-output recorder now prefers the native PipeWire route instead of the
+Pulse monitor on PipeWire hosts, and the owner validated music, effects,
+metrics, Replay, and clip audio together in one Redunar launch. See
+local-builds/pipewire-preferred-audio-capture-2026-09-24/STATUS.txt and
+[REAL-GAME-ACCEPTANCE](REAL-GAME-ACCEPTANCE.md) for the isolation chain and
+[OPENGL-COMPLETION](../../OPENGL-COMPLETION.md) for the remaining
+owner-controlled OpenGL acceptance gates.
 
 On September 20, 2026, the full `tools/check-tauri-release.sh` gate passed for
 the v0.1.3 source. It built the pinned glibc 2.36 compatibility artifacts,
@@ -64,18 +99,23 @@ The deferred checks below are therefore follow-up work, not publication gates.
 
 ## Open release gates
 
-- [x] Publish the signed `VERSION` metadata consumed by the in-app updater and
-      clear ended sessions from the live Overview after startup while retaining
-      History. The full in-app updater qualification remains open for installer
-      result handling, user-data preservation, offline/failure/restart states,
-      and keeping package privileges outside the webview. Signed metadata
-      verification, supported-package selection, bounded download, and checksum
-      verification, private cache persistence, and native installer handoff are
-      implemented. Release builds now embed the HTTPS GitHub release channel;
-      development builds remain source-pending unless given an isolated test
-      feed. Remaining work is installer result handling, user-data preservation,
-      offline/failure/restart states, and keeping package privileges outside the
-      webview.
+- [x] Generate `VERSION` and a signed checksum manifest in the isolated release
+      gate, and clear ended sessions from live Overview while retaining History.
+      The native updater verifies signed metadata and package bytes, retains a
+      bounded private-cache copy, and requests a desktop installer through a
+      fixed native handoff. A local signed-feed test covers download, refresh,
+      and tamper rejection with a temporary key. Release builds embed the HTTPS
+      channel; development builds remain source-pending without a test feed.
+- [deferred] Complete a production-signed in-app download and desktop installer run on
+      the Fedora target. Verify cancellation/retry, offline and failure states,
+      restart detection, user-data preservation, and package privileges staying
+      outside the webview. The local signed-feed fixture, isolated RPM transactions,
+      and native installer-state tests do not establish this GUI end-to-end gate.
+- [x] Resolve the reported Stardew Valley no-sound launch through Redunar's
+      native Steam wrapper. On September 24, the owner confirmed that build
+      0.1.3-9.local.fc44 restored music, effects, metrics, Replay, and clip
+      audio together. The recorder now prefers native PipeWire capture and
+      retains the Pulse monitor fallback.
 - [x] Retain owner-approved output-monitor fallback; document mixed audio honestly.
 - [x] Add FFmpeg/FFprobe file and complete-codec capability requirements without
       pinning or replacing a compatible multimedia provider.
@@ -83,7 +123,19 @@ The deferred checks below are therefore follow-up work, not publication gates.
       additional release environments. The initial release must describe the
       output-monitor fallback honestly and make no game-only audio claim.
 - [x] Pass the relevant automated/native/package gate on the final source.
-- [x] Verify installed binary/sidecars match and test a freshly opened process.
+- [x] Verify installed binary/sidecars match the current release candidate and
+      test a freshly opened process. On September 23, the latest Fedora RPM
+      matched every packaged runtime component. Three isolated fresh processes
+      loaded `/usr/bin/redunar-tauri` and restored the expected window size at
+      2× scale. On the preceding candidate, fresh process PID 598952 resolved to
+      the installed executable and owned the Replay socket.
+      Earlier apparent first-launch conflicts came from an older process
+      retained across same-version reinstall.
+      A deliberate secondary launch revealed a primary Tauri duplicate-webview
+      panic; the secondary now uses a read-only service and non-unique GTK mode.
+      A second installed process stayed open; the primary retained Replay
+      socket ownership without a crash. Updater commands now check primary
+      write access before changing the shared update cache.
 - [ ] Repeat unaffected visibility, optional-hotkey, tray, playback, and History
       checks with the final runtime. The changed Replay menu passed owner
       acceptance on the package built immediately before the v0.1.3 bump; the
@@ -93,9 +145,17 @@ The deferred checks below are therefore follow-up work, not publication gates.
 - [deferred] Validate another Linux host/distribution's package and embedded
       WebKit playback, seeking, export, and desktop integration.
 - [x] Build release artifacts in the Debian 12/glibc 2.36 environment and sign a
-      manifest covering every package asset.
-- [ ] Validate installation, upgrade, uninstall, and runtime behavior on the
-      one Fedora 44 environment claimed for the initial release.
+      manifest covering every package asset with a temporary local test key.
+      Production-key signing and publication remain separate owner-controlled
+      steps.
+- [x] Validate installation, upgrade, uninstall, and runtime behavior on the
+      one Fedora 44 environment claimed for the initial release. On September
+      23, the host upgraded the actual 0.1.3 executable to an isolated 0.1.4
+      build, restarted into it, rolled back, uninstalled, and reinstalled the
+      earlier candidate. The Redunar user-state file count and byte total stayed
+      unchanged, and the final payload and fresh process matched the candidate.
+      The separate in-app signed-download and desktop-installer handoff remain
+      open under the updater gate above.
 - [deferred] Record representative runtime overhead and long-session evidence
       against the performance budgets. Keep the existing synthetic and bounded
       failure/resize checks, but do not claim a completed performance study.

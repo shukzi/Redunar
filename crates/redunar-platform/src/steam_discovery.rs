@@ -19,7 +19,9 @@ const MAX_DISCOVERED_GAMES: usize = 512;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_POSTER_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_POSTER_VARIANTS: usize = 64;
-const POSTER_NAMES: &[&str] = &["library_600x900.jpg", "library_600x900.png"];
+const MAX_ARTWORK_FILES: usize = 4096;
+const MAX_IMAGE_HEADER_BYTES: u64 = 128 * 1024;
+const PREFERRED_POSTER_NAMES: &[&str] = &["library_600x900.jpg", "library_600x900.png"];
 const FLATPAK_STEAM_APP: &str = "com.valvesoftware.Steam";
 const STEAM_STATE_FULLY_INSTALLED: u64 = 1 << 2;
 
@@ -175,8 +177,9 @@ impl SteamGameDiscovery {
     /// Locate optional artwork in Steam's local cache, without discovery or network access.
     #[must_use]
     pub fn local_poster(&self, app_id: u32) -> Option<PathBuf> {
-        self.cached_poster(app_id, false)
-            .or_else(|| self.cached_poster(app_id, true))
+        let mut roots = self.artwork_roots(false);
+        roots.extend(self.artwork_roots(true));
+        cached_poster_in_roots(&roots, app_id)
     }
 
     /// Prefer wide hero art, then wide library/store headers. Portrait art is
@@ -199,11 +202,17 @@ impl SteamGameDiscovery {
     }
 
     fn cached_poster(&self, app_id: u32, is_flatpak: bool) -> Option<PathBuf> {
-        self.cached_artwork(app_id, is_flatpak, POSTER_NAMES)
+        cached_poster_in_roots(&self.artwork_roots(is_flatpak), app_id)
     }
 
     fn cached_artwork(&self, app_id: u32, is_flatpak: bool, names: &[&str]) -> Option<PathBuf> {
-        let roots = if is_flatpak {
+        self.artwork_roots(is_flatpak)
+            .into_iter()
+            .find_map(|root| cached_artwork_in_root(&root, app_id, names))
+    }
+
+    fn artwork_roots(&self, is_flatpak: bool) -> Vec<PathBuf> {
+        if is_flatpak {
             vec![
                 self.home_directory
                     .join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
@@ -213,10 +222,7 @@ impl SteamGameDiscovery {
                 self.home_directory.join(".local/share/Steam"),
                 self.home_directory.join(".steam/steam"),
             ]
-        };
-        roots
-            .into_iter()
-            .find_map(|root| cached_artwork_in_root(&root, app_id, names))
+        }
     }
 }
 
@@ -324,7 +330,18 @@ fn candidate_from_process_at(
 
 #[cfg(test)]
 fn cached_poster_in_root(root: &Path, app_id: u32) -> Option<PathBuf> {
-    cached_artwork_in_root(root, app_id, POSTER_NAMES)
+    cached_poster_in_roots(&[root.to_path_buf()], app_id)
+}
+
+fn cached_poster_in_roots(roots: &[PathBuf], app_id: u32) -> Option<PathBuf> {
+    roots
+        .iter()
+        .find_map(|root| cached_artwork_in_root(root, app_id, PREFERRED_POSTER_NAMES))
+        .or_else(|| {
+            roots
+                .iter()
+                .find_map(|root| adaptive_poster_in_root(root, app_id))
+        })
 }
 
 fn cached_artwork_in_root(root: &Path, app_id: u32, names: &[&str]) -> Option<PathBuf> {
@@ -378,6 +395,192 @@ fn safe_cached_image(cache: &Path, path: &Path) -> Option<PathBuf> {
     }
     let canonical = fs::canonicalize(path).ok()?;
     canonical.starts_with(cache).then_some(canonical)
+}
+
+fn adaptive_poster_in_root(root: &Path, app_id: u32) -> Option<PathBuf> {
+    let cache_path = root.join("appcache/librarycache");
+    if !fs::symlink_metadata(&cache_path).ok()?.file_type().is_dir() {
+        return None;
+    }
+    let cache = fs::canonicalize(cache_path).ok()?;
+    let mut candidates = Vec::new();
+    let flat_prefix = format!("{app_id}_");
+
+    collect_image_files(&cache, &cache, Some(&flat_prefix), &mut candidates);
+    let app_directory = cache.join(app_id.to_string());
+    if fs::symlink_metadata(&app_directory).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        collect_image_files(&cache, &app_directory, None, &mut candidates);
+        let mut variants = sorted_directory_entries(&app_directory);
+        variants.truncate(MAX_POSTER_VARIANTS);
+        for variant in variants {
+            if variant
+                .file_type()
+                .is_ok_and(|file_type| file_type.is_dir())
+            {
+                collect_image_files(&cache, &variant.path(), None, &mut candidates);
+            }
+            if candidates.len() >= MAX_ARTWORK_FILES {
+                break;
+            }
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+        .into_iter()
+        .filter_map(|path| poster_score(&path).map(|score| (score, path)))
+        .max_by(|(left_score, left_path), (right_score, right_path)| {
+            left_score
+                .cmp(right_score)
+                .then_with(|| right_path.cmp(left_path))
+        })
+        .map(|(_, path)| path)
+}
+
+fn collect_image_files(
+    cache: &Path,
+    directory: &Path,
+    required_prefix: Option<&str>,
+    candidates: &mut Vec<PathBuf>,
+) {
+    if candidates.len() >= MAX_ARTWORK_FILES {
+        return;
+    }
+    for entry in sorted_directory_entries(directory) {
+        if candidates.len() >= MAX_ARTWORK_FILES {
+            break;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if required_prefix.is_some_and(|prefix| !name.starts_with(prefix))
+            || !is_supported_image_name(name)
+        {
+            continue;
+        }
+        if let Some(path) = safe_cached_image(cache, &entry.path()) {
+            candidates.push(path);
+        }
+    }
+}
+
+fn sorted_directory_entries(directory: &Path) -> Vec<fs::DirEntry> {
+    let mut entries = fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .take(MAX_ARTWORK_FILES)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(fs::DirEntry::file_name);
+    entries
+}
+
+fn is_supported_image_name(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png"
+            )
+        })
+}
+
+fn poster_score(path: &Path) -> Option<(u8, u64, u64)> {
+    let (width, height) = raster_dimensions(path)?;
+    if width < 120 || height < 180 || height <= width || height > width.saturating_mul(5) / 2 {
+        return None;
+    }
+    let name = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let name_score = if name.contains("library_capsule") {
+        4
+    } else if ["poster", "portrait", "cover", "capsule", "grid"]
+        .iter()
+        .any(|hint| name.contains(hint))
+    {
+        3
+    } else {
+        1
+    };
+    let ratio_error = u64::from(width)
+        .saturating_mul(3)
+        .abs_diff(u64::from(height).saturating_mul(2));
+    let ratio_score = 1_000_000_u64.saturating_sub(
+        ratio_error.saturating_mul(1_000_000) / u64::from(height).saturating_mul(2),
+    );
+    let area = u64::from(width).saturating_mul(u64::from(height));
+    Some((name_score, ratio_score, area))
+}
+
+fn raster_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(MAX_IMAGE_HEADER_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    png_dimensions(&bytes).or_else(|| jpeg_dimensions(&bytes))
+}
+
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.get(12..16)? != b"IHDR"
+    {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(b"\xff\xd8") {
+        return None;
+    }
+    let mut offset = 2;
+    while offset + 4 <= bytes.len() {
+        while bytes.get(offset) == Some(&0xff) {
+            offset += 1;
+        }
+        let marker = *bytes.get(offset)?;
+        offset += 1;
+        if marker == 0xd9 || marker == 0xda {
+            return None;
+        }
+        if marker == 0x01 || (0xd0..=0xd8).contains(&marker) {
+            continue;
+        }
+        let length = usize::from(u16::from_be_bytes(
+            bytes.get(offset..offset + 2)?.try_into().ok()?,
+        ));
+        if length < 2 || offset + length > bytes.len() {
+            return None;
+        }
+        let is_start_of_frame = matches!(
+            marker,
+            0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf
+        );
+        if is_start_of_frame {
+            if length < 7 {
+                return None;
+            }
+            let height = u32::from(u16::from_be_bytes(
+                bytes.get(offset + 3..offset + 5)?.try_into().ok()?,
+            ));
+            let width = u32::from(u16::from_be_bytes(
+                bytes.get(offset + 5..offset + 7)?.try_into().ok()?,
+            ));
+            return (width > 0 && height > 0).then_some((width, height));
+        }
+        offset += length;
+    }
+    None
 }
 
 fn canonical_directory_if_present(path: &Path) -> Result<Option<PathBuf>, GameDiscoveryError> {
@@ -1055,6 +1258,62 @@ mod tests {
     }
 
     #[test]
+    fn preferred_poster_wins_over_adaptive_art_across_cache_locations() {
+        let fixture = Fixture::new();
+        let steam = fixture.home.join(".local/share/Steam");
+        let cache = steam.join("appcache/librarycache");
+        let capsule = cache.join("46/library_capsule.jpg");
+        let preferred = cache.join("46/custom/library_600x900.png");
+        fs::create_dir_all(capsule.parent().unwrap()).unwrap();
+        fs::create_dir_all(preferred.parent().unwrap()).unwrap();
+        fs::write(&capsule, jpeg_with_dimensions(300, 450)).unwrap();
+        fs::write(&preferred, b"existing preferred poster").unwrap();
+
+        assert_eq!(
+            cached_poster_in_root(&steam, 46),
+            Some(fs::canonicalize(preferred).unwrap())
+        );
+    }
+
+    #[test]
+    fn adaptive_poster_accepts_portrait_art_and_rejects_landscape_or_tiny_images() {
+        let fixture = Fixture::new();
+        let steam = fixture.home.join(".local/share/Steam");
+        let cache = steam.join("appcache/librarycache");
+        fs::create_dir_all(cache.join("47/hash")).unwrap();
+        let landscape = cache.join("47/library_header.jpg");
+        let tiny = cache.join("47/hash/portrait.png");
+        let capsule = cache.join("47/hash/library_capsule.jpg");
+        fs::write(&landscape, jpeg_with_dimensions(460, 215)).unwrap();
+        fs::write(&tiny, png_with_dimensions(60, 90)).unwrap();
+        fs::write(&capsule, jpeg_with_dimensions(300, 450)).unwrap();
+
+        assert_eq!(
+            cached_poster_in_root(&steam, 47),
+            Some(fs::canonicalize(&capsule).unwrap())
+        );
+        fs::remove_file(capsule).unwrap();
+        assert_eq!(cached_poster_in_root(&steam, 47), None);
+    }
+
+    #[test]
+    fn adaptive_poster_supports_unfamiliar_portrait_filenames_deterministically() {
+        let fixture = Fixture::new();
+        let steam = fixture.home.join(".local/share/Steam");
+        let cache = steam.join("appcache/librarycache/48");
+        fs::create_dir_all(&cache).unwrap();
+        let lower_resolution = cache.join("a-new-art-kind.png");
+        let higher_resolution = cache.join("z-new-art-kind.png");
+        fs::write(&lower_resolution, png_with_dimensions(300, 450)).unwrap();
+        fs::write(&higher_resolution, png_with_dimensions(600, 900)).unwrap();
+
+        assert_eq!(
+            cached_poster_in_root(&steam, 48),
+            Some(fs::canonicalize(higher_resolution).unwrap())
+        );
+    }
+
+    #[test]
     fn rejects_symlinked_and_oversized_local_portraits() {
         let fixture = Fixture::new();
         let steam = fixture.home.join(".local/share/Steam");
@@ -1071,6 +1330,21 @@ mod tests {
         file.set_len(MAX_POSTER_BYTES + 1)
             .expect("oversized poster length");
         assert_eq!(cached_poster_in_root(&steam, 45), None);
+    }
+
+    fn png_with_dimensions(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes
+    }
+
+    fn jpeg_with_dimensions(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08];
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&[0; 10]);
+        bytes
     }
 
     #[test]

@@ -36,10 +36,10 @@ use std::time::{Duration, Instant};
 
 const STEAM_BROKER_SOCKET_FILE: &str = "steam-launch-v1.sock";
 const STEAM_WIRE_MAGIC: [u8; 8] = *b"RDSTML01";
-const STEAM_WIRE_VERSION: u16 = 4;
+const STEAM_WIRE_VERSION: u16 = 5;
 const REQUEST_BYTES: usize = 18;
 const MAX_PATH_BYTES: usize = 4_096;
-const MAX_RESPONSE_BYTES: usize = 4 * MAX_PATH_BYTES + 64;
+const MAX_RESPONSE_BYTES: usize = 5 * MAX_PATH_BYTES + 64;
 const RESPONSE_DENIED: u8 = 0;
 const RESPONSE_GRANTED: u8 = 1;
 const STREAM_TIMEOUT: Duration = Duration::from_millis(500);
@@ -92,8 +92,13 @@ impl SteamAppId {
 /// This is deliberately not an environment map. Its wire encoder has a fixed
 /// field order, and the wrapper derives the allowlisted variables locally.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the fixed Steam wire mirrors bounded product toggles without arbitrary environment fields"
+)]
 pub struct SteamCaptureEnvironment {
     layer_manifest_directory: PathBuf,
+    opengl_library: Option<PathBuf>,
     capture_socket: PathBuf,
     capture_reply_socket: PathBuf,
     session_id: CaptureSessionId,
@@ -112,7 +117,7 @@ pub struct SteamCaptureEnvironment {
 }
 
 impl SteamCaptureEnvironment {
-    /// Construct the fixed private Vulkan environment for one capture session.
+    /// Construct the fixed private capture environment for one session.
     ///
     /// # Errors
     ///
@@ -132,6 +137,7 @@ impl SteamCaptureEnvironment {
         validate_wire_path("capture reply socket", &capture_reply_socket)?;
         Ok(Self {
             layer_manifest_directory,
+            opengl_library: None,
             capture_socket,
             capture_reply_socket,
             session_id,
@@ -148,6 +154,22 @@ impl SteamCaptureEnvironment {
             overlay_telemetry_path: None,
             replay: ReplayTransferLaunchConfig::default(),
         })
+    }
+
+    /// Add the session-private GLX/EGL interposer for native OpenGL games.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SteamActivationError`] when the path cannot be represented by
+    /// the bounded bridge protocol.
+    pub fn with_opengl_library(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, SteamActivationError> {
+        let path = path.into();
+        validate_wire_path("OpenGL capture library", &path)?;
+        self.opengl_library = Some(path);
+        Ok(self)
     }
 
     #[must_use]
@@ -289,6 +311,14 @@ impl SteamCaptureEnvironment {
             OsString::from("VK_INSTANCE_LAYERS"),
             OsString::from_vec(enabled_layers),
         );
+        if let Some(library) = &self.opengl_library {
+            updates.insert(
+                OsString::from("LD_PRELOAD"),
+                prepend_library_path(library, inherited.get(OsStr::new("LD_PRELOAD")))?,
+            );
+            // The wrapper only adds the GL interposer. SDL and FAudio must keep
+            // the provider chosen by the game/Steam runtime for playback.
+        }
         updates.insert(
             OsString::from("REDUNAR_CAPTURE_SOCKET"),
             self.capture_socket.as_os_str().to_owned(),
@@ -378,6 +408,24 @@ fn enabled_vulkan_layers(inherited_layers: &[u8]) -> Vec<u8> {
     }
     enabled.extend_from_slice(VULKAN_CAPTURE_LAYER_NAME.as_bytes());
     enabled
+}
+
+fn prepend_library_path(
+    library: &Path,
+    inherited: Option<&OsString>,
+) -> Result<OsString, SteamActivationError> {
+    let mut paths = vec![library.to_path_buf()];
+    if let Some(inherited) = inherited {
+        let inherited_paths = std::env::split_paths(inherited).collect::<Vec<_>>();
+        if inherited_paths.iter().any(|path| path == library) {
+            return Err(SteamActivationError::new(
+                "another Redunar OpenGL interposer is already active",
+            ));
+        }
+        paths.extend(inherited_paths);
+    }
+    std::env::join_paths(paths)
+        .map_err(|_| SteamActivationError::new("LD_PRELOAD contains an invalid path list"))
 }
 
 fn pressure_vessel_write_paths(
@@ -859,6 +907,7 @@ fn encode_granted(environment: &SteamCaptureEnvironment) -> Result<Vec<u8>, Stea
     bytes.extend_from_slice(&STEAM_WIRE_VERSION.to_le_bytes());
     bytes.push(RESPONSE_GRANTED);
     push_path(&mut bytes, &environment.layer_manifest_directory)?;
+    push_optional_path(&mut bytes, environment.opengl_library.as_deref())?;
     push_path(&mut bytes, &environment.capture_socket)?;
     push_path(&mut bytes, &environment.capture_reply_socket)?;
     bytes.extend_from_slice(&environment.session_id.as_bytes());
@@ -910,6 +959,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
     let mut cursor = 11;
     let manifest = take_path(bytes, &mut cursor, false)?
         .ok_or_else(|| SteamActivationError::new("missing layer manifest directory"))?;
+    let opengl_library = take_path(bytes, &mut cursor, true)?;
     let capture_socket = take_path(bytes, &mut cursor, false)?
         .ok_or_else(|| SteamActivationError::new("missing capture socket"))?;
     let capture_reply_socket = take_path(bytes, &mut cursor, false)?
@@ -954,6 +1004,9 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
             .with_overlay_branding(overlay_branding)
             .with_replay_frame_rate(replay_frame_rate)
             .with_replay_requested(replay_requested);
+    if let Some(path) = opengl_library {
+        environment = environment.with_opengl_library(path)?;
+    }
     if let Some(path) = overlay_telemetry_path {
         environment = environment.with_overlay_telemetry_path(path)?;
     }
@@ -1037,6 +1090,18 @@ fn push_path(bytes: &mut Vec<u8>, path: &Path) -> Result<(), SteamActivationErro
     bytes.extend_from_slice(&length.to_le_bytes());
     bytes.extend_from_slice(path);
     Ok(())
+}
+
+fn push_optional_path(
+    bytes: &mut Vec<u8>,
+    path: Option<&Path>,
+) -> Result<(), SteamActivationError> {
+    if let Some(path) = path {
+        push_path(bytes, path)
+    } else {
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        Ok(())
+    }
 }
 
 fn take_path(
@@ -1336,6 +1401,8 @@ mod tests {
             CaptureSessionId::new([7; 16]).expect("session ID"),
         )
         .expect("capture environment")
+        .with_opengl_library("/run/user/1000/redunar/capture/libredunar_capture_opengl.so")
+        .expect("OpenGL library")
         .with_overlay(
             true,
             OverlayPreset::Detailed,
@@ -1477,6 +1544,10 @@ mod tests {
             OsString::from(PRESSURE_VESSEL_FILESYSTEMS_RW_ENV),
             OsString::from("/already-shared"),
         );
+        inherited.insert(
+            OsString::from("LD_PRELOAD"),
+            OsString::from_vec(b"/existing/liboverlay.so:/existing/\xfd.so".to_vec()),
+        );
         let updates = environment()
             .environment_updates(&inherited)
             .expect("merge environment");
@@ -1501,6 +1572,14 @@ mod tests {
                 "/run/user/1000/redunar/capture/capture-reply.sock"
             ))
         );
+        assert_eq!(
+            updates
+                .get(OsStr::new("LD_PRELOAD"))
+                .expect("preload")
+                .as_bytes(),
+            b"/run/user/1000/redunar/capture/libredunar_capture_opengl.so:/existing/liboverlay.so:/existing/\xfd.so"
+        );
+        assert!(!updates.contains_key(OsStr::new("SDL_DYNAMIC_API")));
         let shared = updates
             .get(OsStr::new(PRESSURE_VESSEL_FILESYSTEMS_RW_ENV))
             .expect("pressure-vessel paths");
@@ -1514,6 +1593,12 @@ mod tests {
         inherited.insert(
             OsString::from("REDUNAR_CAPTURE_SESSION"),
             OsString::from("foreign"),
+        );
+        assert!(environment().environment_updates(&inherited).is_err());
+        inherited.remove(OsStr::new("REDUNAR_CAPTURE_SESSION"));
+        inherited.insert(
+            OsString::from("LD_PRELOAD"),
+            OsString::from("/run/user/1000/redunar/capture/libredunar_capture_opengl.so"),
         );
         assert!(environment().environment_updates(&inherited).is_err());
     }

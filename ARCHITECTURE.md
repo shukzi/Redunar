@@ -1,6 +1,6 @@
 # Redunar architecture
 
-Current source map and ownership contract, reviewed September 16, 2026.
+Current source map and ownership contract, reviewed September 23, 2026.
 The production desktop is Tauri. This document describes the current ownership
 boundaries, not a proposal to create another desktop frontend or daemon process.
 
@@ -13,7 +13,7 @@ Tauri host: output/tauri-redunar/src-tauri/src/
     | one app-lifetime RedunarService::for_tauri()
 Shared service: crates/redunar-daemon/ + core/platform models
     | owned session, monitor, capture, replay, persistence
-Private Vulkan layer / Steam bridge / same-user shortcut helper
+Private Vulkan layer / OpenGL interposer / Steam bridge / same-user shortcut helper
     | bounded local protocols and literal process arguments
 Supported game and local Linux interfaces
 ```
@@ -32,6 +32,7 @@ coordinator. Hidden webviews must not stop native supervision or shortcuts.
 | `redunar-daemon` | Service state, catalog/preferences/history, monitor, capture receiver, replay lifecycle and store |
 | `redunar-capture` | Versioned bounded telemetry/control contracts |
 | `redunar-capture-vulkan` | Game-local presentation measurements, metrics rendering, bounded GPU frame export |
+| `redunar-capture-opengl` | Launch-scoped GLX/EGL/SDL presentation measurements, metrics rendering, and guarded desktop-OpenGL Replay export |
 | `redunar-capture-audio` | Default-output capture through PulseAudio or PipeWire and Opus packets; see audio behavior in REPLAY |
 | `redunar-hotkeys` | Same-user bounded keyboard shortcut helper |
 | `redunar-capture-kms` | Experimental diagnostic, excluded from production Replay |
@@ -53,12 +54,41 @@ Paths below are relative to `output/tauri-redunar/`:
 | Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
 | Replay menu and shortcuts | `src-tauri/src/hotkeys.rs`; `crates/redunar-hotkeys` (pointer capture); `crates/redunar-capture-vulkan/src/overlay.rs` (in-game menu render); `ui/replay-menu-view.mjs` (app preview) |
 | Tray preference/lifecycle | `src-tauri/src/tray.rs`, `main.rs` |
+| Signed updates and installer state | `src-tauri/src/updates.rs`, `runtime.rs`; `ui/app.js` |
 | Real-data mapping | `ui/native-data.mjs`, `app.js` |
 | History coordinates and inspection | `ui/history-timeline.mjs`, `history-chart.css` |
 | Clip selection and previews | `ui/replay-requests.mjs`, `replay-loading.mjs`, `replay-filmstrip.mjs` |
 
 Use [DESIGN.md](DESIGN.md) for component styling and
 [REPLAY.md](REPLAY.md) for detailed media behavior rather than duplicating them.
+
+The native updater verifies a signed release manifest, including the version
+file and selected package checksum, before retaining a package in private cache.
+Cache replacements use digest-named files and commit the pending metadata last,
+so a failed refresh leaves the previous verified package usable. Existing
+unsuffixed cached packages remain readable until replaced or consumed.
+Automatic checks preserve a pending installer handoff. An explicit manual check
+refreshes the signed channel and can supersede a cached package only with a
+newer verified release; a channel failure retains the verified cached package.
+Repository-root `tools/write-release-version.sh` and
+`tools/sign-release-assets.sh` create and sign the release metadata.
+Settings only requests checks or a fixed package-installer handoff. The native
+host queries the system package database read-only to distinguish an unfinished
+handoff from an installed package that still needs an app restart; it never
+lets the webview choose a package path or run a package-manager command.
+The Tauri backend creates a read-only service for a secondary process when
+another Redunar owns the login-session Replay socket. That secondary service
+does not start a competing Replay control listener. Update checking and
+installer handoff also require primary write access because they mutate the
+shared update cache. The secondary GTK application is non-unique, so launching
+it cannot reactivate the primary Tauri event loop and
+repeat the primary webview setup. The primary retains the installed desktop
+application ID.
+Window geometry is persisted as logical desktop dimensions. The native host
+converts Tauri's physical inner size on save and restores a logical size, so a
+HiDPI scale does not shrink the next window. The app-preferences V6 reader also
+retains the legacy physical-pixel marker from V2–V5 through unrelated settings
+writes until geometry is saved in logical units.
 
 ## Catalog, profiles, and installation
 
@@ -88,9 +118,12 @@ because unchanged recording settings are locked.
 Installation checks and local artwork are separate from catalog persistence.
 A missing game is retained, with launch rejected before runtime preparation.
 Poster and banner are separate artwork roles. Valid Steam-cache images are
-copied to Redunar's private cache and survive loss of the Steam originals.
-No network artwork lookup is required. See native artwork/installation code for
-bounded paths, allowed formats, identity, and invalidation rules.
+copied to Redunar's private cache and survive loss of the Steam originals. Steam's
+600x900 poster remains preferred across cache layouts; when it is absent,
+discovery deterministically selects a safe poster-shaped local raster by dimensions,
+resolution, and filename hints. No network artwork lookup is required. See native
+artwork/installation code for bounded paths, allowed formats, identity, and
+invalidation rules.
 
 ## Session lifecycle
 
@@ -120,7 +153,32 @@ revisioned latest snapshot. Conservative process discovery is bounded and runs
 at the slower cadence in PERFORMANCE. No UI callback queue or hardware scan is
 permitted per frame. Missing sensors affect only their own values.
 
-The Vulkan layer batches monotonic frame intervals over bounded local transport.
+The Vulkan layer and launch-scoped OpenGL interposer batch monotonic frame
+intervals over bounded local transport. The OpenGL path observes GLX/EGL swaps
+and guarded x86_64 SDL2 dynamic-API presentation slots used when managed
+runtimes such as .NET P/Invoke bypass normal ELF interposition. Redunar's
+session-private library delegates SDL's table initialization to the exact
+loaded SDL object and reapplies its swap and renderer hooks as part of that
+initialization event. This remains correct when a game calls another SDL entry
+before `SDL_Init` and does not depend on a startup delay or polling window. The
+daemon records the producer API and accepts bounded Replay exports from Vulkan
+or a capability-ready desktop OpenGL producer. OpenGL allocates a fixed GBM
+pool, imports each allocation through `GL_EXT_memory_object_fd`, copies the
+presented framebuffer asynchronously into an imported pixel-pack buffer, and
+transfers one descriptor to the existing Vulkan Video conversion/encode path
+only after its GL fence is ready. Slots remain unavailable until the daemon
+returns a release acknowledgement. The producer binds its own private
+per-process reply socket and drops Replay work instead of blocking presentation
+when every slot is busy. The production path also requires complete
+`GL_EXT_memory_object`/`GL_EXT_memory_object_fd` tokens and the matching memory
+object functions; unsupported drivers and OpenGL ES/EGL Replay fail closed
+before external-memory work. EGL metrics remain available. OpenGL is loaded
+through a child-only `LD_PRELOAD` entry that
+preserves inherited entries and is never installed as a global graphics
+provider. Native Steam activation carries both private capture libraries through
+the same bounded one-shot wrapper protocol; the OpenGL library is copied into
+the session directory already shared with the Steam Linux runtime. Flatpak
+Steam remains a separate unsupported sandbox boundary by owner decision.
 The service validates observations and owns summaries. Completed sessions retain
 bounded frame data and timeline observations through `session_history.rs`.
 This is not an unlimited per-frame archive; older records may lack hardware data.
@@ -132,10 +190,19 @@ frame interval with the reciprocal of an average FPS window.
 
 ## Overlay and menu are different surfaces
 
-The metrics HUD and Moment saved feedback are rendered in the game by the Vulkan
-layer. Metrics visibility is reversible without removing that prepared runtime;
-save feedback can remain visible independently. Geometry/font details live in
-`redunar-capture-vulkan/src/overlay.rs`, core font data, and the
+The Vulkan layer and OpenGL interposer render the metrics HUD, in-game Replay
+menu, and Moment saved feedback. OpenGL derives the same metric presets and
+layout selections from bounded frame history and daemon hardware telemetry. Its
+four cached CPU RGBA surfaces use the shared overlay font and panel geometry;
+context-local blended texture passes draw metrics, menu, cursor, and notice
+revisions independently through GLX or EGL. The largest current viewport owns
+presentation telemetry and Replay when a process has multiple GL contexts;
+destroying that context releases its renderer, diagnostic readback, and Replay
+bookkeeping. FPS only remains panel-free, and menu/notice
+visibility does not depend on metrics visibility.
+Metrics visibility is reversible without removing either prepared runtime.
+Geometry/font details live in `redunar-capture-vulkan/src/overlay.rs`,
+`redunar-capture-opengl/src/overlay.rs`, core font data, and the
 [shader notes](crates/redunar-capture-vulkan/src/shaders/README.md).
 The effective profile carries Grid, Ribbon, or Telemetry and one of eight
 bounded palettes through direct-launch environment values, the versioned Steam
@@ -145,8 +212,8 @@ Custom metric bits remain separate, so changing structure or color never changes
 which measurements are selected.
 
 The active Tauri replay shortcut toggles the in-game Replay menu through the
-daemon's replay control socket. The Vulkan capture layer renders the panel into
-the game's own swapchain (see `redunar-capture-vulkan/src/overlay.rs`), and the
+daemon's replay control socket. The active Vulkan or OpenGL capture backend
+renders the panel into the game's own presentation target, and the
 hotkey helper grabs the mice and streams pointer events while it is open; no
 desktop menu webview exists. If the session exposes readable keyboard devices
 but no readable mouse event device, the helper still opens the in-game panel in

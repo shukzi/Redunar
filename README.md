@@ -87,6 +87,7 @@ tools/check-tauri-release.sh
 
 - [Architecture](ARCHITECTURE.md) — components, lifecycle, persistence, and recovery
 - [Replay](REPLAY.md) — recording, shortcuts, playback, and audio behavior
+- [OpenGL completion](OPENGL-COMPLETION.md) — production parity checklist and acceptance gates
 - [Hardware support](HARDWARE-SUPPORT.md) — implemented platform scope and limits
 - [Testing](TESTING.md) — automated and manual verification
 - [Packaging](packaging/README.md) — package formats and dependency obligations

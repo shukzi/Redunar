@@ -13,7 +13,7 @@ fi
 mkdir -p "$output_directory"
 find "$output_directory" -maxdepth 1 -type f \( \
   -name 'redunar-app-linux-*' -o -name '*.sha256' -o \
-  -name 'SHA256SUMS' -o -name 'SHA256SUMS.sig' \
+  -name 'SHA256SUMS' -o -name 'SHA256SUMS.sig' -o -name 'VERSION' \
 \) -delete
 
 if [[ -z "$private_key" || "$private_key" != /* ]]; then
@@ -32,7 +32,8 @@ for binary in \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-tauri" \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-steam-launch" \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-hotkey-helper" \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_vulkan.so"
+  "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_vulkan.so" \
+  "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_opengl.so"
 do
   if [[ ! -f "$binary" ]]; then
     printf 'release component is missing: %s\n' "$binary" >&2
@@ -72,6 +73,7 @@ do
   )
 done
 
+"$workspace_root/tools/write-release-version.sh" "$output_directory"
 "$workspace_root/tools/sign-release-assets.sh" "$output_directory" "$private_key" "$public_key"
 
 printf 'Built Redunar installer assets in %s\n' "$output_directory"

@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.3
+Version:        0.1.4
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -68,6 +68,7 @@ fi
 %attr(0755,root,root) /usr/bin/redunar-tauri
 %attr(0755,root,root) /usr/bin/redunar-steam-launch
 %attr(0755,root,root) /usr/bin/libredunar_capture_vulkan.so
+%attr(0755,root,root) /usr/bin/libredunar_capture_opengl.so
 %attr(0755,root,root) /usr/libexec/redunar-hotkey-helper
 %attr(0644,root,root) /usr/share/applications/com.redunar.Redunar.desktop
 %attr(0644,root,root) /usr/share/metainfo/com.redunar.Redunar.metainfo.xml
@@ -95,6 +96,11 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Thu Sep 24 2026 Redunar <local@redunar.invalid> - 0.1.4-1.local
+- Add GLX/SDL OpenGL metrics, overlay, and supported Replay capture
+- Prefer native PipeWire output capture to preserve game music
+- Add opt-in rotating diagnostic logs for tester reports
+
 * Sun Sep 20 2026 Redunar <local@redunar.invalid> - 0.1.3-1.local
 - Redesign the in-game Replay menu around a compact two-row duration picker,
   live buffer status, a direct save action, and in-overlay MKV/MP4 selection

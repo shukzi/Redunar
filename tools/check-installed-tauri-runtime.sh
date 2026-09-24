@@ -41,6 +41,8 @@ check_component redunar-tauri \
   "$payload_root/usr/bin/redunar-tauri" /usr/bin/redunar-tauri || status=1
 check_component capture-layer \
   "$payload_root/usr/bin/libredunar_capture_vulkan.so" /usr/bin/libredunar_capture_vulkan.so || status=1
+check_component opengl-capture \
+  "$payload_root/usr/bin/libredunar_capture_opengl.so" /usr/bin/libredunar_capture_opengl.so || status=1
 check_component steam-wrapper \
   "$payload_root/usr/bin/redunar-steam-launch" /usr/bin/redunar-steam-launch || status=1
 check_component shortcut-helper \

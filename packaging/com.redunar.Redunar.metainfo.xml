@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.4" date="2026-09-24">
+      <description>
+        <p>Adds GLX/SDL OpenGL metrics, overlay, and supported Instant Replay capture; preserves game music by preferring native PipeWire audio capture; and adds an opt-in rotating debug log for tester reports.</p>
+      </description>
+    </release>
     <release version="0.1.3" date="2026-09-20">
       <description>
         <p>Redesigns the in-game Replay menu with live buffer status, direct saving, and live MKV/MP4 selection; applies Replay shortcut and format changes to active sessions; and adds a compact titlebar independent of the Linux desktop compositor.</p>

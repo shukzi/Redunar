@@ -8,7 +8,14 @@ use std::time::SystemTime;
 static SERVICE: OnceLock<Mutex<Option<RedunarService>>> = OnceLock::new();
 pub fn service() -> RedunarService {
     SERVICE
-        .get_or_init(|| Mutex::new(Some(RedunarService::for_tauri())))
+        .get_or_init(|| {
+            let service = if other_owner() {
+                RedunarService::for_tauri_read_only()
+            } else {
+                RedunarService::for_tauri()
+            };
+            Mutex::new(Some(service))
+        })
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()

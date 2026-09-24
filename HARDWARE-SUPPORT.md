@@ -1,6 +1,6 @@
 # Hardware and integration support
 
-Reviewed September 20, 2026 against the local implementation and retained test
+Reviewed September 22, 2026 against the local implementation and retained test
 records. The known tested baseline is **x86_64 Linux with AMD hardware**. This
 is narrower than a future cross-vendor goal; other setups may be tried and
 reported after publication. A detected interface or a successful fixture does
@@ -16,12 +16,13 @@ not establish support across every game or driver.
 | Memory | Linux RAM and available GPU-memory readings feed System metrics. |
 | Catalog | Local IDs, direct launch records, native/Flatpak Steam discovery, and supported direct XDG Game entries. Import reviews installed entries, not arbitrary running helpers. |
 | Native Steam launch | Private wrapper/broker and saved launch options are implemented. Verify the actual game's configuration; wrapper existence alone is insufficient. |
-| Flatpak Steam | Discovery does not imply capture works inside its sandbox. Host-layer forwarding/capture remains unsupported without a validated bridge. |
+| Flatpak Steam | Discovery does not imply capture works inside its sandbox. Host-layer forwarding and capture remain unsupported; Flatpak is outside the supported scope by owner decision on 2026-09-24. |
 | Direct Vulkan game | Private launch-time layer provides telemetry, metrics HUD, and eligible replay capture. Runtime is prepared while metrics are hidden so visibility can change later. |
+| Direct or native-Steam OpenGL game | Launch-scoped GLX/EGL interposition provides frame telemetry and bounded Compact, FPS only, Detailed, and Custom metrics for owned direct launches and configured native Steam wrapper launches. Guarded SDL dynamic-API interception covers managed-runtime deep binding such as .NET P/Invoke without a startup timing window. On the validated AMD/RADV host, desktop GLX and SDL OpenGL can export fixed-pool GBM buffers into the existing Vulkan Video H.264 Replay path at 30 or 60 FPS; the existing capability gate also passed the bounded 1080p/120 probe. The in-game Replay menu and completed-save notice render independently from metrics. EGL/OpenGL ES remains metrics-only, and Flatpak capture is out of scope. |
 | Replay video | Hardware Vulkan Video H.264 path on supported AMD/RADV; bounded GPU export/conversion, local spool, MKV/MP4 saves. No live software-video fallback. |
 | Swapchains | Implemented 8-bit RGBA/BGRA and packed 10-bit conversion paths; actual usage flags, queues, format, resolution, and encoder limits govern acceptance. |
 | Overlay | Compact, FPS only, Detailed, Custom; four corners, bounded scale/opacity, live visibility and independent saved feedback. |
-| Replay menu | Dedicated transparent Tauri desktop window; focus, layering and transparency remain compositor-dependent. App preview is a separate dialog. |
+| Replay menu | The capture backend renders the in-game menu into the game presentation. The app's overlay-appearance preview is separate; pointer grab remains subject to local input permissions. |
 | Audio | Default-output monitor through PulseAudio or PipeWire plus Opus; the mixed output can include other applications. Pure ALSA output capture is not supported. See REPLAY. |
 | Shortcuts/tray | Same-user evdev helper and optional tray provider. No permission/provider must produce a usable, honest fallback. Empty shortcuts and tray-disabled startup are supported. |
 | Packaging | Debian 12/glibc 2.36 baseline binaries, Fedora/openSUSE RPMs, a DEB, native Arch package, portable payload, signed checksums, and a distro-detecting installer template build locally. Installed-runtime evidence remains Fedora 44 only; no published release, verified second distribution, immutable-system package, or ARM build is implied. |
@@ -54,8 +55,9 @@ and [ROADMAP.md](ROADMAP.md) own the remaining work.
 
 ## Outside current support
 
-- OpenGL capture and late injection into already-running games.
-- A validated Flatpak capture bridge or broad non-Steam launcher integration.
+- OpenGL ES/EGL Replay capture, late injection into already-running games, and
+  broad real-game OpenGL Replay qualification beyond the owner acceptance set.
+- Flatpak capture bridging or broad non-Steam launcher integration.
 - NVIDIA encoding/monitoring parity, ARM/aarch64, or a cross-driver guarantee.
 - Firmware, voltage, or automatic hardware-policy changes.
 - Game-only audio isolation; Replay records the active mixed system output.

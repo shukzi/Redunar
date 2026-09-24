@@ -19,7 +19,7 @@ server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(NATIVE/
 threading.Thread(target=server.serve_forever,daemon=True).start()
 manager=WebKit2.UserContentManager()
 fixture=r"""
-window.bridge={calls:[],errors:[],conflict:false,unavailable:false,automaticUpdates:true,revision:1,modules:{frame_metrics:'Enabled',in_game_overlay:'Enabled',instant_replay:'Enabled'}};
+window.bridge={calls:[],errors:[],conflict:false,unavailable:false,automaticUpdates:true,startupUpdateAvailable:true,revision:1,modules:{frame_metrics:'Enabled',in_game_overlay:'Enabled',instant_replay:'Enabled'}};
 window.addEventListener('error',e=>bridge.errors.push(e.message));
 window.addEventListener('unhandledrejection',e=>bridge.errors.push(String(e.reason)));
 function artworkFixture(width,height,label,mime='image/png'){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d');const gradient=ctx.createLinearGradient(0,0,width,height);gradient.addColorStop(0,'#8b202a');gradient.addColorStop(1,'#171717');ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);ctx.fillStyle='#ffffff';ctx.font='32px sans-serif';ctx.fillText(label,30,70);return Array.from(atob(canvas.toDataURL(mime).split(',')[1]),c=>c.charCodeAt(0));}
@@ -28,7 +28,7 @@ const bannerFixture=artworkFixture(1200,350,'Landscape banner');
 const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
 const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
 const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/fixture/game',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',launch_revision:'launch-1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',launch_revision:'launch-2',overrides:{overlay:false}}];
-window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
+window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async(command,args={})=>{
  bridge.calls.push({command,args:structuredClone(args)});
  if(command==='save_replay'&&bridge.failSave)throw Error('Fixture save failed');
  if(command==='replay_runtime_status'&&bridge.failRuntime)throw Error('Fixture runtime unavailable');
@@ -51,7 +51,12 @@ window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
  if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};
  if(command==='set_close_to_tray')return {close_to_tray:args.enabled,automatic_updates:bridge.automaticUpdates};
  if(command==='set_automatic_updates'){bridge.automaticUpdates=args.enabled;return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};}
- if(command==='check_for_updates')return {current_version:'0.1.3',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
+ if(command==='check_for_updates'){
+  if(bridge.installedUpdate)return {current_version:'0.1.2',state:'restart-needed',message:'Redunar 0.1.3 is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.',latest_version:'0.1.3',package_kind:'rpm',asset_name:'redunar-app-linux-x86_64.rpm'};
+  if(bridge.startupUpdateAvailable){bridge.startupUpdateAvailable=false;return {current_version:'0.1.2',state:'available',message:'Redunar 0.1.3 has a verified update package.',latest_version:'0.1.3',package_kind:'rpm',asset_name:'redunar-app-linux-x86_64.rpm'};}
+  return {current_version:'0.1.3',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
+ }
+ if(command==='install_update')return {state:'handoff',message:'Redunar requested your system package installer. Finish installation there, then fully quit and reopen Redunar. If you cancel, you can reopen the installer from Settings.'};
  if(command==='global_settings')return {values:structuredClone(values),revision:'1'};
  if(command==='save_global_settings'){if(bridge.conflict)throw new Error('Saved defaults changed elsewhere. Reload before saving.');Object.assign(values,args.input);return {values:structuredClone(values),revision:'2'};}
  if(command==='save_game_profile'){games.find(g=>g.id===args.gameId).overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));return {games:structuredClone(games),liveNotice:'Game settings saved. The running game overlay was updated.'};}
@@ -94,6 +99,7 @@ def test(name,source,wait_ms=0):
     if wait_ms: pump(wait_ms)
 try:
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#overview');pump(1800)
+    test('Startup update notice directs the user to Settings',"check(q('#toast').textContent==='A Redunar update is available. Open Settings to install it.','clear startup update action')")
     test('Real overview values and compact session footer',"check(q('#ram-used').textContent==='12.0 GiB','RAM');check(q('#session-timer').textContent==='32:18','timer');check(q('#session-captures').textContent==='3 captures saved','captures');check(q('.session-end').contains(q('[data-action=end-session]')),'timer adjacent to end');window.plot=q('#live-chart');click('[data-overview-view=fps]');check(q('#live-chart')===plot,'graph toggle does not remount page');check(q('#overview-chart-label').textContent==='Frame rate','FPS selector');")
     snap('overview')
     test('Overview uses settings for visibility',"check(!q('[data-action=session-overlay]'),'no duplicate live button');")
@@ -169,6 +175,10 @@ try:
     test('Automatic replay replaces the global off control',"check(!q('[data-global=replayEnabled]'),'no replay off control');check(q('#workspace').textContent.includes('Automatic'),'automatic status');q('[data-replay-preference=outside]').click();",350)
     test('Outside click preference does not resend a stale shortcut',"const write=bridge.calls.findLast(c=>c.command==='set_replay_overlay_behavior');check(Object.keys(write.args).length===1&&Object.hasOwn(write.args,'closeOnOutsideClick'),'only changed preference sent');check(values.shortcuts.overlay==='Ctrl+Shift+T','new menu shortcut retained');")
     route('history');snap('history')
+    js("bridge.historyFixture=Array.from({length:20},(_,i)=>({id:i+1,game:'Scroll test '+i,started_unix:1789300000-i*86400,duration_seconds:1800,average_fps:60,timeline:[{elapsed_seconds:0,fps:60},{elapsed_seconds:1800,fps:60}]}));click('[data-action=reload-history]')");pump()
+    test('History scrollbar sits between cards and the detail panel',"const rail=q('.history-catalog').getBoundingClientRect(),list=q('#session-list'),viewport=list.getBoundingClientRect(),card=q('.history-row').getBoundingClientRect(),detail=q('.history-detail').getBoundingClientRect();check(list.scrollHeight>list.clientHeight,'overflow fixture');check(viewport.right>rail.right+10,'scrollbar moved into gap');check(viewport.right<detail.left-2,'scrollbar stays clear of detail');check(card.right<rail.right,'cards stay inside rail');check(viewport.right-card.right>20,'scrollbar cannot overlay cards');")
+    snap('history-scrollbar-gap')
+    js("bridge.historyFixture=null;click('[data-action=reload-history]')");pump()
     test('History chart and inspector retain recorded data',"click('[data-history-view=temperature]');const slider=q('[data-history-cursor]');slider.value='1200';slider.dispatchEvent(new Event('input',{bubbles:true}));check(q('#history-moment-cpu-temp').textContent==='61.0°C','CPU sample');check(q('#history-moment-gpu-temp').textContent==='67.0°C','GPU sample');check(document.querySelectorAll('.timeline-trace').length===2,'both traces');")
     snap('history-temperatures')
     test('History labels align with grid lines and include units',"const svg=q('.history-timeline-chart svg');for(const label of document.querySelectorAll('.history-timeline-chart .y-axis span')){const grid=q('.gridline[data-axis-value=\"'+label.dataset.axisValue+'\"]');const y=Number(grid.getAttribute('d').split(' ')[1].split('H')[0]);const pt=new DOMPoint(0,y).matrixTransform(svg.getScreenCTM());const rect=label.getBoundingClientRect();check(Math.abs(rect.top+rect.height/2-pt.y)<1,'tick/grid mismatch');check(label.textContent.includes('°C'),'temperature unit');}check(q('.history-timeline-chart .y-axis').getBoundingClientRect().width>=70,'readable axis gutter');")
@@ -239,11 +249,19 @@ try:
     test('Empty History disables the timeline without inventing numbers',"check(q('[data-history-cursor]').disabled,'disabled scrubber');check(q('#history-moment-fps').textContent==='—','unknown FPS');check(q('#history-slider-time').textContent==='00:00','zero duration');check(!q('#history-cursor-line'),'no fabricated graph');bridge.historyFixture=null;click('[data-action=reload-history]');")
     pump()
     route('settings');snap('settings')
-    test('Settings exposes only current preferences',"check(!q('[data-module]'),'no module switches');check(!q('[data-preference=motion]'),'no motion toggle');check(!q('[data-action=reload-preferences]'),'no reload button');check(!q('#workspace').textContent.includes('Feature modules'),'no module section');check(!q('.app-about'),'no redundant about card');check(!q('#workspace').textContent.includes('Measurement & storage'),'no fixed implementation counters');check(q('[data-preference=automatic-updates]').checked,'automatic updates default on');check(q('[data-action=check-for-updates]').textContent==='Check for updates','manual action');q('[data-preference=tray]').click()")
+    test('Settings exposes only current preferences',"check(!q('[data-module]'),'no module switches');check(!q('[data-preference=motion]'),'no motion toggle');check(!q('[data-action=reload-preferences]'),'no reload button');check(!q('#workspace').textContent.includes('Feature modules'),'no module section');check(!q('.app-about'),'no redundant about card');check(!q('#workspace').textContent.includes('Measurement & storage'),'no fixed implementation counters');check(q('[data-preference=automatic-updates]').checked,'automatic updates default on');check(q('[data-action=install-update]').textContent==='Install update','startup update remains actionable');q('[data-preference=tray]').click()")
     pump();test('Tray persists through the native command',"check(bridge.calls.some(c=>c.command==='set_close_to_tray'&&c.args.enabled===true),'tray save');check(q('[data-preference=tray]').checked,'saved tray state');")
     js("q('[data-preference=tray]').click()");pump()
     test('Disabling tray sends the native removal immediately',"check(bridge.calls.findLast(c=>c.command==='set_close_to_tray').args.enabled===false,'native removal requested');check(!q('[data-preference=tray]').checked,'disabled state shown');")
-    js("q('[data-preference=automatic-updates]').click()");pump()
+    js("click('[data-action=install-update]')");pump()
+    test('Verified startup update keeps installer retry available',"check(bridge.calls.some(c=>c.command==='install_update'),'native installer handoff');check(q('[data-action=install-update]').textContent==='Reopen installer','cancelled install can retry');check(q('[data-action=check-for-updates]').textContent==='Check again','manual recheck remains available');check(q('[data-update-state]').textContent.includes('installation unconfirmed'),'handoff is not success');check(q('.updates-heading .pill').textContent==='Version 0.1.2','current version retained');check(q('#toast').textContent.includes('system package installer'),'handoff feedback');")
+    snap('settings-handoff')
+    pump(700);js("bridge.installedUpdate=true;click('[data-action=check-for-updates]')");pump()
+    test('Installed package requires restart without offering a second install',"check(q('[data-update-state]').textContent==='Package installed · restart Redunar','installed package recognized');check(!q('[data-action=install-update]'),'cannot reinstall completed package');check(q('[data-action=check-for-updates]'),'recheck available');check(bridge.calls.findLast(c=>c.command==='check_for_updates').args.refreshPending===true,'manual check requests newest signed release')")
+    snap('settings-restart-needed')
+    js('bridge.installedUpdate=false')
+    route('overview');route('settings')
+    js("q('[data-preference=automatic-updates]').click()");pump(500)
     test('Automatic update preference persists independently',"check(bridge.calls.findLast(c=>c.command==='set_automatic_updates').args.enabled===false,'automatic checks disabled');check(!q('[data-preference=automatic-updates]').checked,'saved update preference shown');click('[data-action=check-for-updates]');")
     pump();test('Manual update check reports authenticated-source readiness honestly',"check(bridge.calls.some(c=>c.command==='check_for_updates'),'manual native check');check(q('[data-update-state]').textContent==='Source pending','honest readiness state');check(q('#toast').textContent.includes('not configured'),'honest check feedback');")
     snap('settings-updates')

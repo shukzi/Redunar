@@ -64,8 +64,8 @@ impl AudioCaptureSource {
 
 /// Select the strongest available Linux output-capture route.
 ///
-/// PulseAudio's default monitor is preferred because it works with both a real
-/// PulseAudio server and PipeWire's Pulse server. A direct PipeWire default
+/// `PulseAudio`'s default monitor is preferred because it works with both a real
+/// `PulseAudio` server and `PipeWire`'s Pulse server. A direct `PipeWire` default
 /// output remains available when the Pulse compatibility service is absent.
 ///
 /// # Errors
@@ -90,16 +90,23 @@ pub fn discover_system_audio_source() -> Result<AudioCaptureSource, AudioCapture
 /// usable output route.
 pub fn discover_system_audio_sources() -> Result<Vec<AudioCaptureSource>, AudioCaptureError> {
     let mut sources = Vec::with_capacity(2);
-    if let Some(source) = discover_pulse_default_monitor() {
-        sources.push(source);
+    // Native PipeWire capture talks straight to the sound server. Recording
+    // the same mix through pipewire-pulse's compatibility layer adds a
+    // translation stream that was observed to disturb a game's own Pulse
+    // client: Stardew's music went silent while a Pulse monitor recorder was
+    // attached during a Redunar session on 2026-09-24, and returned as soon as
+    // the recorder was removed. Prefer the native route whenever the PipeWire
+    // registry exposes a default output node, and keep the Pulse monitor as
+    // the fallback for hosts without a usable native PipeWire route.
+    if system_utility(PW_CAT_PATH, "pw-cat").is_some()
+        && let Ok(registry) = inspect_pipewire_registry()
+        && let Ok(Some(source)) = discover_default_output_monitor_node(&registry)
+    {
+        sources.push(AudioCaptureSource::PipeWire(source));
     }
 
-    if system_utility(PW_CAT_PATH, "pw-cat").is_some() {
-        if let Ok(registry) = inspect_pipewire_registry()
-            && let Ok(Some(source)) = discover_default_output_monitor_node(&registry)
-        {
-            sources.push(AudioCaptureSource::PipeWire(source));
-        }
+    if let Some(source) = discover_pulse_default_monitor() {
+        sources.push(source);
     }
 
     if !sources.is_empty() {

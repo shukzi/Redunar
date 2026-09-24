@@ -1,6 +1,6 @@
 # Runtime performance contract
 
-Current engineering budgets, reviewed September 20, 2026. Redunar measures games;
+Current engineering budgets, reviewed September 23, 2026. Redunar measures games;
 its own work must not meaningfully disturb them. Budgets are acceptance targets,
 not a promise of performance improvement or a report that every path passes.
 
@@ -38,10 +38,29 @@ Record process scope, host, driver, build, workload, duration, and method.
 
 ## Replay bounds
 
-The current capture/encode pipeline has four conversion/encode slots and a fifth
-export handoff context to allow the oldest in-flight export to be released.
-Do not reduce the producer pool to the encoder depth without checking fence and
-acknowledgement progress. Encoding has no host-pixel/software-video fallback.
+The current capture/encode pipeline has four conversion/encode slots. Vulkan
+uses a fifth export handoff context. OpenGL uses six release-gated slots per
+context: one handoff for encoder completion and a second for SDL swap dispatch.
+OpenGL keeps at most four context pools; actual 4K RGBA allocations therefore
+remain below 800 MiB per process, while ordinary 1080p contexts use about
+48 MiB each. Do not reduce either producer pool without checking fence,
+presentation-hook, and acknowledgement progress. Encoding has no
+host-pixel/software-video fallback.
+
+Source-size generations share the four-pool process cap. A resize discards
+fence-complete local copies from the old generation and waits for daemon-owned
+exports before deleting that generation. Explicit GLX, EGL, and SDL context
+teardown removes every pool and renderer/readback bookkeeping entry owned by
+the destroyed context, preventing repeated context replacement from consuming
+the cap. The producer selects the largest current viewport as its one active
+presentation source, so an auxiliary window does not double its frame count.
+Diagnostic OpenGL readback tracks at most eight contexts separately from the
+four production pools. The daemon queues at most eight transferred exports and
+tracks at most eight provisional producer paths. Frame telemetry batches at
+most 64 intervals or 250 ms. Presentation takes only try-locks, polls fences
+without waiting, and drops Replay work when all six slots or four pools are
+busy. Repeated malformed-source logging is limited to one entry per five
+seconds and omits raw transport errors that could contain private paths.
 
 Encoded spool commands use a four-item nonblocking queue. Existing packet bounds
 limit worst-case queued payload; complete segments are bounded to 32 MiB/four
@@ -80,6 +99,28 @@ quality through resize/reset and long sessions.
   [calculation contract](output/tauri-redunar/HISTORY-CALCULATIONS.md).
 
 ## Measurement procedure
+
+September 23, 2026 AMD Radeon RX 6800 XT, Mesa 26.2.3
+radeonsi/RADV, Fedora 44 kernel 7.2.7, working tree based on `659b519`:
+
+| Synthetic 1080p route | Duration | Presented FPS | Replay packets | Receiver CPU |
+| --- | ---: | ---: | ---: | ---: |
+| Uninstrumented GLX, 7,200 frames | 61.25 s | ~117.6 from elapsed time | — | no receiver |
+| Metrics-only GLX, 7,199 frames | 58.74 s | 122.80 | — | 0 sampled ticks |
+| GLX Replay at 30 FPS, 7,199 frames | 60.97 s | 118.29 | 1,821 | 187 ticks |
+| SDL OpenGL Replay at 60 FPS, 7,199 frames | 59.87 s | 120.37 | 3,581 | 207 ticks |
+
+All captured routes had zero transport drops/rejects. The Replay probes ended
+with 5 FDs and 2 threads, down from 8/3 before recording. A separate 640x360
+held-release run kept all six export slots owned by the receiver: 318 Replay
+work items dropped while 599 frames presented, with no transport failures.
+The workload is a simple swap-loop, and the routes are not identical games;
+these numbers establish bounded behavior, not a game FPS prediction or a
+per-core CPU budget pass. Three consecutive GLX/SDL/fullscreen production
+matrices also passed with bounded FD/thread teardown. Mesa's system-wide free
+VRAM changed from 15,341 MiB to 15,338 MiB across those runs; that coarse
+reading cannot attribute GPU memory to one process. GPU utilization and
+long-session VRAM still need a separate owner-controlled observation.
 
 Run from the repository root using a release build. For cached-monitor timing:
 

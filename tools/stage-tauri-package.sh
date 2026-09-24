@@ -21,6 +21,7 @@ required_artifacts=(
   "$release_root/redunar-tauri"
   "$release_root/redunar-steam-launch"
   "$release_root/libredunar_capture_vulkan.so"
+  "$release_root/libredunar_capture_opengl.so"
   "$release_root/redunar-hotkey-helper"
 )
 for artifact in "${required_artifacts[@]}"; do
@@ -45,13 +46,15 @@ for icon_size in 16 32 48 64 128 256 512 1024; do
 done
 
 # The Tauri binary embeds the frontend. These sidecars stay beside it so the
-# daemon can resolve the private Vulkan capture library and Steam bridge from
-# the installed executable directory without a global layer or shell command.
+# daemon can resolve the private graphics capture libraries and Steam bridge
+# from the installed executable directory without a global layer or provider.
 install -m 0755 "$release_root/redunar-tauri" "$destination/usr/bin/redunar-tauri"
 install -m 0755 "$release_root/redunar-steam-launch" \
   "$destination/usr/bin/redunar-steam-launch"
 install -m 0755 "$release_root/libredunar_capture_vulkan.so" \
   "$destination/usr/bin/libredunar_capture_vulkan.so"
+install -m 0755 "$release_root/libredunar_capture_opengl.so" \
+  "$destination/usr/bin/libredunar_capture_opengl.so"
 install -m 0755 "$release_root/redunar-hotkey-helper" \
   "$destination/usr/libexec/redunar-hotkey-helper"
 
