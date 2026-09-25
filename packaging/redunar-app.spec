@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.4
+Version:        0.1.5
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -96,6 +96,10 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Fri Sep 25 2026 Redunar <local@redunar.invalid> - 0.1.5-1.local
+- Refine the in-game metrics overlay and Replay menu
+- Add opt-in beta NVIDIA GPU metrics and a single-GPU Replay candidate
+
 * Thu Sep 24 2026 Redunar <local@redunar.invalid> - 0.1.4-1.local
 - Add GLX/SDL OpenGL metrics, overlay, and supported Replay capture
 - Prefer native PipeWire output capture to preserve game music

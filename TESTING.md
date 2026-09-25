@@ -16,6 +16,13 @@ Replay recording remain unverified. The browser's local-file policy blocked
 visual inspection of the changed Settings view. No tests or game runs were
 performed for this change.
 
+For the v0.1.5 release preparation on September 25, the committed feature source
+`16ed7d0` plus the local version bump passed `tools/check-release-inputs.sh
+v0.1.5`, both offline Cargo checks, `build-native.py`, package staging, and a
+local Fedora RPM build. The host-built RPM requires glibc 2.39 and is **not**
+the Debian 12/glibc 2.36 release artifact. That compatibility build and
+production signing remain the GitHub release workflow's responsibility.
+
 ## Choose checks for the change
 
 | Change | Required evidence |
