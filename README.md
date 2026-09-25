@@ -28,9 +28,10 @@ families.
 
 Redunar checks signed GitHub release metadata from Settings. Manual checks are
 available, and automatic checks run when the app starts by default. The native
-process verifies the manifest and package checksum before handing a verified
-package to the system package installer. Settings, clips, and history remain
-in place across an update.
+process verifies the manifest and package checksum before retaining a verified
+package. Update now requests polkit authorization; a fixed helper verifies the
+cached package again and installs it with the system package manager. Settings,
+clips, and history remain in place across an update.
 
 ## Uninstall
 

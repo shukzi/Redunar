@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.7" date="2026-09-25">
+      <description>
+        <p>Installs signed updates directly after a polkit authorization prompt, with retryable cancellation and installed-package confirmation.</p>
+      </description>
+    </release>
     <release version="0.1.6" date="2026-09-25">
       <description>
         <p>Refreshes Settings by grouping Close to tray, Beta access, and Debug log in one Preferences card, with updated switches and shorter descriptions.</p>

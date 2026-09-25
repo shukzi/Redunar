@@ -1,10 +1,12 @@
 Name:           redunar-app
-Version:        0.1.6
+Version:        0.1.7
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
 Source0:        redunar-app-package-root.tar.gz
 BuildArch:      x86_64
+Requires:       /usr/bin/pkexec
+Requires:       /usr/bin/openssl
 %if 0%{?suse_version}
 Requires:       gtk3
 Requires:       libwebkit2gtk-4_1-0
@@ -54,8 +56,7 @@ cp -a usr %{buildroot}/
 
 # Reload the rule and retrigger existing keyboard and mouse devices after
 # installation. This removes the need to reconnect devices while keeping the
-# runtime helper unprivileged and avoiding desktop shortcut or Polkit
-# integration.
+# runtime shortcut helper unprivileged.
 %post
 if [ -x /usr/bin/udevadm ]; then
     /usr/bin/udevadm control --reload-rules >/dev/null 2>&1 || :
@@ -70,6 +71,8 @@ fi
 %attr(0755,root,root) /usr/bin/libredunar_capture_vulkan.so
 %attr(0755,root,root) /usr/bin/libredunar_capture_opengl.so
 %attr(0755,root,root) /usr/libexec/redunar-hotkey-helper
+%attr(0755,root,root) /usr/libexec/redunar-update-helper
+%attr(0644,root,root) /usr/share/polkit-1/actions/com.redunar.install-update.policy
 %attr(0644,root,root) /usr/share/applications/com.redunar.Redunar.desktop
 %attr(0644,root,root) /usr/share/metainfo/com.redunar.Redunar.metainfo.xml
 %attr(0644,root,root) /usr/lib/udev/rules.d/70-redunar-hotkeys.rules
@@ -96,6 +99,9 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Fri Sep 25 2026 Redunar <local@redunar.invalid> - 0.1.7-1.local
+- Install signed in-app updates through a fixed polkit helper with retryable cancellation and verified package status.
+
 * Fri Sep 25 2026 Redunar <local@redunar.invalid> - 0.1.6-1.local
 - Refresh Settings by grouping Close to tray, Beta access, and Debug log in one Preferences card, with updated switches and shorter descriptions.
 

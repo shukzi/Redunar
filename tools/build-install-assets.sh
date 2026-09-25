@@ -32,6 +32,7 @@ for binary in \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-tauri" \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-steam-launch" \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-hotkey-helper" \
+  "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-update-helper" \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_vulkan.so" \
   "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_opengl.so"
 do

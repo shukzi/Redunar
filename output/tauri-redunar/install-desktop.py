@@ -26,12 +26,18 @@ for name, installed in (
     ("libredunar_capture_opengl.so", Path("/usr/bin/libredunar_capture_opengl.so")),
     ("redunar-steam-launch", Path("/usr/bin/redunar-steam-launch")),
     ("redunar-hotkey-helper", Path("/usr/libexec/redunar-hotkey-helper")),
+    ("redunar-update-helper", Path("/usr/libexec/redunar-update-helper")),
 ):
     built = release_root / name
     if not built.is_file() or not installed.is_file():
         raise SystemExit(f"Install the Tauri runtime sidecar before registering its launcher: {name}")
     if hashlib.sha256(built.read_bytes()).digest() != hashlib.sha256(installed.read_bytes()).digest():
         raise SystemExit(f"Install the latest Tauri runtime sidecar before registering its launcher: {name}")
+
+policy_source = root.parent.parent / "packaging/com.redunar.install-update.policy"
+policy_installed = Path("/usr/share/polkit-1/actions/com.redunar.install-update.policy")
+if not policy_installed.is_file() or policy_source.read_bytes() != policy_installed.read_bytes():
+    raise SystemExit("Install the matching Redunar update policy before registering its launcher.")
 
 data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
 entry = data / "applications" / f"{APP_ID}.desktop"

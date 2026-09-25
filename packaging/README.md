@@ -113,6 +113,16 @@ one asset, `SHA256SUMS`, and `SHA256SUMS.sig` over HTTPS. OpenSSL verifies the
 manifest with the public key embedded in the rendered installer before the
 selected package checksum is trusted.
 
+In-app Update now uses the packaged polkit policy and fixed
+`/usr/libexec/redunar-update-helper`. The user-owned updater retains the signed
+manifest, signature, VERSION, and package under digest-named cache files. After
+authorization, the helper copies them into a private root-owned directory,
+checks the signature and both checksums again, then invokes the matching system
+package manager. A cancelled prompt leaves the package ready to retry. Existing
+cached packages without the signed metadata need a fresh update check before
+direct installation. A package installed before this helper requires one normal
+package-manager upgrade to acquire it.
+
 | Family | Release asset | Installation path |
 | --- | --- | --- |
 | Fedora/RHEL-like | `redunar-app-linux-x86_64.rpm` | `dnf` or `yum`, including dependency resolution |

@@ -23,7 +23,7 @@ const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const UPDATE_CACHE_FOLDER: &str = "redunar/updates";
 const PENDING_UPDATE_FILE: &str = "pending-update.txt";
 // Startup and manual checks may overlap. Serialize cache replacement and
-// installer handoff so an old check cannot overwrite a newer verified package.
+// installation so an old check cannot overwrite a newer verified package.
 static UPDATE_OPERATION: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +151,17 @@ fn check_source(
         retained,
         PUBLIC_KEY_PEM,
         allow_insecure,
-        persist_verified_package,
+        |package_path, package, version, digest| {
+            persist_verified_release(
+                package_path,
+                &directory.join("VERSION"),
+                &directory.join("SHA256SUMS"),
+                &directory.join("SHA256SUMS.sig"),
+                package,
+                version,
+                digest,
+            )
+        },
     )
 }
 
@@ -301,25 +311,35 @@ pub fn install_update() -> UpdateInstallStatus {
         Err(error) => return install_error(error),
     };
     let installed_version = installed_package_version(&pending.kind);
-    let opener = ["/usr/bin/xdg-open", "/bin/xdg-open"]
-        .iter()
-        .map(Path::new)
-        .find(|path| path.is_file());
+    let pending_kind = pending.kind.clone();
+    let helper = Path::new("/usr/libexec/redunar-update-helper");
     install_verified_update(
         &directory,
         pending,
         target,
         env!("CARGO_PKG_VERSION"),
         installed_version.as_deref(),
-        opener,
-        |opener, path| {
-            Command::new(opener)
-                .arg(path)
+        helper.is_file().then_some(helper),
+        |helper, directory| {
+            let pkexec = ["/usr/bin/pkexec", "/bin/pkexec"]
+                .iter()
+                .map(Path::new)
+                .find(|path| path.is_file())
+                .ok_or("polkit (pkexec) is not installed".to_owned())?;
+            let status = Command::new(pkexec)
+                .arg("--disable-internal-agent")
+                .arg(helper)
+                .arg(directory)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .spawn()
-                .map(|_| ())
-                .map_err(|error| error.to_string())
+                .status()
+                .map_err(|error| format!("could not request system authorization: {error}"))?;
+            match status.code() {
+                Some(0) => Ok(installed_package_version(&pending_kind)),
+                Some(126) => Err("Authorization was cancelled. The update is still ready.".into()),
+                Some(127) => Err("System authorization is unavailable. Check that a graphical polkit agent is running.".into()),
+                _ => Err("The update could not be installed. The verified package is still ready; check your system package manager and retry.".into()),
+            }
         },
     )
 }
@@ -330,8 +350,8 @@ fn install_verified_update(
     target: PackageTarget,
     current_version: &str,
     installed_version: Option<&str>,
-    opener: Option<&Path>,
-    launch: impl FnOnce(&Path, &Path) -> Result<(), String>,
+    helper: Option<&Path>,
+    launch: impl FnOnce(&Path, &Path) -> Result<Option<String>, String>,
 ) -> UpdateInstallStatus {
     if !is_newer_version(&pending.version, current_version) {
         return install_error("The retained update is not newer than this build.".into());
@@ -351,8 +371,15 @@ fn install_verified_update(
             message: "The new Redunar package is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.".into(),
         };
     }
-    let Some(opener) = opener else {
-        return install_error("The desktop package installer (xdg-open) is not installed.".into());
+    if !versioned_package_path(directory, &pending.asset_name, &pending.digest).is_file()
+        || ["VERSION", "SHA256SUMS", "SHA256SUMS.sig"]
+            .iter()
+            .any(|name| !signed_metadata_path(directory, name, &pending.digest).is_file())
+    {
+        return install_retry("This cached update predates direct installation. Check for updates again to refresh the signed package.".into());
+    }
+    let Some(helper) = helper else {
+        return install_retry("The update helper is not installed. Update Redunar through your package manager once to enable direct updates.".into());
     };
     if let Err(error) = write_pending_update_in_directory(
         directory,
@@ -361,15 +388,41 @@ fn install_verified_update(
             ..pending.clone()
         },
     ) {
-        return install_error(format!("Could not record the installer handoff: {error}"));
+        return install_error(format!("Could not record the update attempt: {error}"));
     }
-    if let Err(error) = launch(opener, &path) {
-        let _ = write_pending_update_in_directory(directory, &pending);
-        return install_error(format!("Could not open the package installer: {error}"));
+    let installed_after = match launch(helper, directory) {
+        Ok(version) => version,
+        Err(error) => {
+            if let Err(restore_error) = write_pending_update_in_directory(
+                directory,
+                &PendingUpdate {
+                    state: "downloaded".into(),
+                    ..pending
+                },
+            ) {
+                return install_error(format!(
+                    "{error} Could not restore the cached update state: {restore_error}"
+                ));
+            }
+            return install_retry(error);
+        }
+    };
+    if package_version_at_least(&pending, installed_after.as_deref()) {
+        return UpdateInstallStatus {
+            state: "restart-needed".into(),
+            message: "The new Redunar package is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.".into(),
+        };
     }
     UpdateInstallStatus {
         state: "handoff".into(),
-        message: "Redunar requested your system package installer. Finish installation there, then fully quit and reopen Redunar. If you cancel, you can reopen the installer from Settings.".into(),
+        message: "The installer finished, but Redunar could not confirm the new package version. Check again or retry installation.".into(),
+    }
+}
+
+fn install_retry(message: String) -> UpdateInstallStatus {
+    UpdateInstallStatus {
+        state: "available".into(),
+        message,
     }
 }
 
@@ -441,14 +494,31 @@ fn update_cache_directory() -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-fn persist_verified_package(
+fn persist_verified_release(
     source: &Path,
+    version_source: &Path,
+    manifest_source: &Path,
+    signature_source: &Path,
     package: PackageTarget,
     version: &str,
     digest: &str,
 ) -> Result<(), String> {
     let directory = update_cache_directory()?;
+    for (name, source) in [
+        ("VERSION", version_source),
+        ("SHA256SUMS", manifest_source),
+        ("SHA256SUMS.sig", signature_source),
+    ] {
+        let destination = signed_metadata_path(&directory, name, digest);
+        let temporary = directory.join(format!(".{name}.{digest}.download"));
+        fs::copy(source, &temporary).map_err(|error| error.to_string())?;
+        fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+    }
     persist_verified_package_in_directory(&directory, source, package, version, digest)
+}
+
+fn signed_metadata_path(directory: &Path, name: &str, digest: &str) -> PathBuf {
+    directory.join(format!("{name}.{digest}"))
 }
 
 fn persist_verified_package_in_directory(
@@ -458,9 +528,10 @@ fn persist_verified_package_in_directory(
     version: &str,
     digest: &str,
 ) -> Result<(), String> {
-    let previous = read_pending_update_in_directory(directory)
-        .ok()
-        .map(|pending| pending_package_path(directory, &pending));
+    let previous_update = read_pending_update_in_directory(directory).ok();
+    let previous = previous_update
+        .as_ref()
+        .map(|pending| pending_package_path(directory, pending));
     let destination = versioned_package_path(directory, package.asset_name, digest);
     let temporary = directory.join(format!(".{}.{}.download", package.asset_name, digest));
     let destination_preexisted = destination.exists();
@@ -488,12 +559,24 @@ fn persist_verified_package_in_directory(
     }
     if let Some(previous) = previous.filter(|path| path != &destination) {
         let _ = fs::remove_file(previous);
+        if let Some(old_digest) = previous_update
+            .map(|pending| pending.digest)
+            .filter(|old| old != digest)
+        {
+            remove_signed_metadata(directory, &old_digest);
+        }
     }
     Ok(())
 }
 
 fn versioned_package_path(directory: &Path, asset_name: &str, digest: &str) -> PathBuf {
     directory.join(format!("{asset_name}.{digest}"))
+}
+
+fn remove_signed_metadata(directory: &Path, digest: &str) {
+    for name in ["VERSION", "SHA256SUMS", "SHA256SUMS.sig"] {
+        let _ = fs::remove_file(signed_metadata_path(directory, name, digest));
+    }
 }
 
 // Old pending metadata pointed at the unsuffixed asset. Preserve that reader
@@ -587,6 +670,7 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
     let package_path = pending_package_path(&directory, &pending);
     if !is_newer_version(&pending.version, current_version) {
         let _ = fs::remove_file(package_path);
+        remove_signed_metadata(&directory, &pending.digest);
         let _ = fs::remove_file(directory.join(PENDING_UPDATE_FILE));
         return Some(UpdateCheckStatus {
             current_version: current_version.to_owned(),
@@ -599,6 +683,7 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
     }
     if verify_checksum(&package_path, &pending.digest).is_err() {
         let _ = fs::remove_file(package_path);
+        remove_signed_metadata(&directory, &pending.digest);
         let _ = fs::remove_file(directory.join(PENDING_UPDATE_FILE));
         return None;
     }
@@ -610,7 +695,7 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
         )
     } else if pending.state == "handoff" {
         format!(
-            "Redunar {} is not confirmed installed. Reopen the desktop installer if it was cancelled, or check again after it finishes.",
+            "Redunar {} is not confirmed installed. Retry installation or check again.",
             pending.version
         )
     } else {
@@ -641,12 +726,15 @@ fn package_version_at_least(pending: &PendingUpdate, installed: Option<&str>) ->
     installed.is_some_and(|version| !is_newer_version(&pending.version, version))
 }
 
-/// Read only the system package database. A desktop installer handoff is not
-/// proof of success, and an already-installed update must not be opened again.
+/// Read only the system package database. An installer exit is not proof of
+/// success, and an already-installed update must not be installed again.
 fn installed_package_version(kind: &str) -> Option<String> {
     let (program, arguments): (&str, &[&str]) = match kind {
         "rpm" => ("rpm", &["-q", "--qf", "%{VERSION}", "redunar-app"]),
-        "deb" => ("dpkg-query", &["-W", "-f=${Version}", "redunar-app"]),
+        "deb" => (
+            "dpkg-query",
+            &["-W", "-f=${Status}\t${Version}", "redunar-app"],
+        ),
         "arch" => ("pacman", &["-Q", "redunar-app"]),
         _ => return None,
     };
@@ -657,7 +745,14 @@ fn installed_package_version(kind: &str) -> Option<String> {
     if !output.status.success() || output.stdout.len() > 128 {
         return None;
     }
-    parse_installed_version(kind, std::str::from_utf8(&output.stdout).ok()?)
+    let result = std::str::from_utf8(&output.stdout).ok()?;
+    let version = if kind == "deb" {
+        let (status, version) = result.split_once('\t')?;
+        (status == "install ok installed").then_some(version)?
+    } else {
+        result
+    };
+    parse_installed_version(kind, version)
 }
 
 fn parse_installed_version(kind: &str, output: &str) -> Option<String> {
@@ -944,8 +1039,8 @@ mod tests {
         check_source_with, hold_pending, install_verified_update, is_newer_version, package_target,
         parse_installed_version, parse_manifest, parse_pending_update, pending_package_path,
         persist_verified_package_in_directory, read_pending_update_in_directory,
-        retain_if_latest_not_newer, retained_or_error, select_package, valid_version,
-        verified_release_version, verify_checksum, verify_signature_with_key,
+        retain_if_latest_not_newer, retained_or_error, select_package, signed_metadata_path,
+        valid_version, verified_release_version, verify_checksum, verify_signature_with_key,
         write_pending_update_in_directory, PackageTarget, PendingUpdate, UpdateCheckStatus,
     };
     use sha2::{Digest, Sha256};
@@ -1399,9 +1494,17 @@ mod tests {
             asset_name: target.asset_name.into(),
             digest,
         };
-        std::fs::write(directory.join(target.asset_name), bytes).expect("legacy cached package");
+        let versioned = directory.join(format!("{}.{}", target.asset_name, pending.digest));
+        std::fs::write(&versioned, bytes).expect("cached package");
+        for name in ["VERSION", "SHA256SUMS", "SHA256SUMS.sig"] {
+            std::fs::write(
+                signed_metadata_path(&directory, name, &pending.digest),
+                b"fixture",
+            )
+            .expect("cached signed metadata");
+        }
         write_pending_update_in_directory(&directory, &pending).expect("pending metadata");
-        let opener = Path::new("/usr/bin/xdg-open");
+        let helper = Path::new("/usr/libexec/redunar-update-helper");
         let mut launches = 0;
         for _ in 0..2 {
             let current = read_pending_update_in_directory(&directory).expect("pending update");
@@ -1411,11 +1514,11 @@ mod tests {
                 target,
                 "0.1.3",
                 Some("0.1.3"),
-                Some(opener),
+                Some(helper),
                 |_, path| {
-                    assert_eq!(path, directory.join(target.asset_name));
+                    assert_eq!(path, directory);
                     launches += 1;
-                    Ok(())
+                    Ok(None)
                 },
             );
             assert_eq!(status.state, "handoff");
@@ -1427,20 +1530,17 @@ mod tests {
             );
         }
         assert_eq!(launches, 2);
-        let versioned = directory.join(format!("{}.{}", target.asset_name, pending.digest));
-        std::fs::rename(directory.join(target.asset_name), &versioned)
-            .expect("move legacy cache to digest-named cache");
         let versioned_handoff = install_verified_update(
             &directory,
             pending.clone(),
             target,
             "0.1.3",
             Some("0.1.3"),
-            Some(opener),
+            Some(helper),
             |_, path| {
-                assert_eq!(path, versioned);
+                assert_eq!(path, directory);
                 launches += 1;
-                Ok(())
+                Ok(None)
             },
         );
         assert_eq!(versioned_handoff.state, "handoff");
@@ -1451,7 +1551,7 @@ mod tests {
             target,
             "0.1.3",
             Some("0.1.4"),
-            Some(opener),
+            Some(helper),
             |_, _| panic!("installed update must not reopen the package installer"),
         );
         assert_eq!(installed.state, "restart-needed");
@@ -1463,10 +1563,10 @@ mod tests {
             target,
             "0.1.3",
             Some("0.1.3"),
-            Some(opener),
-            |_, _| Err("desktop opener failed".into()),
+            Some(helper),
+            |_, _| Err("authorization cancelled".into()),
         );
-        assert_eq!(failed.state, "error");
+        assert_eq!(failed.state, "available");
         assert_eq!(
             read_pending_update_in_directory(&directory).expect("restored metadata"),
             pending
@@ -1478,7 +1578,7 @@ mod tests {
             target,
             "0.1.3",
             Some("0.1.4"),
-            Some(opener),
+            Some(helper),
             |_, _| panic!("tampered package must not open the installer"),
         );
         assert_eq!(tampered.state, "error");

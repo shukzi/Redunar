@@ -4,6 +4,31 @@ Current Tauri and shared-backend checks, reviewed September 24, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## September 25, 2026 v0.1.7 release preparation
+
+The uncommitted v0.1.7 source passed the release-input check, root and Tauri
+offline Cargo checks, Tauri strict Clippy, frontend production build, JavaScript
+syntax check, Python and shell syntax checks, AppStream validation, license
+inventory check, and local Fedora, Debian, Arch, openSUSE, and portable package
+builds. The offline Debian 12 release build passed the glibc 2.36 ceiling; its
+`redunar-update-helper` SHA-256 is
+`59038f2c6edd04635e6db5909e9909747761a9977eca8fad2d500afbd5079486`.
+No automated test suites or live polkit upgrade were run for this preparation.
+The publication workflow will sign and upload the official release assets.
+
+## September 25, 2026 local polkit updater implementation
+
+The uncommitted source tree built with `output/tauri-redunar/build-native.py`;
+the resulting update helper SHA-256 is
+`6d41c73975bc8ae1ac33542bb7b55f30531b7837db98975024e75d8a3464cf06`.
+The Tauri `cargo check --offline --all-targets`, strict Clippy, frontend
+production build, JavaScript syntax check, package staging, and local Fedora,
+Debian, and openSUSE package builds passed. The rebuilt Settings page was
+visually inspected in a local browser preview, where native controls are
+disabled. No automated tests, installed-app upgrade, or live polkit/package
+manager transaction were run; Arch packaging and other-distro runtime behavior
+remain unverified on this host.
+
 ## September 25, 2026 v0.1.6 release preparation
 
 For v0.1.6 release preparation on September 25, source based on `cfa387b`

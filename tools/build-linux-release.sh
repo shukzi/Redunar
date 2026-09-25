@@ -50,6 +50,7 @@ artifacts=(
   "$release_root/redunar-tauri"
   "$release_root/redunar-steam-launch"
   "$release_root/redunar-hotkey-helper"
+  "$release_root/redunar-update-helper"
   "$release_root/libredunar_capture_vulkan.so"
   "$release_root/libredunar_capture_opengl.so"
 )

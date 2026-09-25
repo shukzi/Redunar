@@ -23,6 +23,7 @@ required_artifacts=(
   "$release_root/libredunar_capture_vulkan.so"
   "$release_root/libredunar_capture_opengl.so"
   "$release_root/redunar-hotkey-helper"
+  "$release_root/redunar-update-helper"
 )
 for artifact in "${required_artifacts[@]}"; do
   if [[ ! -f "$artifact" ]]; then
@@ -34,6 +35,7 @@ done
 install -d -m 0755 \
   "$destination/usr/bin" \
   "$destination/usr/libexec" \
+  "$destination/usr/share/polkit-1/actions" \
   "$destination/usr/share/applications" \
   "$destination/usr/share/metainfo" \
   "$destination/usr/lib/udev/rules.d" \
@@ -57,6 +59,10 @@ install -m 0755 "$release_root/libredunar_capture_opengl.so" \
   "$destination/usr/bin/libredunar_capture_opengl.so"
 install -m 0755 "$release_root/redunar-hotkey-helper" \
   "$destination/usr/libexec/redunar-hotkey-helper"
+install -m 0755 "$release_root/redunar-update-helper" \
+  "$destination/usr/libexec/redunar-update-helper"
+install -m 0644 packaging/com.redunar.install-update.policy \
+  "$destination/usr/share/polkit-1/actions/com.redunar.install-update.policy"
 
 install -m 0644 packaging/com.redunar.Redunar.desktop \
   "$destination/usr/share/applications/com.redunar.Redunar.desktop"
@@ -88,13 +94,14 @@ install -m 0644 "$native_root/licenses/libc/LICENSE-APACHE" "$destination/usr/sh
 install -m 0644 "$native_root/licenses/tauri-api/LICENSE-MIT" "$destination/usr/share/doc/redunar/LICENSE-Tauri-API-MIT.txt"
 install -m 0644 "$native_root/licenses/tauri-api/LICENSE-APACHE-2.0" "$destination/usr/share/doc/redunar/LICENSE-Tauri-API-APACHE-2.0.txt"
 
-helper="$destination/usr/libexec/redunar-hotkey-helper"
-if [[ "$(stat -c '%a' "$helper")" != "755" ]]; then
-  printf '%s\n' 'staged Tauri shortcut helper must have mode 0755' >&2
-  exit 1
-fi
-if [[ -u "$helper" || -g "$helper" ]]; then
-  printf '%s\n' 'staged Tauri shortcut helper must not have setuid or setgid bits' >&2
-  exit 1
-fi
+for helper in "$destination/usr/libexec/redunar-hotkey-helper" "$destination/usr/libexec/redunar-update-helper"; do
+  if [[ "$(stat -c '%a' "$helper")" != "755" ]]; then
+    printf 'staged Tauri helper must have mode 0755: %s\n' "$helper" >&2
+    exit 1
+  fi
+  if [[ -u "$helper" || -g "$helper" ]]; then
+    printf 'staged Tauri helper must not have setuid or setgid bits: %s\n' "$helper" >&2
+    exit 1
+  fi
+done
 printf 'Staged Tauri Redunar package root at %s\n' "$destination"

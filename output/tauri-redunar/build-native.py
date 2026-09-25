@@ -56,4 +56,4 @@ for name in ("libredunar_capture_vulkan.so", "libredunar_capture_opengl.so", "re
     os.replace(temporary, destination / name)
     hashes[name] = hashlib.sha256(source.read_bytes()).hexdigest()
 (destination / "capture-components.json").write_text(json.dumps(hashes, indent=2) + "\n")
-print("Built Tauri with its local capture libraries, Steam wrapper, and shortcut helper.")
+print("Built Tauri with its capture libraries, Steam wrapper, shortcut helper, and update helper.")

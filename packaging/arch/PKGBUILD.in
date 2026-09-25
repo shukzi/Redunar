@@ -12,6 +12,8 @@ depends=(
   'libdrm'
   'libpulse'
   'opus'
+  'openssl'
+  'polkit'
   'pulse-native-provider'
   'systemd'
   'webkit2gtk-4.1'

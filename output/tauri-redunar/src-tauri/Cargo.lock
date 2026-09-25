@@ -2451,11 +2451,11 @@ dependencies = [
 
 [[package]]
 name = "redunar-capture"
-version = "0.1.6"
+version = "0.1.7"
 
 [[package]]
 name = "redunar-capture-audio"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "nix",
@@ -2463,14 +2463,14 @@ dependencies = [
 
 [[package]]
 name = "redunar-capture-kms"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "redunar-core",
 ]
 
 [[package]]
 name = "redunar-capture-vulkan"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "nix",
  "redunar-capture",
@@ -2479,11 +2479,11 @@ dependencies = [
 
 [[package]]
 name = "redunar-core"
-version = "0.1.6"
+version = "0.1.7"
 
 [[package]]
 name = "redunar-daemon"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "nix",
@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "redunar-nvidia-nvml"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "redunar-core",
@@ -2505,7 +2505,7 @@ dependencies = [
 
 [[package]]
 name = "redunar-platform"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "nix",
@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "redunar-tauri"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "gtk",
  "libc",

@@ -59,6 +59,16 @@ if [[ "$helper_record" != "/usr/libexec/redunar-hotkey-helper -rwxr-xr-x" ]]; th
   printf 'unexpected Tauri shortcut helper mode in RPM: %s\n' "$helper_record" >&2
   exit 1
 fi
+update_helper_record=$(rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms}\n]' "$rpm_path" \
+  | awk '$1 == "/usr/libexec/redunar-update-helper" { print $1, $2 }')
+if [[ "$update_helper_record" != "/usr/libexec/redunar-update-helper -rwxr-xr-x" ]]; then
+  printf 'unexpected Tauri update helper mode in RPM: %s\n' "$update_helper_record" >&2
+  exit 1
+fi
+if ! rpm -qlp "$rpm_path" | grep -Fxq '/usr/share/polkit-1/actions/com.redunar.install-update.policy'; then
+  printf '%s\n' 'local Tauri Redunar RPM must install the fixed update policy' >&2
+  exit 1
+fi
 if rpm -qlp "$rpm_path" | grep -Eq '/redunar-kms-helper$|/gg\.redunar\.replay-capture\.policy$'; then
   printf '%s\n' 'local Tauri Redunar RPM must not contain a privileged Replay capture path' >&2
   exit 1

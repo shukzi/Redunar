@@ -67,23 +67,27 @@ Use [DESIGN.md](DESIGN.md) for component styling and
 
 The native updater verifies a signed release manifest, including the version
 file and selected package checksum, before retaining a package in private cache.
-Cache replacements use digest-named files and commit the pending metadata last,
-so a failed refresh leaves the previous verified package usable. Existing
+Cache replacements use digest-named package and signed metadata files, and
+commit the pending metadata last, so a failed refresh leaves the previous
+verified package usable. Existing
 unsuffixed cached packages remain readable until replaced or consumed.
-Automatic checks preserve a pending installer handoff. An explicit manual check
+Automatic checks preserve an interrupted installation. An explicit manual check
 refreshes the signed channel and can supersede a cached package only with a
 newer verified release; a channel failure retains the verified cached package.
 Repository-root `tools/write-release-version.sh` and
 `tools/sign-release-assets.sh` create and sign the release metadata.
-Settings only requests checks or a fixed package-installer handoff. The native
-host queries the system package database read-only to distinguish an unfinished
-handoff from an installed package that still needs an app restart; it never
-lets the webview choose a package path or run a package-manager command.
+Settings only requests checks or installation. The native host invokes a fixed
+polkit helper; the helper snapshots cached inputs into a root-owned temporary
+directory and verifies the signed manifest, version, and package checksum
+before calling the distro's package manager with fixed arguments. The webview
+cannot choose a package path or command. The host queries the package database
+read-only to distinguish an interrupted update from a completed install that
+still needs an app restart.
 The Tauri backend creates a read-only service for a secondary process when
 another Redunar owns the login-session Replay socket. That secondary service
 does not start a competing Replay control listener. Update checking and
-installer handoff also require primary write access because they mutate the
-shared update cache. The secondary GTK application is non-unique, so launching
+installation also require primary write access because they mutate the shared
+update cache. The secondary GTK application is non-unique, so launching
 it cannot reactivate the primary Tauri event loop and
 repeat the primary webview setup. The primary retains the installed desktop
 application ID.

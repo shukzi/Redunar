@@ -47,6 +47,11 @@ check_component steam-wrapper \
   "$payload_root/usr/bin/redunar-steam-launch" /usr/bin/redunar-steam-launch || status=1
 check_component shortcut-helper \
   "$payload_root/usr/libexec/redunar-hotkey-helper" /usr/libexec/redunar-hotkey-helper || status=1
+check_component update-helper \
+  "$payload_root/usr/libexec/redunar-update-helper" /usr/libexec/redunar-update-helper || status=1
+check_component update-policy \
+  "$payload_root/usr/share/polkit-1/actions/com.redunar.install-update.policy" \
+  /usr/share/polkit-1/actions/com.redunar.install-update.policy || status=1
 check_component desktop-entry \
   "$payload_root/usr/share/applications/com.redunar.Redunar.desktop" \
   /usr/share/applications/com.redunar.Redunar.desktop || status=1

@@ -110,9 +110,11 @@ version can replace that pending package; an unavailable channel leaves the
 verified cached package available with an honest status.
 When a startup check finds an update, direct the user to Settings to install it;
 keep package-verification details in the Settings status. Installation always
-requires a clear user action and remains native-owned. Opening the system
-package installer is a handoff, not proof of installation; Settings must allow
-the user to reopen it after cancellation and say when a restart is needed.
+requires a clear user action and remains native-owned. Update now requests
+system authorization through polkit and installs the signed package through
+the system package manager. Cancellation keeps the verified package ready to
+retry. Settings reports completion only after the installed package version
+is confirmed and says when a restart is needed.
 Close to tray immediately controls tray icon visibility and closing behavior.
 Keep this page limited to current user-configurable behavior and runtime
 diagnostics.

@@ -82,6 +82,8 @@ test -x "$staging_root/usr/bin/redunar-steam-launch"
 test -f "$staging_root/usr/bin/libredunar_capture_vulkan.so"
 test -f "$staging_root/usr/bin/libredunar_capture_opengl.so"
 test -x "$staging_root/usr/libexec/redunar-hotkey-helper"
+test -x "$staging_root/usr/libexec/redunar-update-helper"
+test -f "$staging_root/usr/share/polkit-1/actions/com.redunar.install-update.policy"
 test -f "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
 grep -Fq 'ENV{ID_INPUT_KEYBOARD}=="1"' "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
 grep -Fq 'ENV{ID_INPUT_MOUSE}=="1"' "$staging_root/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
@@ -95,8 +97,10 @@ test -f "$staging_root/usr/share/metainfo/com.redunar.Redunar.metainfo.xml"
 test -f "$staging_root/usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg"
 test ! -u "$staging_root/usr/libexec/redunar-hotkey-helper"
 test ! -g "$staging_root/usr/libexec/redunar-hotkey-helper"
+test ! -u "$staging_root/usr/libexec/redunar-update-helper"
+test ! -g "$staging_root/usr/libexec/redunar-update-helper"
 test ! -e "$staging_root/usr/libexec/redunar-kms-helper"
-! rg -Fq 'Command::new("pkexec")' output/tauri-redunar/src-tauri/src
+rg -Fq 'Command::new(pkexec)' output/tauri-redunar/src-tauri/src/updates.rs
 ! rg -Fq 'restricted helper was not authorized' output/tauri-redunar/src-tauri/src output/tauri-redunar/ui/app.js
 rg -Fq 'RedunarService::for_tauri()' output/tauri-redunar/src-tauri/src/backend.rs
 

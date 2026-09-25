@@ -28,6 +28,8 @@ for required_path in \
   usr/bin/libredunar_capture_vulkan.so \
   usr/bin/libredunar_capture_opengl.so \
   usr/libexec/redunar-hotkey-helper \
+  usr/libexec/redunar-update-helper \
+  usr/share/polkit-1/actions/com.redunar.install-update.policy \
   usr/lib/udev/rules.d/70-redunar-hotkeys.rules
 do
   if ! grep -Fxq "$required_path" <<<"$archive_listing"; then
