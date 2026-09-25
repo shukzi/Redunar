@@ -4,6 +4,21 @@ Current Tauri and shared-backend checks, reviewed September 24, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## September 25, 2026 v0.1.6 release preparation
+
+For v0.1.6 release preparation on September 25, source based on `cfa387b`
+plus the Settings redesign and version bump passed `npm run build`,
+`node --check output/tauri-redunar/ui/app.js`,
+`tools/check-release-inputs.sh v0.1.6`, AppStream validation, and the offline
+Debian 12/glibc 2.36 release build. The Settings page was visually inspected
+in the local browser preview; its controls are disabled there because the
+native backend is absent. A local Fedora RPM was built as
+`0.1.6-1.local.fc44`, SHA-256
+`c0dc0f7b4baf3dce24c858dcbccd7bdce6d8a9178aec408baace70fb5cb3f340`.
+No automated tests, installed-app run, or signed publication were performed
+for this preparation; the GitHub release workflow remains responsible for
+building and signing published packages.
+
 ## September 25, 2026 NVIDIA beta implementation check
 
 Build `0.1.4` from `117aef7` plus the uncommitted Beta access and NVIDIA

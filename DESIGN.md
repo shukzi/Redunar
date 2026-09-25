@@ -101,6 +101,9 @@ cleared.
 Settings contains the current application preferences, including Close to tray
 and software updates. Automatic update checks default on; the user can disable
 them or request a manual check. Automatic checks do not install packages.
+Close to tray, Beta access, and Debug log share one Preferences card with
+consistent switch rows; software update controls remain together beside it or
+below it when space is narrow.
 When a verified update package is already cached, an automatic check keeps it
 available. A manual check refreshes the signed release channel so a newer
 version can replace that pending package; an unavailable channel leaves the

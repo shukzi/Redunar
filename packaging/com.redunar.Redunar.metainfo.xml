@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.6" date="2026-09-25">
+      <description>
+        <p>Refreshes Settings by grouping Close to tray, Beta access, and Debug log in one Preferences card, with updated switches and shorter descriptions.</p>
+      </description>
+    </release>
     <release version="0.1.5" date="2026-09-25">
       <description>
         <p>Refines the in-game metrics overlay and Replay menu. Adds opt-in Beta access for experimental NVIDIA GPU metrics and a single-GPU Vulkan Video Replay candidate. NVIDIA hardware has not yet been verified.</p>
