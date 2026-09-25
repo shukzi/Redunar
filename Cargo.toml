@@ -10,6 +10,7 @@ members = [
     "crates/redunar-platform",
     "crates/redunar-daemon",
     "crates/redunar-hotkeys",
+    "crates/redunar-nvidia-nvml",
 ]
 
 [workspace.package]

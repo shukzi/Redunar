@@ -1,4 +1,5 @@
 use redunar_core::{CpuSnapshot, GpuSnapshot, HardwareProbe, ProbeError, SystemSnapshot};
+use redunar_nvidia_nvml::{NvidiaNvml, is_nvidia};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub struct LinuxHardwareProbe {
     proc_root: PathBuf,
     sys_root: PathBuf,
+    allow_nvidia_beta: bool,
 }
 
 /// Stateful aggregate CPU utilization sampler backed by `/proc/stat`.
@@ -22,13 +24,14 @@ pub struct LinuxCpuUtilizationSampler {
 ///
 /// `sample` does not enumerate `/sys`: it clones the stable hardware identity
 /// captured at construction and refreshes values through cached exact paths.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LinuxTelemetrySampler {
     snapshot: SystemSnapshot,
     memory_path: PathBuf,
     cpu_utilization: LinuxCpuUtilizationSampler,
     cpu_paths: CpuTelemetryPaths,
     gpu_paths: Vec<GpuTelemetryPaths>,
+    nvidia_nvml: Option<NvidiaNvml>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,10 +120,28 @@ impl LinuxTelemetrySampler {
         proc_root: impl Into<PathBuf>,
         sys_root: impl Into<PathBuf>,
     ) -> Result<Self, ProbeError> {
+        Self::with_nvidia_beta(proc_root, sys_root, false)
+    }
+
+    /// Discover NVIDIA identity and optional driver telemetry only for an
+    /// explicit beta session. Missing NVML never hides CPU or AMD readings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ProbeError`] when required CPU identity is unavailable.
+    pub fn with_nvidia_beta(
+        proc_root: impl Into<PathBuf>,
+        sys_root: impl Into<PathBuf>,
+        allow_nvidia_beta: bool,
+    ) -> Result<Self, ProbeError> {
         let proc_root = proc_root.into();
         let sys_root = sys_root.into();
-        let probe = LinuxHardwareProbe::new(&proc_root, &sys_root);
-        let snapshot = probe.snapshot()?;
+        let probe = LinuxHardwareProbe::new(&proc_root, &sys_root)
+            .with_nvidia_beta_enabled(allow_nvidia_beta);
+        let mut snapshot = probe.snapshot()?;
+        let nvidia_nvml = allow_nvidia_beta
+            .then(|| NvidiaNvml::open(&sys_root, &mut snapshot.gpus))
+            .flatten();
         let cpufreq = sys_root.join("devices/system/cpu/cpu0/cpufreq");
         let cpu_paths = CpuTelemetryPaths {
             temperature: find_cpu_temperature_path(&sys_root),
@@ -139,6 +160,7 @@ impl LinuxTelemetrySampler {
             cpu_utilization: LinuxCpuUtilizationSampler::new(proc_root),
             cpu_paths,
             gpu_paths,
+            nvidia_nvml,
         })
     }
 
@@ -157,7 +179,13 @@ impl LinuxTelemetrySampler {
         snapshot.cpu.energy_performance_preference =
             read_trimmed(&self.cpu_paths.energy_performance_preference);
 
-        for (gpu, paths) in snapshot.gpus.iter_mut().zip(&self.gpu_paths) {
+        for (index, (gpu, paths)) in snapshot.gpus.iter_mut().zip(&self.gpu_paths).enumerate() {
+            if is_nvidia(gpu) {
+                if let Some(nvml) = &self.nvidia_nvml {
+                    nvml.sample(index, gpu);
+                }
+                continue;
+            }
             gpu.temperature_celsius = paths.temperature.as_ref().and_then(read_millivalue);
             gpu.utilization_percent = read_number(&paths.utilization);
             gpu.clock_mhz = paths
@@ -191,7 +219,16 @@ impl LinuxHardwareProbe {
         Self {
             proc_root: proc_root.into(),
             sys_root: sys_root.into(),
+            allow_nvidia_beta: false,
         }
+    }
+
+    /// Include NVIDIA GPU identity only when Beta access was enabled before
+    /// this native service started.
+    #[must_use]
+    pub fn with_nvidia_beta_enabled(mut self, enabled: bool) -> Self {
+        self.allow_nvidia_beta = enabled;
+        self
     }
 
     fn cpu_snapshot(&self) -> Result<CpuSnapshot, ProbeError> {
@@ -231,14 +268,26 @@ impl LinuxHardwareProbe {
 
     fn gpu_snapshots(&self) -> Vec<GpuSnapshot> {
         let drm_root = self.sys_root.join("class/drm");
-        sorted_directories(&drm_root)
+        let cards: Vec<_> = sorted_directories(&drm_root)
             .into_iter()
             .filter(|directory| is_drm_card(directory))
-            .filter_map(|card_path| Self::gpu_snapshot(&card_path))
+            .collect();
+        // Until a launched game's render device is tied to a PCI address,
+        // showing one card's numbers on a hybrid machine would mislabel them.
+        let has_nvidia = cards.iter().any(|card| {
+            read_trimmed(card.join("device/vendor"))
+                .is_some_and(|vendor| vendor.trim_start_matches("0x").eq_ignore_ascii_case("10de"))
+        });
+        if self.allow_nvidia_beta && has_nvidia && cards.len() != 1 {
+            return Vec::new();
+        }
+        cards
+            .into_iter()
+            .filter_map(|card_path| Self::gpu_snapshot(&card_path, self.allow_nvidia_beta))
             .collect()
     }
 
-    fn gpu_snapshot(card_path: &Path) -> Option<GpuSnapshot> {
+    fn gpu_snapshot(card_path: &Path, allow_nvidia_beta: bool) -> Option<GpuSnapshot> {
         let card = card_path.file_name()?.to_str()?.to_owned();
         let device = card_path.join("device");
         let vendor_id = read_trimmed(device.join("vendor"))?;
@@ -246,7 +295,10 @@ impl LinuxHardwareProbe {
         let subsystem_vendor_id = read_trimmed(device.join("subsystem_vendor"));
         let subsystem_device_id = read_trimmed(device.join("subsystem_device"));
 
-        if !is_supported_gpu_vendor(&vendor_id) {
+        let nvidia = vendor_id
+            .trim_start_matches("0x")
+            .eq_ignore_ascii_case("10de");
+        if !(is_supported_gpu_vendor(&vendor_id) || allow_nvidia_beta && nvidia) {
             return None;
         }
 
@@ -279,24 +331,39 @@ impl LinuxHardwareProbe {
             .and_then(|directory| read_number(directory.join("power1_average")))
             .map(|value| value / 1_000_000.0);
 
-        let model = gpu_model(
-            device_id.as_deref(),
-            subsystem_vendor_id.as_deref(),
-            subsystem_device_id.as_deref(),
-        );
+        let model = if nvidia {
+            device_id.as_ref().map_or_else(
+                || "NVIDIA GPU".to_owned(),
+                |id| format!("NVIDIA GPU ({id})"),
+            )
+        } else {
+            gpu_model(
+                device_id.as_deref(),
+                subsystem_vendor_id.as_deref(),
+                subsystem_device_id.as_deref(),
+            )
+        };
         Some(GpuSnapshot {
             card,
             vendor_id,
             model,
             device_id,
             driver,
-            temperature_celsius,
-            utilization_percent: read_number(device.join("gpu_busy_percent")),
-            clock_mhz,
-            vram_used_bytes: read_u64(device.join("mem_info_vram_used")),
-            vram_total_bytes: read_u64(device.join("mem_info_vram_total")),
-            power_watts,
-            performance_level: read_trimmed(device.join("power_dpm_force_performance_level")),
+            temperature_celsius: (!nvidia).then_some(temperature_celsius).flatten(),
+            utilization_percent: (!nvidia)
+                .then(|| read_number(device.join("gpu_busy_percent")))
+                .flatten(),
+            clock_mhz: (!nvidia).then_some(clock_mhz).flatten(),
+            vram_used_bytes: (!nvidia)
+                .then(|| read_u64(device.join("mem_info_vram_used")))
+                .flatten(),
+            vram_total_bytes: (!nvidia)
+                .then(|| read_u64(device.join("mem_info_vram_total")))
+                .flatten(),
+            power_watts: (!nvidia).then_some(power_watts).flatten(),
+            performance_level: (!nvidia)
+                .then(|| read_trimmed(device.join("power_dpm_force_performance_level")))
+                .flatten(),
         })
     }
 }

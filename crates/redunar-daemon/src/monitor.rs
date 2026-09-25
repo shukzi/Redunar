@@ -135,11 +135,11 @@ impl fmt::Debug for MonitorHandle {
 }
 
 impl MonitorHandle {
-    pub(crate) fn start(config: MonitorConfig) -> Self {
+    pub(crate) fn start(config: MonitorConfig, allow_nvidia_beta: bool) -> Self {
         Self::start_worker(
             config,
-            Box::new(|| {
-                LinuxTelemetrySampler::new("/proc", "/sys")
+            Box::new(move || {
+                LinuxTelemetrySampler::with_nvidia_beta("/proc", "/sys", allow_nvidia_beta)
                     .map(|sampler| Box::new(sampler) as Box<dyn TelemetrySource>)
                     .map_err(|error| error.to_string())
             }),

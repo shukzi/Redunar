@@ -88,9 +88,20 @@ const REPLAY_MENU_FORMAT_WIDTH: u32 = 180;
 const REPLAY_MENU_FORMAT_HEIGHT: u32 = 46;
 const REPLAY_MENU_CORNER_RADIUS: u8 = 12;
 const REPLAY_MENU_CONTROL_RADIUS: u32 = 6;
+/// Panel shader palette slot for the Replay menu's near-black surface. The
+/// eight metric palettes keep slots 0..=7; the menu never follows them.
+const MENU_PANEL_PALETTE: u32 = 8;
+/// The Replay menu's near-black surface and selected-control fill, converted
+/// from the approved reference surface (#090909 and #21090b).
+#[cfg(test)]
+const MENU_PANEL_COLOR: [f32; 4] = [0.003, 0.003, 0.003, 1.0];
+const MENU_SELECTED_FILL: [f32; 4] = [0.015, 0.003, 0.003, 1.0];
 const METRIC_PANEL_RADIUS: u8 = 4;
 const RIBBON_BRAND_WIDTH: u32 = 94;
 const RIBBON_METRIC_WIDTH: u32 = 89;
+/// Ribbon labels use a tighter advance than the fixed 9 px cell so the
+/// longest label stays clear of the next cell divider.
+const RIBBON_LABEL_ADVANCE: i32 = 8;
 const RIBBON_HEIGHT: u32 = 44;
 const TELEMETRY_WIDTH: u32 = 300;
 const TELEMETRY_ROW_HEIGHT: u32 = 24;
@@ -175,7 +186,7 @@ struct AlignedShader<const N: usize>([u8; N]);
 
 static PANEL_VERTEX_SHADER: AlignedShader<1164> =
     AlignedShader(*include_bytes!("shaders/panel.vert.spv"));
-static PANEL_FRAGMENT_SHADER: AlignedShader<3972> =
+static PANEL_FRAGMENT_SHADER: AlignedShader<4652> =
     AlignedShader(*include_bytes!("shaders/panel.frag.spv"));
 static GLYPH_VERTEX_SHADER: AlignedShader<1448> =
     AlignedShader(*include_bytes!("shaders/glyph.vert.spv"));
@@ -448,7 +459,7 @@ impl PanelPushConstants {
         clippy::cast_precision_loss,
         reason = "bounded swapchain panel coordinates are exactly representable as Vulkan push-constant floats"
     )]
-    fn from_rect(rect: VkRect2d, radius: u32, palette: OverlayPalette) -> Self {
+    fn from_rect(rect: VkRect2d, radius: u32, palette: u32) -> Self {
         Self {
             bounds: [
                 rect.offset.x as f32,
@@ -457,7 +468,7 @@ impl PanelPushConstants {
                 rect.extent.height as f32,
             ],
             radius: radius as f32,
-            palette: palette.code(),
+            palette,
         }
     }
 }
@@ -513,6 +524,9 @@ impl GlyphBatch {
 struct OverlayPlan {
     panel: Option<VkClearRect>,
     panel_radius: u8,
+    /// Panel shader palette index. The Replay menu uses its own near-black
+    /// surface (index 8) instead of a metric palette panel.
+    panel_palette: u32,
     logo_base: RectBatch,
     logo_dark_red: RectBatch,
     accent: RectBatch,
@@ -524,6 +538,7 @@ struct OverlayPlan {
     accent_glyphs: GlyphBatch,
     muted_glyphs: GlyphBatch,
     text_glyphs: GlyphBatch,
+    highlight_glyphs: GlyphBatch,
     width: u32,
     height: u32,
     corner: OverlayCorner,
@@ -533,6 +548,7 @@ struct OverlayPlan {
     animation_progress: u16,
     dim_percent: u8,
     palette: OverlayPalette,
+    colors: OverlayColors,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -593,6 +609,7 @@ impl OverlayPlan {
         Self {
             panel: None,
             panel_radius: METRIC_PANEL_RADIUS,
+            panel_palette: OverlayPalette::Redunar.code(),
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -604,6 +621,7 @@ impl OverlayPlan {
             accent_glyphs: GlyphBatch::default(),
             muted_glyphs: GlyphBatch::default(),
             text_glyphs: GlyphBatch::default(),
+            highlight_glyphs: GlyphBatch::default(),
             width: 1,
             height: 1,
             corner: OverlayCorner::TopLeft,
@@ -613,6 +631,7 @@ impl OverlayPlan {
             animation_progress: 0,
             dim_percent: 0,
             palette: OverlayPalette::Redunar,
+            colors: OverlayPalette::Redunar.colors(),
         }
     }
 
@@ -629,6 +648,7 @@ impl OverlayPlan {
             && self.accent_glyphs.length == 0
             && self.muted_glyphs.length == 0
             && self.text_glyphs.length == 0
+            && self.highlight_glyphs.length == 0
     }
 
     #[expect(
@@ -647,6 +667,7 @@ impl OverlayPlan {
             return Self {
                 panel: None,
                 panel_radius: 0,
+                panel_palette: config.palette.code(),
                 logo_base: RectBatch::default(),
                 logo_dark_red: RectBatch::default(),
                 accent,
@@ -658,6 +679,7 @@ impl OverlayPlan {
                 accent_glyphs,
                 muted_glyphs: GlyphBatch::default(),
                 text_glyphs,
+                highlight_glyphs: GlyphBatch::default(),
                 width: FPS_ONLY_WIDTH,
                 height: overlay_font::GLYPH_HEIGHT.saturating_mul(2),
                 corner: config.corner,
@@ -667,6 +689,7 @@ impl OverlayPlan {
                 animation_progress: u16::MAX,
                 dim_percent: 0,
                 palette: config.palette,
+                colors: config.palette.colors(),
             };
         }
 
@@ -709,6 +732,7 @@ impl OverlayPlan {
         let mut plan = Self {
             panel: Some(clear_rect(0, 0, PANEL_WIDTH, panel_height)),
             panel_radius: METRIC_PANEL_RADIUS,
+            panel_palette: config.palette.code(),
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -720,6 +744,7 @@ impl OverlayPlan {
             accent_glyphs: GlyphBatch::default(),
             muted_glyphs: GlyphBatch::default(),
             text_glyphs: GlyphBatch::default(),
+            highlight_glyphs: GlyphBatch::default(),
             width: PANEL_WIDTH,
             height: panel_height,
             corner: config.corner,
@@ -729,6 +754,7 @@ impl OverlayPlan {
             animation_progress: u16::MAX,
             dim_percent: 0,
             palette: config.palette,
+            colors: config.palette.colors(),
         };
         plan.accent.push(0, 0, 3, panel_height);
         push_panel_grid(&mut plan.dividers, panel_height);
@@ -771,6 +797,7 @@ impl OverlayPlan {
         let mut plan = Self {
             panel: Some(clear_rect(0, 0, width, height)),
             panel_radius: METRIC_PANEL_RADIUS,
+            panel_palette: config.palette.code(),
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -782,6 +809,7 @@ impl OverlayPlan {
             accent_glyphs: GlyphBatch::default(),
             muted_glyphs: GlyphBatch::default(),
             text_glyphs: GlyphBatch::default(),
+            highlight_glyphs: GlyphBatch::default(),
             width,
             height,
             corner: config.corner,
@@ -791,6 +819,7 @@ impl OverlayPlan {
             animation_progress: u16::MAX,
             dim_percent: 0,
             palette: config.palette,
+            colors: config.palette.colors(),
         };
         plan.accent.push(0, 0, 3, height);
         plan
@@ -823,7 +852,7 @@ impl OverlayPlan {
                 + 8
                 + index * i32::try_from(RIBBON_METRIC_WIDTH).unwrap_or(89);
             plan.dividers.push(left - 8, 6, 1, RIBBON_HEIGHT - 12);
-            push_text(&mut plan.muted_glyphs, label, left, 6);
+            push_text_advance(&mut plan.muted_glyphs, label, left, 6, RIBBON_LABEL_ADVANCE);
             let value = metric_value(snapshot, bit);
             push_text(&mut plan.text_glyphs, value.as_bytes(), left, 22);
             index += 1;
@@ -880,6 +909,7 @@ impl OverlayPlan {
         let mut plan = Self {
             panel: Some(clear_rect(0, 0, REPLAY_MENU_WIDTH, REPLAY_MENU_HEIGHT)),
             panel_radius: REPLAY_MENU_CORNER_RADIUS,
+            panel_palette: MENU_PANEL_PALETTE,
             logo_base: RectBatch::default(),
             logo_dark_red: RectBatch::default(),
             accent: RectBatch::default(),
@@ -891,6 +921,7 @@ impl OverlayPlan {
             accent_glyphs: GlyphBatch::default(),
             muted_glyphs: GlyphBatch::default(),
             text_glyphs: GlyphBatch::default(),
+            highlight_glyphs: GlyphBatch::default(),
             width: REPLAY_MENU_WIDTH,
             height: REPLAY_MENU_HEIGHT,
             corner: OverlayCorner::TopLeft,
@@ -906,6 +937,7 @@ impl OverlayPlan {
             )
             .unwrap_or(45),
             palette: OverlayPalette::Redunar,
+            colors: OverlayColors::replay_menu(),
         };
         push_replay_menu_grid(&mut plan, menu);
         push_replay_menu_text(&mut plan, menu);
@@ -1115,7 +1147,7 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         (173, 346, b"QUALITY".as_slice()),
         (346, 520, b"BUFFER".as_slice()),
     ] {
-        push_text_centered(&mut plan.muted_glyphs, label, left, right, 13);
+        push_text_centered_tracked(&mut plan.muted_glyphs, label, left, right, 11);
     }
     let capture = match menu.capture_fps {
         30 => b"30 FPS".as_slice(),
@@ -1123,27 +1155,27 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         120 => b"120 FPS".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
-    push_ui_text_centered(&mut plan.text_glyphs, capture, 0, 173, 32, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, capture, 0, 173, 30, 2);
     let quality = match menu.quality {
         0 => b"EFFICIENT".as_slice(),
         1 => b"BALANCED".as_slice(),
         _ => b"HIGH".as_slice(),
     };
-    push_ui_text_centered(&mut plan.text_glyphs, quality, 173, 346, 32, 2);
-    push_ui_text_centered(&mut plan.text_glyphs, buffered.as_bytes(), 346, 520, 32, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, quality, 173, 346, 30, 2);
+    push_ui_text_centered(&mut plan.text_glyphs, buffered.as_bytes(), 346, 520, 30, 2);
 
-    push_ui_text_scaled(&mut plan.text_glyphs, b"Instant Replay", 24, 86, 2);
+    push_ui_text_scaled(&mut plan.text_glyphs, b"Instant Replay", 24, 77, 2);
     let durations: [&[u8]; 8] = [
         b"15 SEC", b"30 SEC", b"1 MIN", b"2 MIN", b"3 MIN", b"5 MIN", b"10 MIN", b"15 MIN",
     ];
     for (index, label) in durations.into_iter().enumerate() {
         let left = REPLAY_MENU_DURATION_X + i32::try_from(index % 4).unwrap_or(0) * 118;
         let right = left + 118;
-        let y = 140 + i32::try_from(index / 4).unwrap_or(0) * 42;
+        let y = 139 + i32::try_from(index / 4).unwrap_or(0) * 42;
         if index == usize::from(menu.selected_duration.min(7)) {
-            push_text_centered(&mut plan.accent_glyphs, label, left, right, y);
+            push_text_centered_tracked(&mut plan.highlight_glyphs, label, left, right, y);
         } else {
-            push_text_centered(&mut plan.text_glyphs, label, left, right, y);
+            push_text_centered_tracked(&mut plan.text_glyphs, label, left, right, y);
         }
     }
     let save_label = match menu.selected_duration.min(7) {
@@ -1156,20 +1188,20 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         6 => b"SAVE LAST 10 MIN".as_slice(),
         _ => b"SAVE LAST 15 MIN".as_slice(),
     };
-    push_ui_text_centered(
+    push_ui_text_centered_tracked(
         if menu.save_enabled {
-            &mut plan.text_glyphs
+            &mut plan.highlight_glyphs
         } else {
             &mut plan.muted_glyphs
         },
         save_label,
         REPLAY_MENU_SAVE_X,
         REPLAY_MENU_SAVE_X + i32::try_from(REPLAY_MENU_SAVE_WIDTH).unwrap_or(0),
-        238,
+        237,
         1,
     );
-    push_ui_text_centered(&mut plan.text_glyphs, b"MKV", 24, 114, 238, 1);
-    push_ui_text_centered(&mut plan.text_glyphs, b"MP4", 114, 204, 238, 1);
+    push_ui_text_centered_tracked(&mut plan.text_glyphs, b"MKV", 24, 114, 237, 1);
+    push_ui_text_centered_tracked(&mut plan.text_glyphs, b"MP4", 114, 204, 237, 1);
 }
 
 fn push_rounded_outline(
@@ -1441,65 +1473,65 @@ impl OverlayPalette {
     const fn colors(self) -> OverlayColors {
         match self {
             Self::Redunar => OverlayColors::new(
-                [0.91, 0.28, 0.31, 1.0],
-                [0.63, 0.63, 0.66, 1.0],
-                [0.95, 0.94, 0.93, 1.0],
-                [0.19, 0.19, 0.21, 1.0],
+                [0.807, 0.063, 0.078, 1.0],
+                [0.356, 0.356, 0.392, 1.0],
+                [0.888, 0.871, 0.847, 1.0],
+                [0.03, 0.03, 0.037, 1.0],
             ),
             Self::Glacier => OverlayColors::new(
-                [0.37, 0.78, 0.90, 1.0],
-                [0.62, 0.72, 0.75, 1.0],
-                [0.96, 0.98, 0.99, 1.0],
-                [0.16, 0.25, 0.28, 1.0],
+                [0.112, 0.571, 0.791, 1.0],
+                [0.342, 0.479, 0.521, 1.0],
+                [0.913, 0.956, 0.973, 1.0],
+                [0.022, 0.051, 0.063, 1.0],
             ),
             Self::Ember => OverlayColors::new(
-                [0.95, 0.65, 0.29, 1.0],
-                [0.76, 0.68, 0.58, 1.0],
-                [1.0, 0.97, 0.94, 1.0],
-                [0.27, 0.22, 0.17, 1.0],
+                [0.888, 0.381, 0.068, 1.0],
+                [0.539, 0.418, 0.296, 1.0],
+                [1.0, 0.93, 0.871, 1.0],
+                [0.06, 0.04, 0.024, 1.0],
             ),
             Self::Mint => OverlayColors::new(
-                [0.45, 0.84, 0.63, 1.0],
-                [0.61, 0.73, 0.66, 1.0],
-                [0.95, 1.0, 0.97, 1.0],
-                [0.16, 0.26, 0.20, 1.0],
+                [0.171, 0.672, 0.356, 1.0],
+                [0.332, 0.491, 0.392, 1.0],
+                [0.888, 1.0, 0.93, 1.0],
+                [0.022, 0.054, 0.033, 1.0],
             ),
             Self::Mono => OverlayColors::new(
-                [0.91, 0.91, 0.91, 1.0],
-                [0.67, 0.67, 0.67, 1.0],
-                [0.97, 0.97, 0.97, 1.0],
-                [0.22, 0.22, 0.22, 1.0],
+                [0.807, 0.807, 0.807, 1.0],
+                [0.407, 0.407, 0.407, 1.0],
+                [0.93, 0.93, 0.93, 1.0],
+                [0.04, 0.04, 0.04, 1.0],
             ),
             Self::Amethyst => OverlayColors::new(
-                [0.69, 0.55, 1.0, 1.0],
-                [0.71, 0.66, 0.77, 1.0],
-                [0.98, 0.97, 1.0, 1.0],
-                [0.24, 0.20, 0.29, 1.0],
+                [0.434, 0.262, 1.0, 1.0],
+                [0.462, 0.392, 0.552, 1.0],
+                [0.956, 0.93, 1.0, 1.0],
+                [0.047, 0.033, 0.068, 1.0],
             ),
             Self::Solar => OverlayColors::new(
-                [0.95, 0.83, 0.36, 1.0],
-                [0.76, 0.72, 0.56, 1.0],
-                [1.0, 0.99, 0.93, 1.0],
-                [0.28, 0.26, 0.16, 1.0],
+                [0.888, 0.658, 0.107, 1.0],
+                [0.539, 0.479, 0.275, 1.0],
+                [1.0, 0.973, 0.847, 1.0],
+                [0.063, 0.054, 0.022, 1.0],
             ),
             Self::Rose => OverlayColors::new(
-                [1.0, 0.51, 0.68, 1.0],
-                [0.77, 0.64, 0.69, 1.0],
-                [1.0, 0.97, 0.98, 1.0],
-                [0.29, 0.19, 0.23, 1.0],
+                [1.0, 0.223, 0.418, 1.0],
+                [0.552, 0.366, 0.434, 1.0],
+                [1.0, 0.93, 0.956, 1.0],
+                [0.068, 0.03, 0.044, 1.0],
             ),
         }
     }
 
     const fn panel_color(self) -> [f32; 4] {
         match self {
-            Self::Redunar | Self::Mono => [0.035, 0.035, 0.035, 1.0],
-            Self::Glacier => [0.027, 0.067, 0.086, 1.0],
-            Self::Ember => [0.071, 0.051, 0.031, 1.0],
-            Self::Mint => [0.027, 0.067, 0.047, 1.0],
-            Self::Amethyst => [0.055, 0.039, 0.078, 1.0],
-            Self::Solar => [0.071, 0.063, 0.024, 1.0],
-            Self::Rose => [0.078, 0.035, 0.063, 1.0],
+            Self::Redunar | Self::Mono => [0.003, 0.003, 0.003, 1.0],
+            Self::Glacier => [0.002, 0.006, 0.008, 1.0],
+            Self::Ember => [0.006, 0.004, 0.002, 1.0],
+            Self::Mint => [0.002, 0.006, 0.004, 1.0],
+            Self::Amethyst => [0.004, 0.003, 0.007, 1.0],
+            Self::Solar => [0.006, 0.005, 0.002, 1.0],
+            Self::Rose => [0.007, 0.003, 0.005, 1.0],
         }
     }
 }
@@ -1510,6 +1542,9 @@ struct OverlayColors {
     muted: [f32; 4],
     text: [f32; 4],
     divider: [f32; 4],
+    /// Bright selection text. Palettes reuse their accent; the Replay menu
+    /// keeps a dedicated crimson highlight beside its control red.
+    highlight: [f32; 4],
 }
 
 impl OverlayColors {
@@ -1519,6 +1554,20 @@ impl OverlayColors {
             muted,
             text,
             divider,
+            highlight: accent,
+        }
+    }
+
+    /// The Replay menu's fixed Redunar control colors, converted from the
+    /// approved reference surface: #262930 grid, #eb2933 control red, and
+    /// #ff5a63 selected text on the #21090b selection fill.
+    const fn replay_menu() -> Self {
+        Self {
+            accent: [0.831, 0.022, 0.033, 1.0],
+            muted: [0.275, 0.242, 0.279, 1.0],
+            text: [0.888, 0.871, 0.847, 1.0],
+            divider: [0.019, 0.022, 0.03, 1.0],
+            highlight: [1.0, 0.102, 0.125, 1.0],
         }
     }
 }
@@ -1687,7 +1736,7 @@ impl<const N: usize> FixedText<N> {
             self.push_bytes(b"--.-");
             return;
         };
-        self.push_unsigned(value / 10, 2);
+        self.push_unsigned(value / 10, 1);
         self.push(b'.');
         self.push(b'0' + u8::try_from(value % 10).unwrap_or(0));
     }
@@ -1743,12 +1792,57 @@ fn push_text_scaled(batch: &mut GlyphBatch, text: &[u8], start_x: i32, start_y: 
     }
 }
 
-fn push_text_centered(batch: &mut GlyphBatch, text: &[u8], left: i32, right: i32, y: i32) {
+/// Letter-spaced monospace text. The reference menu sets quiet labels with
+/// tracking; one extra logical pixel per advance reproduces that density on
+/// the fixed 9 px cell without changing the glyph raster.
+fn push_text_tracked(batch: &mut GlyphBatch, text: &[u8], start_x: i32, start_y: i32) {
+    push_text_advance(
+        batch,
+        text,
+        start_x,
+        start_y,
+        overlay_font::GLYPH_ADVANCE.saturating_add(1),
+    );
+}
+
+/// Monospace text with an explicit logical advance. Ribbon cells are 89 px
+/// wide, so their quiet labels use an 8 px advance to keep the longest label
+/// (FRAME TIME) clear of the next cell divider.
+fn push_text_advance(
+    batch: &mut GlyphBatch,
+    text: &[u8],
+    start_x: i32,
+    start_y: i32,
+    advance: i32,
+) {
+    for (character_index, byte) in text.iter().enumerate() {
+        let x = start_x.saturating_add(
+            i32::try_from(character_index)
+                .unwrap_or(i32::MAX)
+                .saturating_mul(advance),
+        );
+        if overlay_font::coverage_raster(*byte)
+            .iter()
+            .any(|word| *word != 0)
+        {
+            batch.push(GlyphInstance {
+                x,
+                y: start_y,
+                scale: 1,
+                byte: *byte,
+                ui_font: false,
+            });
+        }
+    }
+}
+
+fn push_text_centered_tracked(batch: &mut GlyphBatch, text: &[u8], left: i32, right: i32, y: i32) {
     let width = i32::try_from(text.len())
         .unwrap_or(i32::MAX)
-        .saturating_mul(overlay_font::GLYPH_ADVANCE);
+        .saturating_mul(overlay_font::GLYPH_ADVANCE.saturating_add(1))
+        .saturating_sub(1);
     let x = left.saturating_add((right - left - width).max(0) / 2);
-    push_text(batch, text, x, y);
+    push_text_tracked(batch, text, x, y);
 }
 
 fn push_ui_text(batch: &mut GlyphBatch, text: &[u8], start_x: i32, start_y: i32) {
@@ -1794,6 +1888,50 @@ fn ui_text_width(text: &[u8], scale: u8) -> i32 {
     })
 }
 
+fn ui_text_width_tracked(text: &[u8], scale: u8) -> i32 {
+    text.iter()
+        .fold(0_i32, |width, byte| {
+            width.saturating_add(
+                overlay_font::ui_advance_width(*byte)
+                    .saturating_mul(i32::from(scale))
+                    .saturating_add(1),
+            )
+        })
+        .saturating_sub(1)
+}
+
+fn push_ui_text_centered_tracked(
+    batch: &mut GlyphBatch,
+    text: &[u8],
+    left: i32,
+    right: i32,
+    y: i32,
+    scale: u8,
+) {
+    let width = ui_text_width_tracked(text, scale);
+    let x = left.saturating_add((right - left - width).max(0) / 2);
+    let mut cursor = x;
+    for byte in text {
+        if overlay_font::ui_coverage_raster(*byte)
+            .iter()
+            .any(|word| *word != 0)
+        {
+            batch.push(GlyphInstance {
+                x: cursor,
+                y,
+                scale,
+                byte: *byte,
+                ui_font: true,
+            });
+        }
+        cursor = cursor.saturating_add(
+            overlay_font::ui_advance_width(*byte)
+                .saturating_mul(i32::from(scale))
+                .saturating_add(1),
+        );
+    }
+}
+
 const fn empty_clear_rect() -> VkClearRect {
     clear_rect(0, 0, 0, 0)
 }
@@ -1827,6 +1965,7 @@ struct SwapchainState {
     glyph_pipeline_layout: VkPipelineLayout,
     glyph_pipeline: VkPipeline,
     extent: VkExtent2d,
+    srgb_attachment: bool,
     images: [SwapchainImage; MAX_SWAPCHAIN_IMAGES],
     image_count: usize,
 }
@@ -2381,6 +2520,7 @@ pub(crate) unsafe fn prepare_present(
             glyph_pipeline: resources.glyph_pipeline,
             framebuffer: image.framebuffer,
             extent: resources.extent,
+            srgb_attachment: resources.srgb_attachment,
         };
         target_count += 1;
     }
@@ -2548,6 +2688,7 @@ struct RenderTarget {
     glyph_pipeline: VkPipeline,
     framebuffer: VkFramebuffer,
     extent: VkExtent2d,
+    srgb_attachment: bool,
 }
 
 impl Default for RenderTarget {
@@ -2565,6 +2706,7 @@ impl Default for RenderTarget {
                 width: 0,
                 height: 0,
             },
+            srgb_attachment: false,
         }
     }
 }
@@ -2794,6 +2936,10 @@ unsafe fn create_swapchain_resources(
         glyph_pipeline_layout: 0,
         glyph_pipeline: 0,
         extent: create_info.image_extent,
+        srgb_attachment: matches!(
+            create_info.image_format,
+            VK_FORMAT_R8G8B8A8_SRGB | VK_FORMAT_B8G8R8A8_SRGB
+        ),
         images: [EMPTY_SWAPCHAIN_IMAGE; MAX_SWAPCHAIN_IMAGES],
         image_count: 0,
     };
@@ -3420,6 +3566,18 @@ unsafe fn record_target(
     unsafe { (functions.cmd_end_render_pass)(command_buffer) };
 }
 
+/// The bounded palette tables were stored as squared reference RGB channels.
+/// An sRGB attachment encodes linear fragment/clear values on write, while an
+/// UNORM attachment stores the supplied values directly. Encode colors for
+/// UNORM here so both formats show the same intended reference roles.
+fn color_for_target(target: RenderTarget, color: [f32; 4]) -> [f32; 4] {
+    if target.srgb_attachment {
+        color
+    } else {
+        [color[0].sqrt(), color[1].sqrt(), color[2].sqrt(), color[3]]
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 unsafe fn record_plan(
     functions: DeviceFunctions,
@@ -3429,7 +3587,7 @@ unsafe fn record_plan(
 ) {
     let scale_percent = effective_scale_percent(target.extent, plan);
     let (offset_x, offset_y) = overlay_origin(target.extent, plan, scale_percent);
-    let colors = plan.palette.colors();
+    let colors = plan.colors;
     if plan.dim_percent > 0 && target.panel_pipeline != 0 {
         #[expect(
             clippy::cast_precision_loss,
@@ -3449,7 +3607,8 @@ unsafe fn record_plan(
         };
         let opacity = f32::from(plan.dim_percent) / 100.0;
         let blend_constants = [opacity; 4];
-        let push_constants = PanelPushConstants::from_rect(scissor, 0, OverlayPalette::Redunar);
+        let push_constants =
+            PanelPushConstants::from_rect(scissor, 0, if target.srgb_attachment { 9 } else { 0 });
         // SAFETY: the descriptor-free panel pipeline is compatible with the
         // active render pass and the viewport is the current swapchain.
         unsafe {
@@ -3491,7 +3650,8 @@ unsafe fn record_plan(
             let blend_constants = [opacity; 4];
             let radius =
                 u32::from(plan.panel_radius).saturating_mul(u32::from(scale_percent)) / 100;
-            let push_constants = PanelPushConstants::from_rect(panel.rect, radius, plan.palette);
+            let shader_palette = plan.panel_palette + u32::from(target.srgb_attachment) * 9;
+            let push_constants = PanelPushConstants::from_rect(panel.rect, radius, shader_palette);
             // SAFETY: the optional pipeline is compatible with this render
             // pass. Dynamic viewport/scissor exactly cover the bounded panel,
             // and the small push payload clips only the menu's outer corners.
@@ -3517,7 +3677,7 @@ unsafe fn record_plan(
         } else {
             // Pipeline creation is optional. A fully opaque clear is the safe
             // fallback when the rounded-panel pipeline is unavailable.
-            let background = clear_attachment(plan.palette.panel_color());
+            let background = clear_attachment(color_for_target(target, plan.palette.panel_color()));
             // SAFETY: one color attachment and one in-bounds clear rectangle.
             unsafe {
                 (functions.cmd_clear_attachments)(
@@ -3536,11 +3696,14 @@ unsafe fn record_plan(
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment(if plan.placement == OverlayPlacement::SavedNotice {
-            [0.075, 0.075, 0.085, 1.0]
-        } else {
-            [0.025, 0.03, 0.04, 1.0]
-        }),
+        clear_attachment(color_for_target(
+            target,
+            if plan.placement == OverlayPlacement::SavedNotice {
+                [0.007, 0.007, 0.01, 1.0]
+            } else {
+                [0.025, 0.03, 0.04, 1.0]
+            },
+        )),
         &logo_base,
     );
     let logo_dark_red = plan
@@ -3549,11 +3712,16 @@ unsafe fn record_plan(
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment(if plan.placement == OverlayPlacement::ReplayMenu {
-            [0.13, 0.035, 0.045, 1.0]
-        } else {
-            [0.41, 0.08, 0.13, 1.0]
-        }),
+        clear_attachment(color_for_target(
+            target,
+            if plan.placement == OverlayPlacement::ReplayMenu {
+                MENU_SELECTED_FILL
+            } else {
+                // The Moment saved pill's receipt arrow keeps the reference
+                // notice red (#ec7a81).
+                [0.839, 0.195, 0.22, 1.0]
+            },
+        )),
         &logo_dark_red,
     );
     let dividers = plan
@@ -3562,7 +3730,7 @@ unsafe fn record_plan(
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment(colors.divider),
+        clear_attachment(color_for_target(target, colors.divider)),
         &dividers,
     );
     // Selection and hover outlines share edges with the neutral control grid.
@@ -3574,7 +3742,7 @@ unsafe fn record_plan(
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment(colors.accent),
+        clear_attachment(color_for_target(target, colors.accent)),
         &accent,
     );
     draw_glyph_batch(
@@ -3607,13 +3775,23 @@ unsafe fn record_plan(
         offset_x,
         offset_y,
     );
+    draw_glyph_batch(
+        functions,
+        command_buffer,
+        target,
+        &plan.highlight_glyphs,
+        colors.highlight,
+        scale_percent,
+        offset_x,
+        offset_y,
+    );
     let cursor_shadow = plan
         .cursor_shadow
         .scaled_translated(scale_percent, offset_x, offset_y);
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment([0.02, 0.02, 0.02, 1.0]),
+        clear_attachment(color_for_target(target, [0.02, 0.02, 0.02, 1.0])),
         &cursor_shadow,
     );
     let cursor = plan
@@ -3622,11 +3800,14 @@ unsafe fn record_plan(
     clear_batch(
         functions,
         command_buffer,
-        clear_attachment(if plan.placement == OverlayPlacement::SavedNotice {
-            [0.63, 0.76, 0.70, 1.0]
-        } else {
-            [0.94, 0.95, 0.97, 1.0]
-        }),
+        clear_attachment(color_for_target(
+            target,
+            if plan.placement == OverlayPlacement::SavedNotice {
+                [0.63, 0.76, 0.70, 1.0]
+            } else {
+                [0.94, 0.95, 0.97, 1.0]
+            },
+        )),
         &cursor,
     );
     if let Some(pointer_shadow) = plan.pointer_shadow.as_ref() {
@@ -3692,6 +3873,7 @@ fn draw_glyph_instances(
     if instances.is_empty() || target.glyph_pipeline == 0 || target.glyph_pipeline_layout == 0 {
         return;
     }
+    let color = color_for_target(target, color);
     // SAFETY: the glyph pipeline and layout were created together for this
     // render pass. It has no buffers or descriptors and accepts exactly one
     // fixed 108-byte coverage-raster push constant.
@@ -3764,10 +3946,21 @@ fn effective_scale_percent(extent: VkExtent2d, plan: &OverlayPlan) -> u8 {
         .saturating_sub(u32::try_from(OVERLAY_MARGIN * 2).unwrap_or(0));
     let width_limit = available_width.saturating_mul(100) / plan.width.max(1);
     let height_limit = available_height.saturating_mul(100) / plan.height.max(1);
+    // The approved 520×286 menu occupies about 89% of its reference scene.
+    // Preserve that breathing room on smaller presentations; at 1080p the
+    // requested 160% scale remains the limit.
+    let reference_limit = if plan.placement == OverlayPlacement::ReplayMenu {
+        let width_limit = extent.width.saturating_mul(89) / plan.width.max(1);
+        let height_limit = extent.height.saturating_mul(89) / plan.height.max(1);
+        width_limit.min(height_limit)
+    } else {
+        u32::MAX
+    };
     u8::try_from(
         u32::from(plan.scale_percent)
             .min(width_limit)
             .min(height_limit)
+            .min(reference_limit)
             .max(1),
     )
     .unwrap_or(plan.scale_percent)
@@ -3870,6 +4063,24 @@ const _: () = assert!(MAX_QUEUE_CONTEXTS >= MAX_SWAPCHAIN_IMAGES);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Render one linear-light renderer color as an sRGB hex triplet for the
+    /// reference SVG dumps. The square root is the exact inverse of the
+    /// sRGB-to-linear conversion used when the palette tables were derived.
+    #[expect(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "the channel is clamped to 0..=1 before scaling to a byte"
+    )]
+    fn hex(color: [f32; 4]) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::with_capacity(6);
+        for channel in &color[..3] {
+            let byte = (channel.sqrt().clamp(0.0, 1.0) * 255.0).round() as u8;
+            write!(out, "{byte:02x}").expect("hex string grows");
+        }
+        out
+    }
 
     #[test]
     fn fps_values_use_natural_width_without_leading_zeroes() {
@@ -4696,7 +4907,7 @@ mod tests {
                 },
             },
             12,
-            OverlayPalette::Glacier,
+            OverlayPalette::Glacier.code(),
         );
         assert_eq!(
             pushed.bounds.map(f32::to_bits),
@@ -4727,16 +4938,21 @@ mod tests {
             save_shortcut: ReplayShortcutLabel::from_shortcut("Ctrl+F9"),
             ..ReplayMenuView::default()
         });
-        let mut svg = String::from(
-            "<svg xmlns='http://www.w3.org/2000/svg' width='832' height='458' viewBox='0 0 520 286'><rect width='520' height='286' fill='#151922'/><rect x='0.5' y='0.5' width='519' height='285' rx='11.5' fill='#090909' stroke='#262930'/>",
-        );
+        let mut svg = String::from(&format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='832' height='458' viewBox='0 0 520 286'><rect width='520' height='286' fill='#151922'/><rect x='0.5' y='0.5' width='519' height='285' rx='11.5' fill='#{}' stroke='#{}'/>",
+            hex(MENU_PANEL_COLOR),
+            hex(plan.colors.divider)
+        ));
         for (batch, color) in [
-            (&plan.logo_base, "#07080a"),
-            (&plan.logo_dark_red, "#21090b"),
-            (&plan.accent, "#eb2933"),
-            (&plan.dividers, "#262930"),
-            (&plan.cursor_shadow, "#050505"),
-            (&plan.cursor, "#f0f2f7"),
+            (
+                &plan.logo_base,
+                format!("#{}", hex([0.007, 0.007, 0.01, 1.0])),
+            ),
+            (&plan.logo_dark_red, format!("#{}", hex(MENU_SELECTED_FILL))),
+            (&plan.accent, format!("#{}", hex(plan.colors.accent))),
+            (&plan.dividers, format!("#{}", hex(plan.colors.divider))),
+            (&plan.cursor_shadow, "#050505".to_string()),
+            (&plan.cursor, "#f0f2f7".to_string()),
         ] {
             for rect in batch.as_slice() {
                 let rect = rect.rect;
@@ -4749,9 +4965,13 @@ mod tests {
             }
         }
         for (batch, color) in [
-            (&plan.accent_glyphs, "#eb2933"),
-            (&plan.muted_glyphs, "#858a94"),
-            (&plan.text_glyphs, "#ebf0f7"),
+            (&plan.accent_glyphs, format!("#{}", hex(plan.colors.accent))),
+            (&plan.muted_glyphs, format!("#{}", hex(plan.colors.muted))),
+            (&plan.text_glyphs, format!("#{}", hex(plan.colors.text))),
+            (
+                &plan.highlight_glyphs,
+                format!("#{}", hex(plan.colors.highlight)),
+            ),
         ] {
             for glyph in batch.as_slice() {
                 let raster = if glyph.ui_font {
@@ -4767,6 +4987,88 @@ mod tests {
                         }
                         let step = f64::from(glyph.scale) / 2.0;
                         write!(svg,"<rect x='{}' y='{}' width='{step}' height='{step}' fill='{color}' opacity='{}'/>",f64::from(glyph.x)+f64::from(x)*step,f64::from(glyph.y)+f64::from(y)*step,f64::from(coverage)/3.0).unwrap();
+                    }
+                }
+            }
+        }
+        svg.push_str("</svg>");
+        std::fs::write(path, svg).unwrap();
+    }
+
+    #[test]
+    fn render_metrics_reference() {
+        use std::fmt::Write as _;
+        let Ok(path) = std::env::var("REDUNAR_METRICS_REFERENCE") else {
+            return;
+        };
+        let layout = std::env::var("REDUNAR_METRICS_REFERENCE_LAYOUT").unwrap_or_default();
+        let snapshot = OverlaySnapshot {
+            fps: Some(144),
+            frame_time_tenths_ms: Some(69),
+            one_percent_low_fps: Some(118),
+            point_one_percent_low_fps: Some(96),
+            cpu_percent: Some(38),
+            cpu_temperature_c: Some(62),
+            gpu_percent: Some(91),
+            gpu_temperature_c: Some(68),
+        };
+        let config = OverlayConfig {
+            preset: OverlayPreset::Detailed,
+            layout: match layout.as_str() {
+                "ribbon" => OverlayLayout::Ribbon,
+                "telemetry" => OverlayLayout::Telemetry,
+                _ => OverlayLayout::Grid,
+            },
+            ..OverlayConfig::default()
+        };
+        let plan = OverlayPlan::new(snapshot, config);
+        let colors = plan.colors;
+        let mut svg = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='{}' height='{}' viewBox='0 0 {} {}'><rect width='{}' height='{}' fill='#{}' rx='4'/>",
+            plan.width * 2,
+            plan.height * 2,
+            plan.width,
+            plan.height,
+            plan.width,
+            plan.height,
+            hex(plan.palette.panel_color())
+        );
+        for (batch, color) in [
+            (&plan.accent, hex(colors.accent)),
+            (&plan.dividers, hex(colors.divider)),
+        ] {
+            for rect in batch.as_slice() {
+                let rect = rect.rect;
+                write!(
+                    svg,
+                    "<rect x='{}' y='{}' width='{}' height='{}' fill='#{color}'/>",
+                    rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height
+                )
+                .unwrap();
+            }
+        }
+        for (batch, color) in [
+            (&plan.accent_glyphs, hex(colors.accent)),
+            (&plan.muted_glyphs, hex(colors.muted)),
+            (&plan.text_glyphs, hex(colors.text)),
+        ] {
+            for glyph in batch.as_slice() {
+                let raster = overlay_font::coverage_raster(glyph.byte);
+                for y in 0..24_u32 {
+                    for x in 0..18_u32 {
+                        let coverage = overlay_font::coverage_pixel(raster, x, y);
+                        if coverage == 0 {
+                            continue;
+                        }
+                        let step = f64::from(glyph.scale) / 2.0;
+                        write!(
+                            svg,
+                            "<rect x='{}' y='{}' width='{step}' height='{step}' fill='#{color}' opacity='{}'/>",
+                            f64::from(glyph.x) + f64::from(x) * step,
+                            f64::from(glyph.y) + f64::from(y) * step,
+                            f64::from(coverage) / 3.0
+                        )
+                        .unwrap();
                     }
                 }
             }

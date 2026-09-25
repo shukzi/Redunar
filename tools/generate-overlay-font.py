@@ -13,19 +13,30 @@ from PIL import Image, ImageDraw, ImageFont
 
 WIDTH = 18
 HEIGHT = 24
-FONT_SIZE = 26
+FONT_SIZE = 23
 WORDS = 27
+# The 2x canvas keeps the original overlay baseline: cap rows start at source
+# row 2 and the 16-row cap height leaves quiet space above and below.
+CAP_TOP = 2
 SUPPORTED = b"^~-.%*+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 DISPLAY = {ord("^"): "°", ord("~"): "·"}
+
+
+def baseline_offset(font: ImageFont.FreeTypeFont) -> int:
+    probe = Image.new("L", (WIDTH * 2, HEIGHT * 2), 0)
+    ImageDraw.Draw(probe).text((WIDTH // 2, HEIGHT // 2), "H", font=font, fill=255)
+    top = probe.getbbox()[1]
+    return CAP_TOP - (top - HEIGHT // 2)
 
 
 def packed_glyph(font: ImageFont.FreeTypeFont, byte: int) -> list[int]:
     image = Image.new("L", (WIDTH, HEIGHT), 0)
     draw = ImageDraw.Draw(image)
     character = DISPLAY.get(byte, chr(byte))
-    # Noto Sans Mono at 26 px fits this 2x logical cell with an 18 px cap
-    # height. The offset preserves the original overlay baseline.
-    draw.text((1, -8), character, font=font, fill=255)
+    # Noto Sans Mono at 23 px keeps a 16-row cap inside this 2x logical cell,
+    # leaving quiet space above and below each stroke. The measured offset
+    # preserves the original overlay baseline.
+    draw.text((1, baseline_offset(font)), character, font=font, fill=255)
     words = [0] * WORDS
     for index, coverage in enumerate(image.get_flattened_data()):
         value = (coverage * 3 + 127) // 255

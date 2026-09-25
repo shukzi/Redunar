@@ -122,6 +122,15 @@ plainly that the file can include game names and session details, and offers
 an Open log folder action once the file exists. The log never contains clip
 media. Sharing it is always the owner's explicit choice.
 
+Settings also offers Beta access, off by default. Anyone may opt in to early
+features included in the installed build; it does not fetch code, change the
+update channel, enable Debug log, or override a feature's native capability
+checks. The preference is owned by the service and applies after an app restart
+and a new game launch. In this build it admits experimental NVIDIA GPU metrics
+and a single-GPU NVIDIA Vulkan Video Replay candidate. Hardware and codec
+readiness still determine availability; the NVIDIA paths have not been verified
+on NVIDIA hardware.
+
 ## Instant Replay
 
 Use a player/editor beside an independently scrolling saved-clip rail. Selection,
@@ -148,6 +157,16 @@ Successful in-game saves use the bottom-left Moment saved pill with saved length
 and Local library, even when the metrics display is hidden.
 An unavailable Replay state uses one stable, actionable reason from native
 capture or encoder status; an inactive recorder never implies a populated buffer.
+
+The in-game metrics overlay and Replay menu follow the approved modern
+reference: soft rounded panels, quiet letter-spaced labels above bright
+values, thin 1 px dividers, a dark-red selected duration cell with a red
+underline, and a red-outlined save button. The eight bounded palettes keep
+their accent, muted, text, divider, and panel roles in both the injected
+renderer and this preview; the Replay menu keeps fixed Redunar control colors
+independent of the metric palette. Renderer geometry and palette facts live in
+the capture crates and the shader notes under
+`crates/redunar-capture-vulkan/src/shaders/README.md`.
 
 ## History and honest data
 

@@ -9,8 +9,9 @@ for panel transparency and one fixed-layout antialiased glyph pipeline:
 
 - `panel.vert` emits one buffer-free full-screen triangle using
   `gl_VertexIndex`;
-- `panel.frag` selects one of eight bounded panel/border palettes and clips an
-  optional corner radius supplied through a 24-byte push constant;
+- `panel.frag` selects one of nine bounded panel/border surfaces (the eight
+  metric palettes plus slot 8, the Replay menu's own near-black surface) and
+  clips an optional corner radius supplied through a 24-byte push constant;
 - dynamic viewport and scissor state constrain the draw to the panel;
 - dynamic constant-alpha blending applies the saved 0–100% opacity;
 - `glyph.vert` maps one bounded glyph viewport without buffers or descriptors;
@@ -21,10 +22,24 @@ for panel transparency and one fixed-layout antialiased glyph pipeline:
 - dynamic constant-color blending selects the active palette's accent, muted,
   divider, or body text color.
 
+Palette channels are stored as squared reference RGB values. The renderer
+tracks each swapchain's attachment format: it sends those values directly to
+sRGB attachments and square-roots them for UNORM attachments, which store
+fragment and clear colors without sRGB encoding. `panel.frag` makes the same
+choice for its nine fixed panel/border palettes using palette indices 0–8 for
+UNORM and 9–17 for sRGB; this is a format flag, not a user palette extension.
+The OpenGL RGBA8 canvas encodes the same palette roles before byte blending.
+Both renderers also cap the 520×286 Replay menu at about 89% of a small game
+viewport, preserving the reference image's margins; the usual 160% menu scale
+still applies where the viewport has room.
+
 The generated coverage table lives in `redunar-core`. Regenerate it with
-`tools/generate-overlay-font.py` and the licensed Noto Sans Mono Regular face;
-the installed runtime does not load fonts, allocate an atlas, or compile
-shaders.
+`tools/generate-overlay-font.py` and the licensed Noto Sans Mono Regular face,
+and the proportional menu table with `tools/generate-overlay-ui-font.py` and
+Noto Sans Regular. Both render a 16-row (mono) or 14-row (UI) cap inside the
+18x24 canvas at the overlay's original baseline, keeping quiet space above and
+below every stroke; the installed runtime does not load fonts, allocate an
+atlas, or compile shaders.
 
 The checked-in `.spv` files were compiled from these adjacent sources with
 Shaderc 2026.1. Shaderc is a development tool only and is not linked into or

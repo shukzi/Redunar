@@ -15,6 +15,7 @@ const PREFERENCES_HEADER_V4: &str = "redunar-app-preferences-v4";
 const PREFERENCES_HEADER_V5: &str = "redunar-app-preferences-v5";
 const PREFERENCES_HEADER_V6: &str = "redunar-app-preferences-v6";
 const PREFERENCES_HEADER_V7: &str = "redunar-app-preferences-v7";
+const PREFERENCES_HEADER_V8: &str = "redunar-app-preferences-v8";
 const MAX_PREFERENCES_BYTES: u64 = 1_024;
 const MIN_WINDOW_WIDTH: i32 = 800;
 const MAX_WINDOW_WIDTH: i32 = 7_680;
@@ -45,6 +46,9 @@ pub struct AppPreferences {
     /// bounded private file. Off by default; the file may contain game names,
     /// session identifiers, and failure detail useful for debugging.
     pub diagnostic_log: bool,
+    /// Voluntary access to experimental features present in this installed
+    /// build. This is a preference, never proof of hardware capability.
+    pub beta_access: bool,
 }
 
 impl Default for AppPreferences {
@@ -61,6 +65,7 @@ impl Default for AppPreferences {
             window_maximized: false,
             window_size_is_physical: false,
             diagnostic_log: false,
+            beta_access: false,
         }
     }
 }
@@ -120,6 +125,17 @@ pub(crate) fn set_diagnostic_log(
     let _operation = lock_operations();
     let mut preferences = load_unlocked(state_directory)?;
     preferences.diagnostic_log = enabled;
+    save_unlocked(state_directory, preferences)?;
+    Ok(preferences)
+}
+
+pub(crate) fn set_beta_access(
+    state_directory: &Path,
+    enabled: bool,
+) -> Result<AppPreferences, AppPreferencesError> {
+    let _operation = lock_operations();
+    let mut preferences = load_unlocked(state_directory)?;
+    preferences.beta_access = enabled;
     save_unlocked(state_directory, preferences)?;
     Ok(preferences)
 }
@@ -216,7 +232,7 @@ fn save_unlocked(
 
 fn serialize(preferences: AppPreferences) -> String {
     format!(
-        "{PREFERENCES_HEADER_V7}\nclose-to-tray={}\nwindow-width={}\nwindow-height={}\nwindow-maximized={}\nautomatic-updates={}\nwindow-size-units={}\ndiagnostic-log={}\n",
+        "{PREFERENCES_HEADER_V8}\nclose-to-tray={}\nwindow-width={}\nwindow-height={}\nwindow-maximized={}\nautomatic-updates={}\nwindow-size-units={}\ndiagnostic-log={}\nbeta-access={}\n",
         if preferences.close_to_tray {
             "on"
         } else {
@@ -244,6 +260,7 @@ fn serialize(preferences: AppPreferences) -> String {
         } else {
             "off"
         },
+        if preferences.beta_access { "on" } else { "off" },
     )
 }
 
@@ -277,6 +294,7 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         && version != PREFERENCES_HEADER_V5
         && version != PREFERENCES_HEADER_V6
         && version != PREFERENCES_HEADER_V7
+        && version != PREFERENCES_HEADER_V8
     {
         return Err("unsupported preferences version");
     }
@@ -291,23 +309,31 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
     let automatic_updates = if version == PREFERENCES_HEADER_V5
         || version == PREFERENCES_HEADER_V6
         || version == PREFERENCES_HEADER_V7
+        || version == PREFERENCES_HEADER_V8
     {
         parse_bool(lines.next(), "automatic-updates")?
     } else {
         true
     };
-    let window_size_is_physical =
-        if version == PREFERENCES_HEADER_V6 || version == PREFERENCES_HEADER_V7 {
-            match lines.next() {
-                Some("window-size-units=physical") => true,
-                Some("window-size-units=logical") => false,
-                _ => return Err("preferences contain invalid window size units"),
-            }
-        } else {
-            true
-        };
-    let diagnostic_log = if version == PREFERENCES_HEADER_V7 {
+    let window_size_is_physical = if version == PREFERENCES_HEADER_V6
+        || version == PREFERENCES_HEADER_V7
+        || version == PREFERENCES_HEADER_V8
+    {
+        match lines.next() {
+            Some("window-size-units=physical") => true,
+            Some("window-size-units=logical") => false,
+            _ => return Err("preferences contain invalid window size units"),
+        }
+    } else {
+        true
+    };
+    let diagnostic_log = if version == PREFERENCES_HEADER_V7 || version == PREFERENCES_HEADER_V8 {
         parse_bool(lines.next(), "diagnostic-log")?
+    } else {
+        false
+    };
+    let beta_access = if version == PREFERENCES_HEADER_V8 {
+        parse_bool(lines.next(), "beta-access")?
     } else {
         false
     };
@@ -325,6 +351,7 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         window_maximized: maximized,
         window_size_is_physical,
         diagnostic_log,
+        beta_access,
     })
 }
 
@@ -512,10 +539,11 @@ mod tests {
                 window_maximized: false,
                 window_size_is_physical: true,
                 diagnostic_log: false,
+                beta_access: false,
             }
         );
         let serialized = serialize(parsed);
-        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V7));
+        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V8));
         assert!(!serialized.contains("compatibility-switch"));
         assert!(serialized.contains("automatic-updates=on"));
         assert!(serialized.contains("window-size-units=physical"));
@@ -571,6 +599,7 @@ mod tests {
                 window_maximized: false,
                 window_size_is_physical: false,
                 diagnostic_log: false,
+                beta_access: false,
             }
         );
 
@@ -597,6 +626,7 @@ mod tests {
                 window_maximized: true,
                 window_size_is_physical: false,
                 diagnostic_log: false,
+                beta_access: false,
             }
         );
         assert!(tray.automatic_updates);

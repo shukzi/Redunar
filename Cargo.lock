@@ -153,6 +153,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "redunar-nvidia-nvml"
+version = "0.1.4"
+dependencies = [
+ "libc",
+ "redunar-core",
+]
+
+[[package]]
 name = "redunar-platform"
 version = "0.1.4"
 dependencies = [
@@ -160,6 +168,7 @@ dependencies = [
  "nix",
  "redunar-capture",
  "redunar-core",
+ "redunar-nvidia-nvml",
 ]
 
 [[package]]

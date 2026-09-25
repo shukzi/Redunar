@@ -26,6 +26,7 @@ use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::ptr;
 
 const AMD_VENDOR_ID: u32 = 0x1002;
+const NVIDIA_VENDOR_ID: u32 = 0x10de;
 const DRM_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
 const DRM_FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
 const DRM_FORMAT_XBGR8888: u32 = u32::from_le_bytes(*b"XB24");
@@ -384,12 +385,21 @@ impl VulkanVideoH264Probe {
     /// false until the daemon's live import/output/performance gates pass.
     #[must_use]
     pub fn local(request: VulkanVideoH264Request) -> Self {
+        Self::local_with_nvidia_beta(request, false)
+    }
+
+    /// Also consider NVIDIA devices when a caller has enabled Beta access.
+    #[must_use]
+    pub fn local_with_nvidia_beta(
+        request: VulkanVideoH264Request,
+        allow_nvidia_beta: bool,
+    ) -> Self {
         if !request.is_valid() {
             return Self::blocked(VulkanVideoProbeBlocker::InvalidRequest);
         }
         // SAFETY: `probe_local` contains the native loader boundary and copies
         // every result into owned Rust values before destroying the instance.
-        unsafe { probe_local(request) }
+        unsafe { probe_local(request, allow_nvidia_beta) }
     }
 
     #[must_use]
@@ -553,7 +563,21 @@ impl VulkanVideoH264Device {
     /// Returns [`VulkanVideoDeviceError`] if capability discovery changes,
     /// loader symbols are missing, or Vulkan refuses device/queue creation.
     pub fn open(request: VulkanVideoH264Request) -> Result<Self, VulkanVideoDeviceError> {
-        let probe = VulkanVideoH264Probe::local(request);
+        Self::open_with_nvidia_beta(request, false)
+    }
+
+    /// Opted-in NVIDIA candidates use the same Vulkan Video capability checks.
+    /// The caller must first establish unambiguous render-device ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VulkanVideoDeviceError`] when the probe or device creation
+    /// fails.
+    pub fn open_with_nvidia_beta(
+        request: VulkanVideoH264Request,
+        allow_nvidia_beta: bool,
+    ) -> Result<Self, VulkanVideoDeviceError> {
+        let probe = VulkanVideoH264Probe::local_with_nvidia_beta(request, allow_nvidia_beta);
         let candidate = probe
             .candidate
             .ok_or(VulkanVideoDeviceError::Probe(probe.blockers))?;
@@ -1328,7 +1352,10 @@ unsafe fn resolve_device_command(
     clippy::too_many_lines,
     reason = "one linear ownership scope makes native Vulkan instance teardown auditable"
 )]
-unsafe fn probe_local(request: VulkanVideoH264Request) -> VulkanVideoH264Probe {
+unsafe fn probe_local(
+    request: VulkanVideoH264Request,
+    allow_nvidia_beta: bool,
+) -> VulkanVideoH264Probe {
     let library_name = b"libvulkan.so.1\0";
     // SAFETY: the name is a terminated static byte string.
     let library = DynamicLibrary(unsafe { dlopen(library_name.as_ptr().cast(), 2) } as usize);
@@ -1442,7 +1469,7 @@ unsafe fn probe_local(request: VulkanVideoH264Request) -> VulkanVideoH264Probe {
         let (api_version, vendor_id) = unsafe {
             physical_device_api_and_vendor(physical_device, get_physical_device_properties)
         };
-        if vendor_id != AMD_VENDOR_ID {
+        if vendor_id != AMD_VENDOR_ID && !(allow_nvidia_beta && vendor_id == NVIDIA_VENDOR_ID) {
             continue;
         }
         saw_supported_device = true;

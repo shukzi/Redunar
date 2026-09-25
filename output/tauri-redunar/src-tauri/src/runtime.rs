@@ -320,6 +320,7 @@ pub struct AppPreferencesDto {
     window_height: i32,
     window_maximized: bool,
     diagnostic_log: bool,
+    beta_access: bool,
     diagnostic_log_path: Option<String>,
 }
 
@@ -332,6 +333,7 @@ impl From<redunar_daemon::AppPreferences> for AppPreferencesDto {
             window_height: value.window_height,
             window_maximized: value.window_maximized,
             diagnostic_log: value.diagnostic_log,
+            beta_access: value.beta_access,
             diagnostic_log_path: None,
         }
     }
@@ -439,6 +441,15 @@ pub fn set_diagnostic_log(enabled: bool) -> Result<AppPreferencesDto, String> {
     crate::backend::ensure_write_access()?;
     crate::backend::service()
         .set_diagnostic_log_enabled(enabled)
+        .map(Into::into)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_beta_access(enabled: bool) -> Result<AppPreferencesDto, String> {
+    crate::backend::ensure_write_access()?;
+    crate::backend::service()
+        .set_beta_access_enabled(enabled)
         .map(Into::into)
         .map_err(|error| error.to_string())
 }

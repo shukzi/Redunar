@@ -34,7 +34,8 @@ const REPLAY_SAVED_NOTICE_NS: u64 = 3_000_000_000;
 const FRAME_HISTORY_CAPACITY: usize = 240;
 const GRID_WIDTH: i32 = 294;
 const GRID_HEADER_HEIGHT: i32 = 25;
-const GRID_ROW_HEIGHT: i32 = 32;
+const GRID_PRIMARY_ROW_HEIGHT: i32 = 38;
+const GRID_SECONDARY_ROW_HEIGHT: i32 = 26;
 const TELEMETRY_WIDTH: i32 = 300;
 const TELEMETRY_HEADER_HEIGHT: i32 = 25;
 const TELEMETRY_ROW_HEIGHT: i32 = 24;
@@ -48,6 +49,9 @@ const REPLAY_CURSOR_WIDTH: i32 = overlay_font::GLYPH_WIDTH.cast_signed();
 const REPLAY_CURSOR_HEIGHT: i32 = overlay_font::GLYPH_HEIGHT.cast_signed();
 const SAVED_NOTICE_WIDTH: i32 = 340;
 const SAVED_NOTICE_HEIGHT: i32 = 88;
+/// The Replay menu's selected-cell and save-button fill, converted from the
+/// approved reference surface (#21090b).
+const MENU_SELECTED_FILL: [f32; 4] = [0.015, 0.003, 0.003, 1.0];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApiFlavor {
@@ -85,6 +89,8 @@ struct Palette {
     muted: [f32; 4],
     text: [f32; 4],
     divider: [f32; 4],
+    highlight: [f32; 4],
+    secondary: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -407,7 +413,10 @@ impl Canvas {
             return;
         }
         for (channel, source) in color.iter().copied().enumerate().take(3) {
-            let source = source.clamp(0.0, 1.0);
+            // Palette channels are stored as squared reference RGB. The
+            // RGBA8 canvas is presented through a non-sRGB GL texture, so
+            // encode them before blending into its byte buffer.
+            let source = source.clamp(0.0, 1.0).sqrt();
             let destination = f32::from(self.pixels[index + channel]) / 255.0;
             let output = source * source_alpha + destination * (1.0 - source_alpha);
             self.pixels[index + channel] = normalized_byte(output);
@@ -566,12 +575,23 @@ fn render_menu_surface(
     viewport: [i32; 4],
     menu: ReplayMenuTelemetry,
 ) -> bool {
-    let scale = effective_scale(
+    let fit_scale = effective_scale(
         viewport,
         REPLAY_MENU_WIDTH,
         REPLAY_MENU_HEIGHT,
         REPLAY_MENU_SCALE_PERCENT,
     );
+    // Keep the menu near the 89%-of-scene proportions of the approved
+    // reference on small GL viewports, matching the Vulkan presentation.
+    let reference_width = u32::try_from(viewport[2].max(0))
+        .unwrap_or(0)
+        .saturating_mul(89)
+        / u32::try_from(REPLAY_MENU_WIDTH).unwrap_or(1);
+    let reference_height = u32::try_from(viewport[3].max(0))
+        .unwrap_or(0)
+        .saturating_mul(89)
+        / u32::try_from(REPLAY_MENU_HEIGHT).unwrap_or(1);
+    let scale = fit_scale.min(reference_width).min(reference_height);
     if scale == 0 {
         return true;
     }
@@ -716,7 +736,7 @@ fn render_saved_notice_surface(
     reason = "the fixed Replay menu geometry stays auditable"
 )]
 fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32) {
-    let palette = palette_from_index(0);
+    let palette = menu_palette();
     canvas.fill_rounded_rect(
         0,
         0,
@@ -735,7 +755,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         (173, 346, b"QUALITY".as_slice()),
         (346, 520, b"BUFFER".as_slice()),
     ] {
-        draw_text_centered(canvas, label, left, right, 13, 1, scale, palette.muted);
+        draw_text_centered(canvas, label, left, right, 12, 1, scale, palette.muted);
     }
     let capture = match menu.frame_rate {
         30 => b"30 FPS".as_slice(),
@@ -759,14 +779,14 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
             buffered.push_bytes(b" SEC");
         }
     }
-    draw_text_centered(canvas, capture, 0, 173, 32, 2, scale, palette.text);
-    draw_text_centered(canvas, quality, 173, 346, 32, 2, scale, palette.text);
+    draw_text_centered(canvas, capture, 0, 173, 35, 2, scale, palette.text);
+    draw_text_centered(canvas, quality, 173, 346, 35, 2, scale, palette.text);
     draw_text_centered(
         canvas,
         buffered.as_bytes(),
         346,
         520,
-        32,
+        35,
         2,
         scale,
         palette.text,
@@ -775,7 +795,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         canvas,
         (0, 0),
         24,
-        86,
+        78,
         b"Instant Replay",
         2,
         scale,
@@ -816,7 +836,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
                 114,
                 38,
                 scale,
-                with_alpha(palette.accent, 0.16),
+                MENU_SELECTED_FILL,
             );
             clear_scaled_rect(
                 canvas,
@@ -845,11 +865,11 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
             label,
             left,
             left + 118,
-            top + 16,
+            top + 17,
             1,
             scale,
             if selected {
-                palette.accent
+                palette.highlight
             } else {
                 palette.text
             },
@@ -867,7 +887,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         86,
         42,
         scale,
-        with_alpha(palette.accent, 0.16),
+        MENU_SELECTED_FILL,
     );
     clear_scaled_rect(
         canvas,
@@ -879,8 +899,34 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         scale,
         palette.accent,
     );
-    draw_text_centered(canvas, b"MKV", 24, 114, 238, 1, scale, palette.text);
-    draw_text_centered(canvas, b"MP4", 114, 204, 238, 1, scale, palette.text);
+    draw_text_centered(
+        canvas,
+        b"MKV",
+        24,
+        114,
+        239,
+        1,
+        scale,
+        if menu.output_format == 0 {
+            palette.text
+        } else {
+            palette.secondary
+        },
+    );
+    draw_text_centered(
+        canvas,
+        b"MP4",
+        114,
+        204,
+        239,
+        1,
+        scale,
+        if menu.output_format == 1 {
+            palette.text
+        } else {
+            palette.secondary
+        },
+    );
 
     let save_color = if menu.save_enabled {
         palette.accent
@@ -889,16 +935,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
     };
     draw_outline(canvas, 220, 222, 276, 46, 6, scale, save_color);
     if menu.save_enabled {
-        clear_scaled_rect(
-            canvas,
-            (0, 0),
-            222,
-            224,
-            272,
-            42,
-            scale,
-            with_alpha(palette.accent, 0.16),
-        );
+        clear_scaled_rect(canvas, (0, 0), 222, 224, 272, 42, scale, MENU_SELECTED_FILL);
     }
     let save_labels: [&[u8]; 8] = [
         b"SAVE LAST 15 SEC",
@@ -915,11 +952,11 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         save_labels[usize::from(menu.selected_duration_index.min(7))],
         220,
         496,
-        238,
+        239,
         1,
         scale,
         if menu.save_enabled {
-            palette.text
+            palette.highlight
         } else {
             palette.muted
         },
@@ -957,7 +994,7 @@ fn render_pointer(canvas: &mut Canvas) {
 }
 
 fn render_saved_notice(canvas: &mut Canvas, scale: u32) {
-    let palette = palette_from_index(0);
+    let palette = notice_palette();
     canvas.fill_rounded_rect(
         0,
         0,
@@ -1120,7 +1157,7 @@ fn render_plan(
             ),
             with_alpha(
                 config.palette.divider,
-                f32::from(config.opacity_percent) / 100.0,
+                (f32::from(config.opacity_percent) / 100.0).max(0.6),
             ),
         );
         clear_scaled_rect(
@@ -1147,6 +1184,10 @@ fn render_plan(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the Grid layout mirrors the Vulkan renderer's row structure in one auditable function"
+)]
 fn render_grid(
     canvas: &mut Canvas,
     snapshot: MetricSnapshot,
@@ -1156,55 +1197,194 @@ fn render_grid(
     scale: u32,
 ) {
     if config.branding_visible {
-        {
+        draw_text_scaled(
+            canvas,
+            origin,
+            8,
+            4,
+            b"REDUNAR",
+            1,
+            scale,
+            config.palette.accent,
+        );
+    }
+    let frame = metrics & (OverlayMetricSet::FPS | OverlayMetricSet::FRAME_TIME) != 0;
+    let low = metrics
+        & (OverlayMetricSet::ONE_PERCENT_LOW | OverlayMetricSet::POINT_ONE_PERCENT_LOW)
+        != 0;
+    let hardware = metrics
+        & (OverlayMetricSet::CPU_LOAD
+            | OverlayMetricSet::CPU_TEMPERATURE
+            | OverlayMetricSet::GPU_LOAD
+            | OverlayMetricSet::GPU_TEMPERATURE)
+        != 0;
+    let mut y = GRID_HEADER_HEIGHT + 6;
+    if frame {
+        if metrics & OverlayMetricSet::FPS != 0 {
+            let mut value = FixedText::<6>::default();
+            value.push_number(snapshot.fps);
+            draw_text_scaled(
+                canvas,
+                origin,
+                12,
+                y,
+                value.as_bytes(),
+                2,
+                scale,
+                config.palette.text,
+            );
+            let label_x = 12
+                + i32::try_from(value.as_bytes().len()).unwrap_or(0)
+                    * overlay_font::GLYPH_ADVANCE
+                    * 2;
+            draw_text_scaled(
+                canvas,
+                origin,
+                label_x + 4,
+                y + 9,
+                b"FPS",
+                1,
+                scale,
+                config.palette.muted,
+            );
+        }
+        if metrics & OverlayMetricSet::FRAME_TIME != 0 {
+            let mut value = FixedText::<8>::default();
+            value.push_tenths(snapshot.frame_time_tenths_ms);
+            let value_width = i32::try_from(value.as_bytes().len()).unwrap_or(0)
+                * overlay_font::GLYPH_ADVANCE
+                * 2;
+            let start_x = (GRID_WIDTH - 12 - value_width - 4 - overlay_font::GLYPH_ADVANCE * 2)
+                .clamp(12, 184);
+            draw_text_scaled(
+                canvas,
+                origin,
+                start_x,
+                y,
+                value.as_bytes(),
+                2,
+                scale,
+                config.palette.text,
+            );
+            draw_text_scaled(
+                canvas,
+                origin,
+                start_x + value_width + 4,
+                y + 9,
+                b"MS",
+                1,
+                scale,
+                config.palette.muted,
+            );
+        }
+        y += GRID_PRIMARY_ROW_HEIGHT;
+        if low || hardware {
+            clear_scaled_rect(
+                canvas,
+                origin,
+                12,
+                y - 7,
+                GRID_WIDTH - 24,
+                1,
+                scale,
+                config.palette.divider,
+            );
+        }
+    }
+    if low {
+        if metrics & OverlayMetricSet::ONE_PERCENT_LOW != 0 {
+            let mut left = FixedText::<16>::default();
+            left.push_bytes(b"1% LOW ");
+            left.push_number(snapshot.one_percent_low_fps);
             draw_text_scaled(
                 canvas,
                 origin,
                 8,
-                6,
-                b"REDUNAR",
+                y,
+                left.as_bytes(),
                 1,
                 scale,
-                config.palette.accent,
+                config.palette.muted,
             );
         }
-    }
-    {
-        clear_scaled_rect(
-            canvas,
-            origin,
-            3,
-            24,
-            GRID_WIDTH - 3,
-            1,
-            scale,
-            config.palette.divider,
-        );
-    }
-    let mut index = 0_usize;
-    for (bit, label) in metric_labels() {
-        if metrics & bit == 0 {
-            continue;
-        }
-        let column = i32::try_from(index % 2).unwrap_or(0);
-        let row = i32::try_from(index / 2).unwrap_or(0);
-        let x = 10 + column * (GRID_WIDTH / 2);
-        let y = GRID_HEADER_HEIGHT + row * GRID_ROW_HEIGHT + 4;
-        let value = metric_value(snapshot, bit);
-        {
-            draw_text_scaled(canvas, origin, x, y, label, 1, scale, config.palette.muted);
+        if metrics & OverlayMetricSet::POINT_ONE_PERCENT_LOW != 0 {
+            let mut right = FixedText::<16>::default();
+            right.push_bytes(b"0.1% LOW ");
+            right.push_number(snapshot.point_one_percent_low_fps);
+            let x = GRID_WIDTH
+                - 8
+                - i32::try_from(right.as_bytes().len()).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
             draw_text_scaled(
                 canvas,
                 origin,
                 x,
-                y + 15,
-                value.as_bytes(),
+                y,
+                right.as_bytes(),
                 1,
                 scale,
-                config.palette.text,
+                config.palette.muted,
             );
         }
-        index += 1;
+        y += GRID_SECONDARY_ROW_HEIGHT;
+        if hardware {
+            clear_scaled_rect(
+                canvas,
+                origin,
+                12,
+                y - 7,
+                GRID_WIDTH - 24,
+                1,
+                scale,
+                config.palette.divider,
+            );
+        }
+    }
+    if hardware {
+        let mut cpu = FixedText::<16>::default();
+        push_device_metrics(
+            &mut cpu,
+            b"CPU",
+            metrics & OverlayMetricSet::CPU_LOAD != 0,
+            metrics & OverlayMetricSet::CPU_TEMPERATURE != 0,
+            snapshot.cpu_percent,
+            snapshot.cpu_temperature_c,
+        );
+        if !cpu.as_bytes().is_empty() {
+            draw_text_scaled(
+                canvas,
+                origin,
+                8,
+                y,
+                cpu.as_bytes(),
+                1,
+                scale,
+                config.palette.muted,
+            );
+        }
+        let mut gpu = FixedText::<16>::default();
+        push_device_metrics(
+            &mut gpu,
+            b"GPU",
+            metrics & OverlayMetricSet::GPU_LOAD != 0,
+            metrics & OverlayMetricSet::GPU_TEMPERATURE != 0,
+            snapshot.gpu_percent,
+            snapshot.gpu_temperature_c,
+        );
+        if !gpu.as_bytes().is_empty() {
+            let x = GRID_WIDTH
+                - 8
+                - i32::try_from(gpu.as_bytes().len()).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
+            draw_text_scaled(
+                canvas,
+                origin,
+                x,
+                y,
+                gpu.as_bytes(),
+                1,
+                scale,
+                config.palette.muted,
+            );
+        }
     }
 }
 
@@ -1222,18 +1402,16 @@ fn render_ribbon(
         0
     };
     if config.branding_visible {
-        {
-            draw_text_scaled(
-                canvas,
-                origin,
-                10,
-                15,
-                b"REDUNAR",
-                1,
-                scale,
-                config.palette.accent,
-            );
-        }
+        draw_text_scaled(
+            canvas,
+            origin,
+            10,
+            13,
+            b"REDUNAR",
+            1,
+            scale,
+            config.palette.accent,
+        );
     }
     let mut index = 0_i32;
     for (bit, label) in metric_labels() {
@@ -1253,12 +1431,12 @@ fn render_ribbon(
                 scale,
                 config.palette.divider,
             );
-            draw_text_scaled(canvas, origin, x, 6, label, 1, scale, config.palette.muted);
+            draw_text_advance(canvas, origin, x, 4, label, 8, scale, config.palette.muted);
             draw_text_scaled(
                 canvas,
                 origin,
                 x,
-                22,
+                23,
                 value.as_bytes(),
                 1,
                 scale,
@@ -1279,18 +1457,16 @@ fn render_telemetry(
 ) {
     let count = metric_count(metrics);
     if config.branding_visible {
-        {
-            draw_text_scaled(
-                canvas,
-                origin,
-                8,
-                6,
-                b"REDUNAR",
-                1,
-                scale,
-                config.palette.accent,
-            );
-        }
+        draw_text_scaled(
+            canvas,
+            origin,
+            8,
+            4,
+            b"REDUNAR",
+            1,
+            scale,
+            config.palette.accent,
+        );
     }
     let heading = b"FRAME METRICS";
     let heading_width = i32::try_from(heading.len()).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
@@ -1298,7 +1474,7 @@ fn render_telemetry(
         canvas,
         origin,
         TELEMETRY_WIDTH - 8 - heading_width,
-        6,
+        4,
         heading,
         1,
         scale,
@@ -1344,7 +1520,7 @@ fn render_telemetry(
                 canvas,
                 origin,
                 8,
-                y + TELEMETRY_ROW_HEIGHT - 7,
+                y + TELEMETRY_ROW_HEIGHT - 5,
                 TELEMETRY_WIDTH - 16,
                 1,
                 scale,
@@ -1375,6 +1551,54 @@ fn clear_scaled_rect(
         scale_value(height, scale_percent).max(1),
         color,
     );
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "text placement and scale are explicit"
+)]
+fn draw_text_advance(
+    canvas: &mut Canvas,
+    origin: (i32, i32),
+    x: i32,
+    y: i32,
+    text: &[u8],
+    advance: i32,
+    scale_percent: u32,
+    color: [f32; 4],
+) {
+    let glyph_width = scale_value(
+        i32::try_from(overlay_font::GLYPH_WIDTH).unwrap_or(0),
+        scale_percent,
+    )
+    .max(1);
+    let glyph_height = scale_value(
+        i32::try_from(overlay_font::GLYPH_HEIGHT).unwrap_or(0),
+        scale_percent,
+    )
+    .max(1);
+    for (glyph_index, byte) in text.iter().copied().enumerate() {
+        let glyph_x = origin.0
+            + scale_value(
+                x + i32::try_from(glyph_index).unwrap_or(i32::MAX) * advance,
+                scale_percent,
+            );
+        let glyph_y = origin.1 + scale_value(y, scale_percent);
+        let raster = overlay_font::coverage_raster(byte);
+        for row in 0..glyph_height {
+            for column in 0..glyph_width {
+                let coverage = resampled_coverage(raster, column, row, glyph_width, glyph_height);
+                if coverage <= 0.01 {
+                    continue;
+                }
+                canvas.blend_pixel(
+                    glyph_x + column,
+                    glyph_y + row,
+                    [color[0], color[1], color[2], color[3] * coverage],
+                );
+            }
+        }
+    }
 }
 
 #[expect(
@@ -1535,10 +1759,7 @@ fn layout_extent(config: RenderConfig, metrics: u16) -> (i32, i32) {
     }
     let count = i32::try_from(metric_count(metrics)).unwrap_or(0);
     match config.layout {
-        Layout::Grid => (
-            GRID_WIDTH,
-            GRID_HEADER_HEIGHT + ((count + 1) / 2) * GRID_ROW_HEIGHT,
-        ),
+        Layout::Grid => (GRID_WIDTH, grid_height(metrics)),
         Layout::Ribbon => (
             if config.branding_visible {
                 RIBBON_BRAND_WIDTH
@@ -1559,6 +1780,52 @@ fn metric_count(metrics: u16) -> usize {
         .into_iter()
         .filter(|(bit, _)| metrics & *bit != 0)
         .count()
+}
+
+/// The Grid panel height follows the Vulkan renderer's row structure: a 25 px
+/// header, one 38 px frame row, and 26 px low/hardware rows.
+fn grid_height(metrics: u16) -> i32 {
+    let frame = metrics & (OverlayMetricSet::FPS | OverlayMetricSet::FRAME_TIME) != 0;
+    let low = metrics
+        & (OverlayMetricSet::ONE_PERCENT_LOW | OverlayMetricSet::POINT_ONE_PERCENT_LOW)
+        != 0;
+    let hardware = metrics
+        & (OverlayMetricSet::CPU_LOAD
+            | OverlayMetricSet::CPU_TEMPERATURE
+            | OverlayMetricSet::GPU_LOAD
+            | OverlayMetricSet::GPU_TEMPERATURE)
+        != 0;
+    GRID_HEADER_HEIGHT
+        + i32::from(frame) * GRID_PRIMARY_ROW_HEIGHT
+        + (i32::from(low) + i32::from(hardware)) * GRID_SECONDARY_ROW_HEIGHT
+}
+
+fn push_device_metrics(
+    row: &mut FixedText<16>,
+    label: &[u8],
+    show_load: bool,
+    show_temperature: bool,
+    load: Option<u8>,
+    temperature: Option<i16>,
+) {
+    if !show_load && !show_temperature {
+        return;
+    }
+    if row.length > 0 {
+        row.push_bytes(b"  ");
+    }
+    row.push_bytes(label);
+    if show_load {
+        row.push(b' ');
+        row.push_number(load.map(u16::from));
+        row.push(b'%');
+    }
+    if show_temperature {
+        row.push(if show_load { b'~' } else { b' ' });
+        row.push_number(temperature.and_then(|value| u16::try_from(value).ok()));
+        row.push(b'^');
+        row.push(b'C');
+    }
 }
 
 fn metric_labels() -> [(u16, &'static [u8]); 8] {
@@ -1706,25 +1973,108 @@ fn palette_from_environment() -> Palette {
 
 const fn palette_from_index(index: u8) -> Palette {
     match index {
-        1 => Palette::new([0.027, 0.067, 0.086, 1.0], [0.31, 0.78, 0.96, 1.0]),
-        2 => Palette::new([0.071, 0.051, 0.031, 1.0], [0.98, 0.47, 0.22, 1.0]),
-        3 => Palette::new([0.027, 0.067, 0.047, 1.0], [0.33, 0.88, 0.59, 1.0]),
-        4 => Palette::new([0.035, 0.035, 0.035, 1.0], [0.78, 0.78, 0.78, 1.0]),
-        5 => Palette::new([0.055, 0.039, 0.078, 1.0], [0.68, 0.48, 0.95, 1.0]),
-        6 => Palette::new([0.071, 0.063, 0.024, 1.0], [0.95, 0.83, 0.36, 1.0]),
-        7 => Palette::new([0.078, 0.035, 0.063, 1.0], [1.0, 0.51, 0.68, 1.0]),
-        _ => Palette::new([0.035, 0.035, 0.035, 1.0], [0.88, 0.20, 0.24, 1.0]),
+        1 => Palette::new(
+            [0.002, 0.006, 0.008, 1.0],
+            [0.112, 0.571, 0.791, 1.0],
+            [0.342, 0.479, 0.521, 1.0],
+            [0.913, 0.956, 0.973, 1.0],
+            [0.022, 0.051, 0.063, 1.0],
+        ),
+        2 => Palette::new(
+            [0.006, 0.004, 0.002, 1.0],
+            [0.888, 0.381, 0.068, 1.0],
+            [0.539, 0.418, 0.296, 1.0],
+            [1.0, 0.93, 0.871, 1.0],
+            [0.06, 0.04, 0.024, 1.0],
+        ),
+        3 => Palette::new(
+            [0.002, 0.006, 0.004, 1.0],
+            [0.171, 0.672, 0.356, 1.0],
+            [0.332, 0.491, 0.392, 1.0],
+            [0.888, 1.0, 0.93, 1.0],
+            [0.022, 0.054, 0.033, 1.0],
+        ),
+        4 => Palette::new(
+            [0.003, 0.003, 0.003, 1.0],
+            [0.807, 0.807, 0.807, 1.0],
+            [0.407, 0.407, 0.407, 1.0],
+            [0.93, 0.93, 0.93, 1.0],
+            [0.04, 0.04, 0.04, 1.0],
+        ),
+        5 => Palette::new(
+            [0.004, 0.003, 0.007, 1.0],
+            [0.434, 0.262, 1.0, 1.0],
+            [0.462, 0.392, 0.552, 1.0],
+            [0.956, 0.93, 1.0, 1.0],
+            [0.047, 0.033, 0.068, 1.0],
+        ),
+        6 => Palette::new(
+            [0.006, 0.005, 0.002, 1.0],
+            [0.888, 0.658, 0.107, 1.0],
+            [0.539, 0.479, 0.275, 1.0],
+            [1.0, 0.973, 0.847, 1.0],
+            [0.063, 0.054, 0.022, 1.0],
+        ),
+        7 => Palette::new(
+            [0.007, 0.003, 0.005, 1.0],
+            [1.0, 0.223, 0.418, 1.0],
+            [0.552, 0.366, 0.434, 1.0],
+            [1.0, 0.93, 0.956, 1.0],
+            [0.068, 0.03, 0.044, 1.0],
+        ),
+        _ => Palette::new(
+            [0.003, 0.003, 0.003, 1.0],
+            [0.807, 0.063, 0.078, 1.0],
+            [0.356, 0.356, 0.392, 1.0],
+            [0.888, 0.871, 0.847, 1.0],
+            [0.03, 0.03, 0.037, 1.0],
+        ),
+    }
+}
+
+/// The Replay menu keeps fixed Redunar control colors (#262930 grid, #eb2933
+/// control red, #ff5a63 selected text) independent of the metric palettes.
+const fn menu_palette() -> Palette {
+    Palette {
+        panel: [0.003, 0.003, 0.003, 1.0],
+        accent: [0.831, 0.022, 0.033, 1.0],
+        muted: [0.275, 0.242, 0.279, 1.0],
+        text: [0.888, 0.871, 0.847, 1.0],
+        divider: [0.019, 0.022, 0.03, 1.0],
+        highlight: [1.0, 0.102, 0.125, 1.0],
+        secondary: [0.624, 0.571, 0.597, 1.0],
+    }
+}
+
+/// The Moment saved pill keeps its own quiet surface and receipt colors.
+const fn notice_palette() -> Palette {
+    Palette {
+        panel: [0.007, 0.007, 0.01, 1.0],
+        accent: [0.839, 0.195, 0.22, 1.0],
+        muted: [0.402, 0.361, 0.376, 1.0],
+        text: [0.888, 0.871, 0.847, 1.0],
+        divider: [0.033, 0.033, 0.036, 1.0],
+        highlight: [0.839, 0.195, 0.22, 1.0],
+        secondary: [0.402, 0.361, 0.376, 1.0],
     }
 }
 
 impl Palette {
-    const fn new(panel: [f32; 4], accent: [f32; 4]) -> Self {
+    const fn new(
+        panel: [f32; 4],
+        accent: [f32; 4],
+        muted: [f32; 4],
+        text: [f32; 4],
+        divider: [f32; 4],
+    ) -> Self {
         Self {
             panel,
             accent,
-            muted: [0.72, 0.72, 0.72, 1.0],
-            text: [0.96, 0.96, 0.96, 1.0],
-            divider: [0.22, 0.22, 0.22, 1.0],
+            muted,
+            text,
+            divider,
+            highlight: accent,
+            secondary: text,
         }
     }
 }
@@ -1816,7 +2166,8 @@ fn round_temp(tenths: u16) -> i16 {
 mod tests {
     use super::{
         Canvas, Corner, FixedText, FrameHistory, Layout, MetricSnapshot, OverlayState, Preset,
-        RenderConfig, draw_text_scaled, layout_extent, palette_from_index, panel_origin,
+        REPLAY_MENU_HEIGHT, REPLAY_MENU_WIDTH, RenderConfig, SAVED_NOTICE_HEIGHT,
+        SAVED_NOTICE_WIDTH, draw_text_scaled, layout_extent, palette_from_index, panel_origin,
         render_plan, render_replay_menu, render_saved_notice,
     };
     use redunar_capture::{
@@ -1949,7 +2300,7 @@ mod tests {
         let width = usize::try_from(width).unwrap();
         assert!(has_rgb(&canvas, 6..18, [muted[0], muted[1], muted[2]]));
         assert_eq!(&canvas.pixels[(24 * width + 20) * 4..][..3], &divider[..3]);
-        assert_eq!(&canvas.pixels[(48 * width + 20) * 4..][..3], &divider[..3]);
+        assert_eq!(&canvas.pixels[(50 * width + 20) * 4..][..3], &divider[..3]);
     }
 
     #[test]
@@ -2053,6 +2404,160 @@ mod tests {
         assert_eq!(state.preset, Preset::FpsOnly);
         assert_eq!(state.scale_percent, 100);
         fs::remove_file(path).expect("remove telemetry");
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        clippy::type_complexity,
+        reason = "the reference dump keeps every surface's setup in one auditable test"
+    )]
+    fn render_canvas_reference() {
+        let Ok(path) = std::env::var("REDUNAR_OPENGL_CANVAS_REFERENCE") else {
+            return;
+        };
+        let surface = std::env::var("REDUNAR_OPENGL_CANVAS_SURFACE").unwrap_or_default();
+        let palette = palette_from_index(0);
+        let (width, height, draw): (i32, i32, Box<dyn Fn(&mut Canvas)>) = match surface.as_str() {
+            "menu" => (
+                REPLAY_MENU_WIDTH,
+                REPLAY_MENU_HEIGHT,
+                Box::new(|canvas| {
+                    render_replay_menu(
+                        canvas,
+                        ReplayMenuTelemetry {
+                            revision: 2,
+                            visible: true,
+                            pointer_pressed: false,
+                            cursor_x: 8_200,
+                            cursor_y: 7_800,
+                            hover_target: 0,
+                            pressed_target: 0,
+                            selected_duration_index: 1,
+                            status: ReplayMenuStatus::Buffering,
+                            available_seconds: 90,
+                            click_revision: 0,
+                            frame_rate: 120,
+                            quality: 1,
+                            output_format: 1,
+                            save_enabled: true,
+                            overlay_shortcut: ReplayShortcutLabel::EMPTY,
+                            save_shortcut: ReplayShortcutLabel::EMPTY,
+                        },
+                        100,
+                    );
+                }),
+            ),
+            "notice" => (
+                SAVED_NOTICE_WIDTH,
+                SAVED_NOTICE_HEIGHT,
+                Box::new(|canvas| {
+                    render_saved_notice(canvas, 100);
+                }),
+            ),
+            "ribbon" => {
+                let config = RenderConfig {
+                    corner: Corner::TopLeft,
+                    palette,
+                    preset: Preset::Detailed,
+                    layout: Layout::Ribbon,
+                    metrics: 0,
+                    scale_percent: 100,
+                    opacity_percent: 60,
+                    branding_visible: true,
+                };
+                let metrics = redunar_core::OverlayMetricSet::KNOWN;
+                let (width, height) = layout_extent(config, metrics);
+                (
+                    width,
+                    height,
+                    Box::new(move |canvas| {
+                        render_plan(canvas, reference_snapshot(), config, metrics, (0, 0), 100);
+                    }),
+                )
+            }
+            "telemetry" => {
+                let config = RenderConfig {
+                    corner: Corner::TopLeft,
+                    palette,
+                    preset: Preset::Detailed,
+                    layout: Layout::Telemetry,
+                    metrics: 0,
+                    scale_percent: 100,
+                    opacity_percent: 60,
+                    branding_visible: true,
+                };
+                let metrics = redunar_core::OverlayMetricSet::KNOWN;
+                let (width, height) = layout_extent(config, metrics);
+                (
+                    width,
+                    height,
+                    Box::new(move |canvas| {
+                        render_plan(canvas, reference_snapshot(), config, metrics, (0, 0), 100);
+                    }),
+                )
+            }
+            _ => {
+                let config = RenderConfig {
+                    corner: Corner::TopLeft,
+                    palette,
+                    preset: Preset::Detailed,
+                    layout: Layout::Grid,
+                    metrics: 0,
+                    scale_percent: 100,
+                    opacity_percent: 60,
+                    branding_visible: true,
+                };
+                let metrics = redunar_core::OverlayMetricSet::KNOWN;
+                let (width, height) = layout_extent(config, metrics);
+                (
+                    width,
+                    height,
+                    Box::new(move |canvas| {
+                        render_plan(canvas, reference_snapshot(), config, metrics, (0, 0), 100);
+                    }),
+                )
+            }
+        };
+        // A neutral game-frame backdrop keeps panel alpha legible.
+        let mut canvas = Canvas::new(width + 24, height + 24);
+        for row in 0..canvas.height {
+            for column in 0..canvas.width {
+                let index = (usize::try_from(row).unwrap()
+                    * usize::try_from(canvas.width).unwrap()
+                    + usize::try_from(column).unwrap())
+                    * 4;
+                canvas.pixels[index] = 38;
+                canvas.pixels[index + 1] = 42;
+                canvas.pixels[index + 2] = 50;
+                canvas.pixels[index + 3] = 255;
+            }
+        }
+        draw(&mut canvas);
+        let mut ppm = format!("P6\n{} {}\n255\n", canvas.width, canvas.height).into_bytes();
+        for row in 0..canvas.height {
+            for column in 0..canvas.width {
+                let index = (usize::try_from(row).unwrap()
+                    * usize::try_from(canvas.width).unwrap()
+                    + usize::try_from(column).unwrap())
+                    * 4;
+                ppm.extend_from_slice(&canvas.pixels[index..index + 3]);
+            }
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+
+    fn reference_snapshot() -> MetricSnapshot {
+        MetricSnapshot {
+            fps: Some(144),
+            frame_time_tenths_ms: Some(69),
+            one_percent_low_fps: Some(118),
+            point_one_percent_low_fps: Some(96),
+            cpu_percent: Some(38),
+            cpu_temperature_c: Some(62),
+            gpu_percent: Some(91),
+            gpu_temperature_c: Some(68),
+        }
     }
 
     #[test]

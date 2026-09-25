@@ -17,7 +17,7 @@
 /* Match the settings preview to the native Vulkan metric surface. The
    browser preview uses the same 294px panel, row heights, offsets, dividers,
    and metric ordering as the injected in-game renderer. */
-.hud{position:absolute;top:15px;left:15px;display:block;box-sizing:border-box;width:294px;min-width:294px;height:var(--hud-native-height);padding:0;border:1px solid var(--hud-border,#30343a);border-left:3px solid var(--hud-accent,#e7474f);border-radius:4px;background:color-mix(in srgb,var(--hud-panel,#0b0b0d) calc(var(--hud-opacity) * 100%),transparent);color:var(--hud-text,#eef0f5);overflow:hidden;font-family:Plex,monospace;transform:scale(calc(var(--hud-scale) * var(--hud-preview-fit,1)));transform-origin:top left}
+.hud{position:absolute;top:15px;left:15px;display:block;box-sizing:border-box;width:294px;min-width:294px;height:var(--hud-native-height);padding:0;border:1px solid var(--hud-border,#303036);border-left:3px solid var(--hud-accent,#e8474f);border-radius:4px;background:color-mix(in srgb,var(--hud-panel,#090909) calc(var(--hud-opacity) * 100%),transparent);color:var(--hud-text,#f2f0ed);overflow:hidden;font-family:Plex,monospace;transform:scale(calc(var(--hud-scale) * var(--hud-preview-fit,1)));transform-origin:top left}
 .hud[hidden]{display:none}
 .hud[data-position='Top right']{left:auto;right:15px;transform-origin:top right}.hud[data-position='Bottom left']{top:auto;bottom:15px;transform-origin:bottom left}.hud[data-position='Bottom right']{top:auto;left:auto;bottom:15px;right:15px;transform-origin:bottom right}
 .hud-native-header{height:25px;box-sizing:border-box;padding:6px 8px;border-bottom:1px solid var(--hud-border);font:9px/1 Plex,monospace;color:var(--hud-accent);letter-spacing:1.2px}

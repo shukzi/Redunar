@@ -253,6 +253,7 @@ fn main() {
             runtime::app_preferences,
             runtime::set_close_to_tray,
             runtime::set_diagnostic_log,
+            runtime::set_beta_access,
             runtime::open_diagnostic_log_folder,
             runtime::set_automatic_updates,
             runtime::check_for_updates,

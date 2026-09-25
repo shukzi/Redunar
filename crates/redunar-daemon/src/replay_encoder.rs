@@ -383,6 +383,17 @@ impl HardwareEncoderProbe {
         Self::from_roots(Path::new("/dev/dri"), Path::new("/sys/class/drm"))
     }
 
+    /// Admit a single NVIDIA render node as a beta candidate. Multi-GPU
+    /// systems remain unavailable until the game and encoder can be matched.
+    #[must_use]
+    pub fn local_with_nvidia_beta(allow_nvidia_beta: bool) -> Self {
+        Self::from_roots_with_nvidia_beta(
+            Path::new("/dev/dri"),
+            Path::new("/sys/class/drm"),
+            allow_nvidia_beta,
+        )
+    }
+
     #[must_use]
     pub fn candidates(&self) -> &[HardwareEncoderDeviceCandidate] {
         &self.candidates
@@ -400,13 +411,39 @@ impl HardwareEncoderProbe {
     }
 
     fn from_roots(device_root: &Path, sysfs_root: &Path) -> Self {
+        Self::from_roots_with_nvidia_beta(device_root, sysfs_root, false)
+    }
+
+    fn from_roots_with_nvidia_beta(
+        device_root: &Path,
+        sysfs_root: &Path,
+        allow_nvidia_beta: bool,
+    ) -> Self {
         let mut candidates = Vec::new();
         if let Ok(entries) = fs::read_dir(device_root) {
-            for entry in entries.flatten().take(MAX_RENDER_NODES) {
-                let name = entry.file_name();
-                let Some(name) = name.to_str().filter(|name| is_render_node_name(name)) else {
-                    continue;
+            let nodes: Vec<_> = entries
+                .flatten()
+                .filter(|entry| entry.file_name().to_str().is_some_and(is_render_node_name))
+                .take(MAX_RENDER_NODES + 1)
+                .collect();
+            let single_gpu = nodes.len() == 1;
+            let has_nvidia = nodes.iter().any(|entry| {
+                fs::read_link(sysfs_root.join(entry.file_name()).join("device/driver"))
+                    .ok()
+                    .and_then(|path| path.file_name().map(|name| name == "nvidia"))
+                    .unwrap_or(false)
+            });
+            // A hybrid NVIDIA system cannot safely associate the exported
+            // game frame with an encoder until device identity is carried.
+            if allow_nvidia_beta && has_nvidia && !single_gpu {
+                return Self {
+                    candidates,
+                    blockers: vec![HardwareEncoderProbeBlocker::NoSupportedRenderNode],
                 };
+            }
+            for entry in nodes.into_iter().take(MAX_RENDER_NODES) {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
                 let driver_link = sysfs_root.join(name).join("device/driver");
                 let Ok(driver_target) = fs::read_link(driver_link) else {
                     continue;
@@ -415,7 +452,7 @@ impl HardwareEncoderProbe {
                 else {
                     continue;
                 };
-                if driver != "amdgpu" {
+                if driver != "amdgpu" && !(allow_nvidia_beta && single_gpu && driver == "nvidia") {
                     continue;
                 }
                 let render_node = entry.path();

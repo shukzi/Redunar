@@ -122,6 +122,7 @@ pub struct RedunarService {
     replay_home_directory: Option<PathBuf>,
     replay_control_path: Option<PathBuf>,
     allow_validation_candidate: bool,
+    beta_access_at_start: bool,
     runtime: Arc<ServiceRuntime>,
 }
 
@@ -154,6 +155,7 @@ impl fmt::Debug for RedunarService {
                 "allow_validation_candidate",
                 &self.allow_validation_candidate,
             )
+            .field("beta_access_at_start", &self.beta_access_at_start)
             .field(
                 "game_session_initialized",
                 &self.runtime.game_session.get().is_some(),
@@ -164,12 +166,16 @@ impl fmt::Debug for RedunarService {
 
 impl Default for RedunarService {
     fn default() -> Self {
+        let state_directory = default_state_directory();
+        let beta_access_at_start = app_preferences::load(&state_directory)
+            .is_ok_and(|preferences| preferences.beta_access);
         Self {
-            probe: LinuxHardwareProbe::default(),
-            state_directory: default_state_directory(),
+            probe: LinuxHardwareProbe::default().with_nvidia_beta_enabled(beta_access_at_start),
+            state_directory,
             replay_home_directory: absolute_home_directory(),
             replay_control_path: replay_control::replay_control_socket_path(),
             allow_validation_candidate: true,
+            beta_access_at_start,
             runtime: Arc::new(ServiceRuntime::default()),
         }
     }
@@ -178,9 +184,12 @@ impl Default for RedunarService {
 impl RedunarService {
     #[must_use]
     pub fn with_state_directory(state_directory: impl Into<PathBuf>) -> Self {
+        let state_directory = state_directory.into();
+        let beta_access_at_start = app_preferences::load(&state_directory)
+            .is_ok_and(|preferences| preferences.beta_access);
         Self {
-            probe: LinuxHardwareProbe::default(),
-            state_directory: state_directory.into(),
+            probe: LinuxHardwareProbe::default().with_nvidia_beta_enabled(beta_access_at_start),
+            state_directory,
             // Test/embedded callers that substitute daemon state must not
             // accidentally initialize the real user's Videos directory.
             replay_home_directory: None,
@@ -189,6 +198,7 @@ impl RedunarService {
             // Tests and embedded callers must not infer production Replay
             // readiness from whatever GPU happens to be installed on the host.
             allow_validation_candidate: false,
+            beta_access_at_start,
             runtime: Arc::new(ServiceRuntime::default()),
         }
     }
@@ -280,6 +290,19 @@ impl RedunarService {
         app_preferences::set_diagnostic_log(&self.state_directory, enabled)
     }
 
+    /// Persist voluntary access to beta features in installed builds. Feature
+    /// owners still check their own native runtime capabilities before use.
+    ///
+    /// # Errors
+    ///
+    /// Propagates preference persistence failures.
+    pub fn set_beta_access_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<AppPreferences, AppPreferencesError> {
+        app_preferences::set_beta_access(&self.state_directory, enabled)
+    }
+
     /// Start the bounded diagnostic log tee when the saved preference enables
     /// it. Silent on failure: diagnostics must never block startup.
     pub fn start_diagnostic_log_if_enabled(&self) {
@@ -336,7 +359,7 @@ impl RedunarService {
     /// owner or delay application shutdown for a full sampling interval.
     #[must_use]
     pub fn start_monitor(&self) -> MonitorHandle {
-        MonitorHandle::start(MonitorConfig::default())
+        MonitorHandle::start(MonitorConfig::default(), self.beta_access_at_start)
     }
 
     /// Start live monitoring with explicit sampling intervals.
@@ -345,7 +368,7 @@ impl RedunarService {
     /// monitoring. [`MonitorConfig`] enforces Redunar's minimum interval.
     #[must_use]
     pub fn start_monitor_with_config(&self, config: MonitorConfig) -> MonitorHandle {
-        MonitorHandle::start(config)
+        MonitorHandle::start(config, self.beta_access_at_start)
     }
 
     /// Report whether the required Vulkan capture layer is available beside
@@ -471,6 +494,14 @@ impl RedunarService {
         let pipeline_settings = settings;
         let pipeline_save_directory = save_directory.clone();
         let pipeline_spool_directory = spool_directory.clone();
+        // The encoder vendor must agree with the one eligible DRM node. A
+        // preference alone is insufficient to select a Vulkan physical device.
+        let allow_nvidia_beta = self.beta_access_at_start
+            && self
+                .replay_hardware_encoder_probe()
+                .candidates()
+                .iter()
+                .any(|candidate| candidate.driver() == "nvidia" && candidate.is_accessible());
         let coordinator = self.game_session_coordinator();
         coordinator
             .replay_runtime()
@@ -479,7 +510,11 @@ impl RedunarService {
             settings,
             readiness,
             move |frame| {
-                let backend = vulkan_replay_backend(frame, pipeline_settings)?;
+                let backend = vulkan_replay_backend_with_nvidia_beta(
+                    frame,
+                    pipeline_settings,
+                    allow_nvidia_beta,
+                )?;
                 let store = ReplayClipStore::open(
                     pipeline_save_directory.clone(),
                     ReplayBudget::from_settings(pipeline_settings),
@@ -495,7 +530,7 @@ impl RedunarService {
                     .map(|pipeline| pipeline.with_spool(spool))
                     .map_err(|error| error.to_string())
             },
-            move |frame| vulkan_replay_backend(frame, settings),
+            move |frame| vulkan_replay_backend_with_nvidia_beta(frame, settings, allow_nvidia_beta),
         );
         if result.is_err() {
             coordinator
@@ -542,13 +577,13 @@ impl RedunarService {
         }
     }
 
-    /// Inspect local AMD DRM render nodes as hardware-encoder candidates.
+    /// Inspect local DRM render nodes as hardware-encoder candidates.
     /// This performs no encode and can never make Replay production-ready by
     /// itself; profile/codec support and DMA-BUF import still require a real
     /// generated-frame verification run.
     #[must_use]
     pub fn replay_hardware_encoder_probe(&self) -> HardwareEncoderProbe {
-        HardwareEncoderProbe::local()
+        HardwareEncoderProbe::local_with_nvidia_beta(self.beta_access_at_start)
     }
 
     /// Inspect connected DRM connector modes for the display-aware Replay
@@ -990,7 +1025,7 @@ impl RedunarService {
             module_state::ModuleCapability::Available
         } else {
             module_state::ModuleCapability::PlannedUnavailable(
-                "Instant Replay requires the Vulkan game capture runtime and an accessible AMD hardware encoder.".to_owned(),
+                "Instant Replay requires Vulkan game capture and an accessible hardware encoder. NVIDIA candidates require Beta access and a single GPU.".to_owned(),
             )
         };
         module_state::ModuleCapabilities {
@@ -1007,7 +1042,7 @@ impl RedunarService {
                 Self::raw_capture_runtime_status(),
                 CaptureRuntimeStatus::Available
             )
-            && HardwareEncoderProbe::local()
+            && HardwareEncoderProbe::local_with_nvidia_beta(self.beta_access_at_start)
                 .candidates()
                 .iter()
                 .any(HardwareEncoderDeviceCandidate::is_accessible)
@@ -1371,6 +1406,14 @@ fn vulkan_replay_backend(
     frame: &DmaBufReplayFrame,
     settings: redunar_core::ReplaySettings,
 ) -> Result<Box<dyn HardwareEncoderBackend>, String> {
+    vulkan_replay_backend_with_nvidia_beta(frame, settings, false)
+}
+
+fn vulkan_replay_backend_with_nvidia_beta(
+    frame: &DmaBufReplayFrame,
+    settings: redunar_core::ReplaySettings,
+    allow_nvidia_beta: bool,
+) -> Result<Box<dyn HardwareEncoderBackend>, String> {
     const DRM_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
     const DRM_FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
     const DRM_FORMAT_XBGR8888: u32 = u32::from_le_bytes(*b"XB24");
@@ -1382,7 +1425,11 @@ fn vulkan_replay_backend(
             .map_err(|_| "Replay frame rate exceeds the Vulkan backend bound".to_owned())?,
         target_megabits_per_second: settings.quality.target_megabits_per_second(),
     };
-    let encoder = redunar_capture_vulkan::replay_video::VulkanVideoH264Device::open(request)
+    let encoder =
+        redunar_capture_vulkan::replay_video::VulkanVideoH264Device::open_with_nvidia_beta(
+            request,
+            allow_nvidia_beta,
+        )
         .and_then(redunar_capture_vulkan::replay_video::VulkanVideoH264Device::create_session)
         .and_then(redunar_capture_vulkan::replay_video::VulkanVideoH264Session::create_parameters)
         .and_then(|parameters| {

@@ -55,6 +55,9 @@ Paths below are relative to `output/tauri-redunar/`:
 | Replay menu and shortcuts | `src-tauri/src/hotkeys.rs`; `crates/redunar-hotkeys` (pointer capture); `crates/redunar-capture-vulkan/src/overlay.rs` (in-game menu render); `ui/replay-menu-view.mjs` (app preview) |
 | Tray preference/lifecycle | `src-tauri/src/tray.rs`, `main.rs` |
 | Signed updates and installer state | `src-tauri/src/updates.rs`, `runtime.rs`; `ui/app.js` |
+| Application preferences and Beta access opt-in | `crates/redunar-daemon/src/app_preferences.rs`, `src-tauri/src/runtime.rs`; `ui/app.js` |
+| NVIDIA beta GPU metrics | `crates/redunar-nvidia-nvml`, `crates/redunar-platform/src/linux.rs`, `crates/redunar-daemon/src/monitor.rs` |
+| NVIDIA beta Replay candidate | `crates/redunar-daemon/src/replay_encoder.rs`, `crates/redunar-capture-vulkan/src/replay_video.rs` |
 | Real-data mapping | `ui/native-data.mjs`, `app.js` |
 | History coordinates and inspection | `ui/history-timeline.mjs`, `history-chart.css` |
 | Clip selection and previews | `ui/replay-requests.mjs`, `replay-loading.mjs`, `replay-filmstrip.mjs` |

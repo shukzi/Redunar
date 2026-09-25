@@ -4,6 +4,18 @@ Current Tauri and shared-backend checks, reviewed September 24, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## September 25, 2026 NVIDIA beta implementation check
+
+Build `0.1.4` from `117aef7` plus the uncommitted Beta access and NVIDIA
+changes: the root daemon `cargo check --offline`, the separate Tauri
+`cargo check --offline`, the frontend `npm run build`, root strict Clippy for
+the affected daemon/platform/NVML/Vulkan crates, Tauri strict Clippy,
+`cargo fmt --all -- --check`, and `git diff --check` passed. No NVIDIA GPU was
+available on this host, so NVML readings, in-game NVIDIA metrics, and NVIDIA
+Replay recording remain unverified. The browser's local-file policy blocked
+visual inspection of the changed Settings view. No tests or game runs were
+performed for this change.
+
 ## Choose checks for the change
 
 | Change | Required evidence |
@@ -69,6 +81,68 @@ to reject `libpulse.so.0`. The interposer now clears its internal loader error
 after successful loads. The owner reported live Stardew sound restored with
 the resulting local RPM; the installed OpenGL sidecar matches the RPM payload.
 Instant Replay audio remains untested.
+
+## September 24-25, 2026 overlay renderer redesign
+
+The in-game metrics overlay and Replay menu were rebuilt to the approved
+modern reference (soft rounded panels, quiet letter-spaced labels above bright
+values, thin dividers, dark-red selected duration cell with red underline,
+red-outlined save button). The shared 18x24 coverage tables were regenerated
+with a 16-row mono cap and a 14-row UI cap at the original baselines, the eight
+palette roles were converted from the reference's sRGB values into the
+renderer's linear-light tables, and the Replay menu keeps fixed Redunar
+control colors plus its own near-black panel shader slot. The OpenGL interposer
+Grid layout now mirrors the Vulkan row structure, and the desktop overlay
+preview palette table matches the renderer roles.
+
+Evidence on build `0.1.4` (commit `117aef7` plus these uncommitted
+changes), x86_64 Linux, Mesa `lvp` software ICD for the headless pipeline
+check:
+
+- Root workspace `cargo test --offline --workspace`: all suites pass
+  (redunar-capture-vulkan 68, redunar-capture-opengl 32, redunar-daemon 214,
+  plus the remaining crates); the daemon socket test requires an unsandboxed
+  run.
+- `cargo clippy --offline --workspace --all-targets` and `cargo fmt --check`
+  are clean; the Tauri `npm run check` (Node tests plus production Vite
+  build) passes.
+- `blend_pipeline_is_accepted_by_headless_vulkan` passes with
+  `VK_ICD_FILENAMES=lvp_icd.x86_64.json`, accepting the new nine-slot panel
+  shader.
+- `REDUNAR_CAPTURE_PROBE_OVERLAY=1` against `/usr/bin/vkcube`: 59 frames,
+  drops=0, rejects=0, overlay_status=Some(Active).
+- `tools/run-opengl-overlay-acceptance.sh` (six GLX/EGL/SDL routes, isolated
+  state): all Active with drops=0 and rejects=0.
+- Replay menu control path via `REDUNAR_CAPTURE_PROBE_SAVE_VIA_MENU=1` with
+  replay eligibility: MENU TOGGLE/MOVE/BUTTON sequence completes, replay
+  copies and exports frames, phase=Completed.
+- Visual inspection used the plan-level reference dumps
+  (`REDUNAR_REPLAY_MENU_REFERENCE`, `REDUNAR_METRICS_REFERENCE`) and the
+  OpenGL canvas dump test (`REDUNAR_OPENGL_CANVAS_REFERENCE`) compared
+  against `ai-workspace/private/overlay-reference/replay-menu-reference.png`.
+  These are renderer dumps from that build, not owner visual acceptance of a
+  real game session.
+
+## September 25, 2026 color-format follow-up
+
+The earlier palette tables held squared reference RGB channels. That build sent
+them unchanged to an UNORM swapchain and the OpenGL RGBA8 canvas, which made
+the menu controls and dividers too dark in actual game-window captures. The
+follow-up keeps the fixed palette roles and encodes them for each Vulkan
+attachment format; the OpenGL canvas now encodes them before byte blending.
+
+On build `0.1.4` (commit `117aef7` plus the uncommitted overlay changes), an
+offline release build of both injected libraries with `--lib` and the daemon
+capture probe completed. In isolated Xvfb, a 640×360 `vkcube` window
+using the UNORM swapchain showed the injected menu after a 16-second replay
+buffer, including its red selected duration and active red-outlined save
+control. The captured image is under
+`../artifacts/overlay-review-2026-09-25/reworked/`. This is synthetic visual
+inspection; an installed app and a real game remain unverified for this build.
+The OpenGL metric panel was visually inspected in a separate isolated
+`glxgears` capture using the rebuilt GL library; its Replay menu was not
+inspected in that run. Automated test suites from the preceding section were
+not rerun for this follow-up.
 
 ## Automated commands
 

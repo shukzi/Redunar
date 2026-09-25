@@ -69,6 +69,9 @@ key closes it. The menu renders even
 when the metrics overlay is hidden. Its bounded game-rendered surface and control
 outlines use rounded corners, and measured labels are centered within their
 cells so scaling cannot push shortcut or status text across a divider. The menu
+follows the approved modern reference look: quiet letter-spaced labels above
+bright values, thin dividers, a dark-red selected duration cell with a red
+underline, and a red-outlined save button on a near-black rounded panel. The menu
 shows the current menu chord and the selected duration's direct-save chord from
 live persisted preferences; cleared bindings show as unassigned. Its format
 picker persists MKV or MP4 and updates the active save runtime. A replay menu
@@ -91,6 +94,11 @@ six-slot pool of linear GBM RGBA8 buffers per bounded context, imported through
 fence-ready descriptors pass to the same daemon-owned GPU conversion and
 hardware H.264 worker. EGL/OpenGL ES Replay remains unsupported. Every route
 still depends on format, dimensions, device, queue, driver, and encoder gates.
+With Beta access enabled at startup, a single-render-node NVIDIA system may
+attempt the same Vulkan Video H.264 path. The driver must expose the required
+Vulkan Video encode, external-memory import, and queue capabilities. Multi-GPU
+NVIDIA systems are withheld until Redunar can match the game's render GPU to the
+encoder. This is an unverified beta path, not an NVIDIA recording guarantee.
 
 Backpressure drops replay work rather than waiting for an encoder on the game's
 presentation path. Resize starts a fresh codec epoch: completed old-generation

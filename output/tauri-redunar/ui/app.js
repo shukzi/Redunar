@@ -26,10 +26,10 @@ let games = [], clips = [], sessions = [];
 let savedGameOverrides = new Map();
 const metricNames = ['FPS','Frame time','1% low','0.1% low','GPU','CPU','GPU temperature','CPU temperature'];
 const overlayPalettes = {
- Redunar:['#e7474f','#0b0b0d','#f4f1ed','#aaa7ad','#303034'], Glacier:['#5ec8e5','#071116','#f4fbfd','#9eb8c0','#294047'],
- Ember:['#f3a64a','#120d08','#fff8ef','#c2ad94','#46382b'], Mint:['#72d6a0','#07110c','#f3fff8','#9cb9a8','#294234'],
- Mono:['#e8e8e8','#090909','#f7f7f7','#ababab','#383838'], Amethyst:['#b08cff','#0e0a14','#fbf8ff','#b4a8c5','#3d334a'],
- Solar:['#f1d45b','#121006','#fffced','#c3b98e','#474229'], Rose:['#ff82ad','#140910','#fff7fa','#c4a4af','#4a303b']
+ Redunar:['#e8474f','#090909','#f2f0ed','#a1a1a8','#303036'], Glacier:['#5ec7e6','#071116','#f5fafc','#9eb8bf','#294047'],
+ Ember:['#f2a64a','#120d08','#fff7f0','#c2ad94','#45382b'], Mint:['#73d6a1','#07110c','#f2fff7','#9cbaa8','#294233'],
+ Mono:['#e8e8e8','#090909','#f7f7f7','#ababab','#383838'], Amethyst:['#b08cff','#0e0a14','#faf7ff','#b5a8c4','#3d334a'],
+ Solar:['#f2d45c','#121006','#fffced','#c2b88f','#474229'], Rose:['#ff82ad','#140910','#fff7fa','#c4a3b0','#4a303b']
 };
 const presetMetrics = preset => preset==='Compact'?['FPS','Frame time','GPU','CPU','GPU temperature','CPU temperature']:preset==='Detailed'?[...metricNames]:preset==='FPS only'?['FPS']:[];
 const effectiveMetrics = (preset,custom=[]) => preset==='Custom'?[...custom]:presetMetrics(preset||'Compact');
@@ -43,7 +43,7 @@ let selectedGame = null, selectedClip = null, selectedSession = 0;
 let overviewMetric = 'frame';
 let historyMetric = 'fps', historyCompare = false, historyCursor = null;
 let globalTab = 'overlay', libraryTab = 'profile';
-let preferences = {tray:null,automaticUpdates:true,diagnosticLog:false,diagnosticLogPath:null};
+let preferences = {tray:null,automaticUpdates:true,diagnosticLog:false,diagnosticLogPath:null,betaAccess:false};
 let updateStatus = null;
 let startupUpdateCheckStarted = false;
 let toastTimer;
@@ -367,8 +367,13 @@ function settings() {
  const version=updateStatus?.current_version||$('.build-label')?.textContent?.replace(/^Version\s+/,'')||'Current build';
  const updateState=updateStatus?.state==='not-configured'?'Source pending':updateStatus?.state==='restart-needed'?'Package installed · restart Redunar':updateStatus?.state==='handoff'?'Installer requested · installation unconfirmed':updateStatus?.state==='available'?`Verified ${String(updateStatus.package_kind||'').toUpperCase()} package`:updateStatus?.state==='up-to-date'?'Already up to date':updateStatus?.state==='error'?'Update check failed':'';
  const updateAction=updateStatus?.state==='restart-needed'?button('Check again','check-for-updates',false,!native||busy?'disabled':''):updateStatus?.state==='handoff'?`${button('Reopen installer','install-update',true,!native||busy?'disabled':'')}${button('Check again','check-for-updates',false,!native||busy?'disabled':'')}`:updateStatus?.state==='available'?button('Install update','install-update',true,!native||busy?'disabled':''):button('Check for updates','check-for-updates',true,!native||busy?'disabled':'');
- return heading('Settings','Application behavior and software updates.')+
-`<div class="settings-grid"><section class="panel controls-panel"><h2>Application behavior</h2><p>Choose how Redunar behaves on your desktop.</p>${field('Close to tray','Show a tray icon and keep Redunar running when the window closes',switchControl('tray','Close to tray',preferences.tray===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">When enabled, closing hides this window only while its tray icon is registered. Use the tray menu to reopen Redunar or quit. Disabling this removes the tray icon immediately; closing the window then quits Redunar.</div></section><section class="panel controls-panel updates-panel"><div class="updates-heading"><div><h2>Software updates</h2><p>Check for signed Redunar releases.</p></div><span class="pill">Version ${escape(version)}</span></div><div class="update-check-row"><span class="update-emblem">${icon('download')}</span><div><strong>Check for updates manually.</strong><p>Check for a verified package for this system.</p><small data-update-state>${escape(updateState)}</small></div><div class="update-check-actions">${updateAction}</div></div>${field('Check for updates automatically','Check for updates on app startup; installation always needs your action.',switchControl('automatic-updates','Check for updates automatically',preferences.automaticUpdates!==false,'preference',!native||!loaded.preferences||busy))}<div class="update-note">Your system package installer handles installation. Fully quit and reopen Redunar afterward to load the new version. <section class="panel controls-panel"><h2>Debug log</h2><p>Optional file logging for support reports.</p>${field('Debug log','Record Redunar operational messages to a private file. The file can include game names and session details.',switchControl('diagnostic-log','Debug log',preferences.diagnosticLog===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">Changes apply on the next Redunar start. ${preferences.diagnosticLogPath?`<button class="button" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:'The log file appears after the first logged run.'}</div></div></section></div>`;
+ return heading('Settings','Application behavior, beta access, and software updates.')+
+`<div class="settings-grid">
+ <section class="panel controls-panel"><h2>Application behavior</h2><p>Choose how Redunar behaves on your desktop.</p>${field('Close to tray','Show a tray icon and keep Redunar running when the window closes',switchControl('tray','Close to tray',preferences.tray===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">When enabled, closing hides this window only while its tray icon is registered. Use the tray menu to reopen Redunar or quit. Disabling this removes the tray icon immediately; closing the window then quits Redunar.</div></section>
+ <section class="panel controls-panel"><h2>Beta access</h2><p>Opt in to early features included with this version of Redunar.</p>${field('Beta access','Try features marked beta in this build.',switchControl('beta-access','Beta access',preferences.betaAccess===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">Off by default. Enables experimental NVIDIA GPU metrics and Replay on eligible hardware. Restart Redunar and start a new game after changing this setting.</div></section>
+ <section class="panel controls-panel updates-panel"><div class="updates-heading"><div><h2>Software updates</h2><p>Check for signed Redunar releases.</p></div><span class="pill">Version ${escape(version)}</span></div><div class="update-check-row"><span class="update-emblem">${icon('download')}</span><div><strong>Check for updates manually.</strong><p>Check for a verified package for this system.</p><small data-update-state>${escape(updateState)}</small></div><div class="update-check-actions">${updateAction}</div></div>${field('Check for updates automatically','Check for updates on app startup; installation always needs your action.',switchControl('automatic-updates','Check for updates automatically',preferences.automaticUpdates!==false,'preference',!native||!loaded.preferences||busy))}<div class="update-note">Your system package installer handles installation. Fully quit and reopen Redunar afterward to load the new version.</div></section>
+ <section class="panel controls-panel"><h2>Debug log</h2><p>Optional file logging for support reports.</p>${field('Debug log','Record Redunar operational messages to a private file. The file can include game names and session details.',switchControl('diagnostic-log','Debug log',preferences.diagnosticLog===true,'preference',!native||!loaded.preferences||busy))}<div class="info-note">Changes apply on the next Redunar start. ${preferences.diagnosticLogPath?`<button class="button" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:'The log file appears after the first logged run.'}</div></section>
+</div>`;
 }
 
 function diagnosticsCard() {
@@ -376,7 +381,7 @@ function diagnosticsCard() {
  if(!diagnostics) return `<section class="panel diagnostics-panel"><h2>Diagnostics</h2><p>Collecting read-only runtime counters…</p></section>`;
  const readiness=diagnostics.replay_readiness||{};
  const readyCount=Object.values(readiness).filter(Boolean).length;
- const candidateText=diagnostics.encoder_candidates?.length?diagnostics.encoder_candidates.map(c=>`${escape(c.driver)}${c.accessible?' · accessible':' · unavailable'}`).join(', '):'No AMD render node candidates found';
+ const candidateText=diagnostics.encoder_candidates?.length?diagnostics.encoder_candidates.map(c=>`${escape(c.driver)}${c.accessible?' · accessible':' · unavailable'}`).join(', '):'No eligible render node candidates found';
  const issue=diagnostics.telemetry_error||diagnostics.game_detection_error;
  const readinessRows=[['encoded_packet_ring','Encoded packet ring'],['atomic_clip_store','Atomic clip store'],['live_frame_transfer','Live frame transfer'],['hardware_encoder','Hardware encoder'],['playable_container','Playable container'],['performance_budget','Performance budget']];
  const captured=diagnostics.captured_at_unix_ms==null?'—':new Date(diagnostics.captured_at_unix_ms).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -753,6 +758,8 @@ function updateObservedElements() {
  if(automaticUpdates){automaticUpdates.checked=preferences.automaticUpdates!==false;automaticUpdates.disabled=!native||!loaded.preferences||busy;}
  const diagnosticLog=$('[data-preference="diagnostic-log"]');
  if(diagnosticLog){diagnosticLog.checked=preferences.diagnosticLog===true;diagnosticLog.disabled=!native||!loaded.preferences||busy;}
+ const betaAccess=$('[data-preference="beta-access"]');
+ if(betaAccess){betaAccess.checked=preferences.betaAccess===true;betaAccess.disabled=!native||!loaded.preferences||busy;}
  for(const updateAction of document.querySelectorAll('[data-action="check-for-updates"], [data-action="install-update"]'))updateAction.disabled=!native||busy;
 
  const values={
@@ -907,7 +914,7 @@ const reloaders={
  'reload-clips':async()=>{await readSection('clips','replay_clips',acceptClips);try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}},
  'reload-history':async()=>{const loadedHistory=await readSection('history','session_history',data=>{sessions=mapSessions(data);selectedSession=0;historyCursor=null;loaded.history=true;});if(loadedHistory&&activeSession)lastLoadedHistoryRevision=activeSession.history_revision;return loadedHistory;},
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
- 'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;loaded.preferences=true;}),
+ 'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.betaAccess=data.beta_access===true;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
  'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot');delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
 };
@@ -1154,6 +1161,18 @@ document.addEventListener('change',event=>{
    const saved=await call('set_diagnostic_log',{enabled:requested});
    preferences.diagnosticLog=saved.diagnostic_log===true;
    notify(preferences.diagnosticLog?'Debug log enabled. Restart Redunar to start recording.':'Debug log disabled. Recording stops after the next restart.');
+   render();
+  });
+  return;
+ }
+ if(t.dataset.preference==='beta-access'){
+  const requested=t.checked;
+  t.checked=preferences.betaAccess===true;
+  if(!native||!loaded.preferences||busy)return;
+  perform(async()=>{
+   const saved=await call('set_beta_access',{enabled:requested});
+   preferences.betaAccess=saved.beta_access===true;
+   notify(preferences.betaAccess?'Beta access enabled. Restart Redunar before trying beta features.':'Beta access disabled. Restart Redunar to return to standard features.');
    render();
   });
   return;

@@ -10,15 +10,25 @@ from PIL import Image, ImageDraw, ImageFont
 
 WIDTH = 18
 HEIGHT = 24
-FONT_SIZE = 20
+FONT_SIZE = 21
 WORDS = 27
+# The Replay menu's proportional canvas keeps its original baseline: cap rows
+# start at source row 3 with a 14-row cap height.
+CAP_TOP = 3
 SUPPORTED = b"-.%*+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def baseline_offset(font: ImageFont.FreeTypeFont) -> int:
+    probe = Image.new("L", (WIDTH * 2, HEIGHT * 2), 0)
+    ImageDraw.Draw(probe).text((WIDTH // 2, HEIGHT // 2), "H", font=font, fill=255)
+    top = probe.getbbox()[1]
+    return CAP_TOP - (top - HEIGHT // 2)
 
 
 def packed_glyph(font: ImageFont.FreeTypeFont, byte: int) -> list[int]:
     image = Image.new("L", (WIDTH, HEIGHT), 0)
     draw = ImageDraw.Draw(image)
-    draw.text((0, -5), chr(byte), font=font, fill=255)
+    draw.text((0, baseline_offset(font)), chr(byte), font=font, fill=255)
     words = [0] * WORDS
     for index, coverage in enumerate(image.get_flattened_data()):
         value = (coverage * 3 + 127) // 255
