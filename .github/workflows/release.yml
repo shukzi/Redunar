@@ -20,7 +20,9 @@ jobs:
       - name: Check release inputs
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          # Manual recovery builds the exact published tag, even when the
+          # workflow definition has been repaired on the default branch.
+          ref: ${{ github.event.inputs.release_tag || github.sha }}
       - name: Validate release version
         env:
           RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
@@ -41,6 +43,12 @@ jobs:
           cp -a output/tauri-redunar/node_modules ../local-builds/node_modules
           cargo fetch --manifest-path Cargo.toml
           cargo fetch --manifest-path output/tauri-redunar/src-tauri/Cargo.toml
+          # Fresh runners do not have the pinned Debian image. Bootstrap that
+          # image online, then keep the actual release build offline below.
+          podman build --pull=always --network=host \
+            --tag localhost/redunar-build-glibc-2.36:bookworm \
+            --file packaging/build-images/glibc-2.36.Containerfile \
+            packaging/build-images
           assets="$RUNNER_TEMP/install-assets"
           mkdir -p "$assets"
           tools/build-linux-release.sh
