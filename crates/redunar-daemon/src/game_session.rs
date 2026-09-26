@@ -14,6 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -32,6 +33,7 @@ const REPLAY_REARM_BACKOFF_MAX: Duration = Duration::from_secs(10);
 const REPLAY_SOURCE_ERROR_LIMIT: u32 = 10;
 const AUDIO_CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(3);
 const AUDIO_RECONNECT_DELAY: Duration = Duration::from_millis(250);
+const AUDIO_ROUTE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// One bounded, daemon-owned view of all work attached to a running game.
 ///
@@ -291,7 +293,13 @@ impl ProductionGameSessionCoordinator {
             ));
         }
         let visible = lock_unpoisoned(&self.inner.replay_menu).toggle(now);
-        self.publish_replay_menu();
+        let published = self.try_publish_replay_menu();
+        if visible && let Err(error) = published {
+            // Do not let the helper grab the mouse for a menu the game
+            // cannot receive. A later shortcut press may retry normally.
+            lock_unpoisoned(&self.inner.replay_menu).close();
+            return Err(error);
+        }
         Ok(visible)
     }
 
@@ -388,15 +396,24 @@ impl ProductionGameSessionCoordinator {
     }
 
     fn publish_replay_menu(&self) {
+        let _ = self.try_publish_replay_menu();
+    }
+
+    fn try_publish_replay_menu(&self) -> Result<(), ReplayRuntimeError> {
         let revision = self
             .inner
             .replay_menu_revision
             .fetch_add(2, Ordering::Relaxed)
             .saturating_add(2);
         let telemetry = self.replay_menu_telemetry(revision);
-        if let Some(capture) = lock_unpoisoned(&self.inner.state).capture.as_ref() {
-            let _ = capture.update_replay_menu(telemetry);
-        }
+        let state = lock_unpoisoned(&self.inner.state);
+        let capture = state
+            .capture
+            .as_ref()
+            .ok_or_else(|| ReplayRuntimeError::new("Replay menu has no connected game capture"))?;
+        capture
+            .update_replay_menu(telemetry)
+            .map_err(|_| ReplayRuntimeError::new("Replay menu could not be sent to the game"))
     }
 
     /// Attribute clips committed since the last poll to the live game.
@@ -1083,9 +1100,18 @@ fn enter_replay_recovery(
 fn start_game_audio_worker(
     stop: Arc<AtomicBool>,
     replay: ProductionReplayRuntime,
-    timeline_timestamp_ns: u64,
+    first_frame_timestamp_ns: u64,
 ) -> Option<JoinHandle<()>> {
     let timeline_started = Instant::now();
+    // A frame may wait for encoder initialization before this worker starts.
+    // Both tracks use CLOCK_MONOTONIC, so anchor audio to the current clock,
+    // not to that older frame's presentation time.
+    let timeline_timestamp_ns =
+        redunar_capture_audio::monotonic_now_ns().unwrap_or(first_frame_timestamp_ns);
+    let startup_lag_ms = timeline_timestamp_ns.saturating_sub(first_frame_timestamp_ns) / 1_000_000;
+    if startup_lag_ms > 250 {
+        crate::log_op!("Redunar Replay: audio startup lag {startup_lag_ms} ms");
+    }
     thread::Builder::new()
         .name("redunar-replay-audio".to_owned())
         .spawn(move || {
@@ -1098,7 +1124,7 @@ fn start_game_audio_worker(
 }
 
 fn run_game_audio_worker(
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     replay: &ProductionReplayRuntime,
     timeline_timestamp_ns: u64,
     timeline_started: Instant,
@@ -1106,6 +1132,11 @@ fn run_game_audio_worker(
     // Keep the worker alive and reconnect after route or sound-server failures
     // so audio does not silently disappear for the rest of the session.
     let mut backend_attempt = 0_usize;
+    let (route_sender, route_receiver) = mpsc::sync_channel(1);
+    let route_stop = Arc::clone(stop);
+    let route_watcher = thread::Builder::new()
+        .name("redunar-audio-route".to_owned())
+        .spawn(move || watch_game_audio_route(&route_stop, &route_sender));
     while !stop.load(Ordering::Acquire) {
         let Ok(sources) = redunar_capture_audio::discover_system_audio_sources() else {
             // Sound-server diagnostics can include user-named devices.
@@ -1136,7 +1167,6 @@ fn run_game_audio_worker(
         let mut recorder_pause_logged = false;
         let mut last_packet_at = Instant::now();
         let mut received_packet = false;
-        let mut rediscover_at = Instant::now() + Duration::from_secs(2);
         while !stop.load(Ordering::Acquire) {
             match capture.next_packet(Duration::from_millis(100)) {
                 Ok(Some(packet)) => {
@@ -1187,21 +1217,13 @@ fn run_game_audio_worker(
                     break;
                 }
             }
-            if Instant::now() >= rediscover_at {
-                rediscover_at = Instant::now() + Duration::from_secs(2);
-                if let Ok(updated) = redunar_capture_audio::discover_system_audio_sources()
-                    && let Some(updated) = updated
-                        .into_iter()
-                        .find(|candidate| candidate.backend_name() == source.backend_name())
-                    && updated != source
-                {
-                    crate::log_op!(
-                        "Redunar Replay: audio output changed on {}; reconnecting",
-                        source.backend_name()
-                    );
-                    reconnect = true;
-                    break;
-                }
+            if game_audio_route_changed(&route_receiver, &source) {
+                crate::log_op!(
+                    "Redunar Replay: audio output changed on {}; reconnecting",
+                    source.backend_name()
+                );
+                reconnect = true;
+                break;
             }
         }
         if reconnect {
@@ -1211,6 +1233,49 @@ fn run_game_audio_worker(
                 backend_attempt = backend_attempt.saturating_add(1);
             }
             thread::sleep(AUDIO_RECONNECT_DELAY);
+        }
+    }
+    if let Ok(route_watcher) = route_watcher {
+        let _ = route_watcher.join();
+    }
+}
+
+fn game_audio_route_changed(
+    receiver: &Receiver<Vec<redunar_capture_audio::AudioCaptureSource>>,
+    source: &redunar_capture_audio::AudioCaptureSource,
+) -> bool {
+    receiver.try_recv().ok().is_some_and(|updated| {
+        // Discovery can temporarily omit one backend under load. A failed
+        // lookup is not evidence that the current sink changed; the active
+        // capture's stall/error path handles a genuinely removed backend.
+        updated
+            .iter()
+            .find(|candidate| candidate.backend_name() == source.backend_name())
+            .is_some_and(|candidate| candidate != source)
+    })
+}
+
+fn watch_game_audio_route(
+    stop: &AtomicBool,
+    sender: &SyncSender<Vec<redunar_capture_audio::AudioCaptureSource>>,
+) {
+    while !stop.load(Ordering::Acquire) {
+        let next_check = Instant::now() + AUDIO_ROUTE_CHECK_INTERVAL;
+        while Instant::now() < next_check && !stop.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(100));
+        }
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        let started = Instant::now();
+        if let Ok(sources) = redunar_capture_audio::discover_system_audio_sources() {
+            let _ = sender.try_send(sources);
+        }
+        if started.elapsed() > Duration::from_millis(250) {
+            crate::log_op!(
+                "Redunar Replay: audio route check took {} ms",
+                started.elapsed().as_millis()
+            );
         }
     }
 }

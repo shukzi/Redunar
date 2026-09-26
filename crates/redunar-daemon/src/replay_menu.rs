@@ -1,5 +1,7 @@
 use crate::{ReplayOutputFormat, ReplayPhase, ReplayPreferences, ReplayRuntimeStatus};
-use redunar_capture::{ReplayMenuStatus, ReplayMenuTelemetry, ReplayShortcutLabel};
+use redunar_capture::{
+    REPLAY_MENU_VARIABLE_FPS, ReplayMenuStatus, ReplayMenuTelemetry, ReplayShortcutLabel,
+};
 #[cfg(test)]
 use redunar_core::ReplaySettings;
 use redunar_core::{ReplayDuration, ReplayFrameRate, ReplayQuality};
@@ -237,7 +239,7 @@ const fn frame_rate(value: ReplayFrameRate) -> u8 {
         ReplayFrameRate::Fps30 => 30,
         ReplayFrameRate::Fps60 => 60,
         ReplayFrameRate::Fps120 => 120,
-        ReplayFrameRate::Variable => 240,
+        ReplayFrameRate::Variable => REPLAY_MENU_VARIABLE_FPS,
     }
 }
 

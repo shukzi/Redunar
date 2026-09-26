@@ -6,8 +6,8 @@ mod texture_renderer;
 
 use redunar_capture::{
     OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayFailureReason, REPLAY_MENU_TELEMETRY_BYTES,
-    ReplayMenuStatus, ReplayMenuTelemetry, decode_overlay_hardware_telemetry,
-    decode_replay_menu_telemetry,
+    REPLAY_MENU_VARIABLE_FPS, ReplayMenuStatus, ReplayMenuTelemetry,
+    decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
 };
 use redunar_core::{OverlayMetricSet, overlay_font};
 use std::env;
@@ -761,7 +761,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
         120 => b"120 FPS".as_slice(),
-        240 => b"VARIABLE".as_slice(),
+        REPLAY_MENU_VARIABLE_FPS => b"VARIABLE".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
     let quality = match menu.quality {

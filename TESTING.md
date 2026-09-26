@@ -4,6 +4,72 @@ Current Tauri and shared-backend checks, reviewed September 26, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## September 26, 2026 v0.1.10 release preparation
+
+Source `fc6acfd` plus the Variable FPS Replay-menu fix and v0.1.10 metadata
+passed the release-input check, targeted root and separate Tauri offline Cargo
+checks and strict Clippy, formatting, JavaScript syntax, AppStream and desktop
+metadata validation, and the locked license-inventory check. Root Clippy
+allowed only the two unchanged OpenGL `clippy::ptr_eq` findings. The offline
+Debian 12 release build passed the glibc 2.36 ceiling. Local Fedora, Debian,
+Arch, openSUSE, and portable packages were built from that payload. The first
+host Tauri check was interrupted when the release build cleared their shared
+target directory; its sequential rerun passed. No automated tests or v0.1.10
+installed-app run were performed. The owner observed the menu fix in ARC
+Raiders using the same code in a local 0.1.9 RPM.
+
+The later v0.1.10 audio candidate adds explicit PipeWire sink-monitor capture,
+keeps production audio ingestion independent of video encoding and save drain,
+snapshots audio after draining video, and realigns PCM timestamps after capture
+gaps. On September 26, root daemon offline
+Cargo check and strict Clippy, formatting, diff whitespace validation, and the
+offline Debian 12 release build passed; the build report capped required glibc
+at 2.34. The first live ARC Raiders clip after the PipeWire monitor change had
+audible Opus audio but only 8.57 seconds of audio for 14.25 seconds of video,
+which prompted the independent audio-buffer change. A second clip after that
+change still had only 11.32 seconds of audio for 28.36 seconds of video. The
+PipeWire helper's PCM output was then 17.5 seconds behind its elapsed runtime,
+consistent with the missing tail; a subsequent 20-second sample ran at real
+time while retaining that earlier deficit. The audio timestamp realignment
+and MP4 gap preservation passed root offline Cargo check, strict Clippy,
+formatting, diff whitespace validation, and a second offline Debian 12 release
+build on September 26. A later ARC Raiders clip from that build had 299.88
+seconds of video and 298.61 seconds of Opus packets, but the owner identified
+the audible content as browser audio rather than game audio. A short PipeWire
+sink-monitor probe captured non-silent output and numeric PipeWire links showed
+ARC Raiders streams feeding the same sink. Short direct probes of those game
+streams were nearly silent while the game was likely backgrounded. Astra's
+independent review found no confirmed capture-route bug; a simultaneous
+foreground/background level comparison is still needed. Game-audio capture
+is not yet claimed fixed. A later foreground-only PipeWire probe showed ARC
+Raiders and the output monitor at matching non-silent levels while browser
+audio was paused. The next 13.99-second clip contained 7.98 seconds of Opus
+packets across a 1.92-second gap, ending 4.08 seconds before video. The owner
+heard game sound in parts but said it belonged to earlier gameplay. Astra
+reviewed the spool and MP4 origins and found no multi-second offset there;
+it identified synchronous route discovery in the PCM-reading thread as a
+plausible source of queued, stale audio. The next candidate moves route
+discovery to a separate worker, bounds each command to one second, anchors
+audio startup to the current monotonic clock, and reconnects rather than
+timestamping stale PCM as live. Live A/V synchronization remains to be checked.
+The corrected candidate passed root offline daemon/audio Cargo check and strict
+Clippy, formatting and diff whitespace checks, and the Debian 12 offline release
+build on September 26. In the local ARC Raiders session from that build, the
+owner reported that the newly saved clip's sound worked. FFprobe showed
+1,147 video packets through 14.099 seconds and 705 audio packets from 0.007
+through 14.107 seconds, without a gap greater than 100 ms in either track.
+The log also showed that repeated slow route checks could temporarily omit the
+PipeWire candidate and trigger an unnecessary reconnect. A follow-up change
+ignores a missing backend in one check and waits for either a different sink
+on the same backend or an actual capture stall/error. That follow-up passed
+root strict Clippy. On September 26, the full `tools/check-tauri-release.sh`
+gate passed with the follow-up: Debian 12 compatibility build, root and Tauri
+checks, 87 Tauri Rust tests passed with two ignored, 9 and 20 tests in the
+other Rust targets, 57 UI tests, license and metadata validation, signed
+temporary release assets, and local Fedora, Debian, Arch, openSUSE, and
+portable package checks. The follow-up route-omission guard has not separately
+been exercised in another live game session.
+
 ## September 26, 2026 v0.1.9 release preparation
 
 Source commit `897fdcd` plus the v0.1.9 version and package metadata changes
@@ -683,6 +749,19 @@ The RPM gate checks file/capability requirements without pinning a multimedia
 package name or declaring replacement. Remaining release work is in ROADMAP.
 
 ## Installed app and owner-controlled runs
+
+On September 26, 2026, working tree `fc6acfd` plus the Variable FPS Replay-menu
+telemetry fix passed targeted offline Cargo checks and strict Clippy for the
+shared crates and Tauri workspace, formatting, and the offline Debian 12
+release build. A local Fedora RPM was built with SHA-256
+`ecc305c677f99f1fd6e20b8f386a9eaef9a6c1c783af1ec19e78f06f075119d4`.
+At build time the package retained version 0.1.9 and had not been installed or
+checked in a real game. Automated tests were not run for this change. Later on
+September 26, the same RPM was installed; the installed Tauri binary and both
+capture sidecars matched its package digests, and a fresh installed app process
+started. The owner launched ARC Raiders and reported that Ctrl+Alt+Z displayed
+the Replay menu. This is a user-observed menu check, not a full Replay or
+cross-distribution acceptance run.
 
 ```sh
 tools/check-installed-tauri-runtime.sh

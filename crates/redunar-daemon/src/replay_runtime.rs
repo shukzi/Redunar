@@ -1,7 +1,7 @@
 use crate::{
-    DmaBufReplayFrame, HardwareEncoderBackend, ReplayBackendReadiness, ReplayBudget,
-    ReplayCapability, ReplayFailure, ReplayHardwarePipeline, ReplayOutputFormat, ReplayPhase,
-    ReplayPipelineError, ReplayRecorderHealth, ReplayRuntimeStatus,
+    DmaBufReplayFrame, HardwareEncoderBackend, ReplayAudioBuffer, ReplayBackendReadiness,
+    ReplayBudget, ReplayCapability, ReplayFailure, ReplayHardwarePipeline, ReplayOutputFormat,
+    ReplayPhase, ReplayPipelineError, ReplayRecorderHealth, ReplayRuntimeStatus,
 };
 use redunar_core::{ReplayDuration, ReplaySettings};
 use std::collections::VecDeque;
@@ -22,6 +22,12 @@ const AUDIO_STALL_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Clone)]
 pub struct ProductionReplayRuntime {
     inner: Arc<Mutex<RuntimeState>>,
+    audio: Arc<Mutex<ProductionAudioState>>,
+}
+
+struct ProductionAudioState {
+    recording: bool,
+    buffer: ReplayAudioBuffer,
 }
 
 struct RuntimeState {
@@ -66,6 +72,13 @@ impl ProductionReplayRuntime {
     #[must_use]
     pub fn unavailable(settings: ReplaySettings) -> Self {
         Self {
+            audio: Arc::new(Mutex::new(ProductionAudioState {
+                recording: false,
+                buffer: ReplayAudioBuffer::new(
+                    ReplayDuration::Seconds900,
+                    redunar_capture_audio::OpusStreamDescription::default(),
+                ),
+            })),
             inner: Arc::new(Mutex::new(RuntimeState {
                 status: ReplayRuntimeStatus::unavailable(settings),
                 pipeline: None,
@@ -90,10 +103,12 @@ impl ProductionReplayRuntime {
             .pipeline
             .as_ref()
             .and_then(ReplayHardwarePipeline::spool_stats);
-        let audio_stats = state
-            .pipeline
-            .as_ref()
-            .map_or((0, 0), ReplayHardwarePipeline::audio_stats);
+        let audio_stats = if state.pipeline.is_some() {
+            let audio = lock_unpoisoned(&self.audio);
+            (audio.buffer.packet_count(), audio.buffer.byte_count())
+        } else {
+            (0, 0)
+        };
         status.buffered_duration_ns = spool_stats.map_or(0, |stats| stats.buffered_duration_ns);
         status.received_frame_count = state.received_frame_count;
         status.encoded_packet_count = spool_stats.map_or(0, |stats| stats.accepted_packets);
@@ -200,6 +215,9 @@ impl ProductionReplayRuntime {
         state.last_encoded_progress = None;
         state.observed_audio_packet_count = 0;
         state.last_audio_progress = None;
+        let mut audio = lock_unpoisoned(&self.audio);
+        audio.buffer.clear();
+        audio.recording = true;
         state.pipeline = Some(pipeline);
         Ok(())
     }
@@ -225,13 +243,13 @@ impl ProductionReplayRuntime {
         let result = pipeline.submit_frame(input_sequence, frame);
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(&mut state, completed).is_err() {
-            mark_failed(&mut state, ReplayFailure::EncoderFailed);
+            mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
             return Err(ReplayRuntimeError::new(
                 "Instant Replay completion queue exceeded its fixed bound",
             ));
         }
         if let Err(error) = result {
-            mark_failed(&mut state, ReplayFailure::EncoderFailed);
+            mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
             return Err(ReplayRuntimeError::new(error.to_string()));
         }
         Ok(())
@@ -248,13 +266,15 @@ impl ProductionReplayRuntime {
         &self,
         packet: redunar_capture_audio::EncodedOpusPacket,
     ) -> Result<(), ReplayRuntimeError> {
-        let mut state = lock_unpoisoned(&self.inner);
-        let pipeline = state
-            .pipeline
-            .as_mut()
-            .ok_or_else(|| ReplayRuntimeError::new("Instant Replay is not recording"))?;
-        pipeline
-            .submit_audio(packet)
+        // Video encoding and save drain can block the runtime mutex for long
+        // enough to starve 20 ms audio packets. Keep ingestion independent.
+        let mut audio = lock_unpoisoned(&self.audio);
+        if !audio.recording {
+            return Err(ReplayRuntimeError::new("Instant Replay is not recording"));
+        }
+        audio
+            .buffer
+            .push(packet)
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))
     }
 
@@ -273,22 +293,23 @@ impl ProductionReplayRuntime {
         let result = pipeline.reset(replacement);
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(&mut state, completed).is_err() {
-            mark_failed(&mut state, ReplayFailure::EncoderFailed);
+            mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
             return Err(ReplayRuntimeError::new(
                 "Instant Replay completion queue exceeded its fixed bound",
             ));
         }
         if let Err(error) = result {
-            mark_failed(&mut state, ReplayFailure::EncoderFailed);
+            mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
             return Err(ReplayRuntimeError::new(error.to_string()));
         }
+        lock_unpoisoned(&self.audio).buffer.clear();
         Ok(())
     }
 
     /// Publish a component-local startup/transport failure. This never ends
     /// the owning game or capture session.
     pub(crate) fn fail(&self, failure: ReplayFailure) {
-        mark_failed(&mut lock_unpoisoned(&self.inner), failure);
+        mark_failed(&mut lock_unpoisoned(&self.inner), &self.audio, failure);
     }
 
     /// Take only producer export sequences whose GPU input ownership has
@@ -347,10 +368,15 @@ impl ProductionReplayRuntime {
                 .pipeline
                 .as_mut()
                 .ok_or_else(|| ReplayRuntimeError::new("Instant Replay is not recording"))?;
-            let result = pipeline.save_spooled_replay_as(duration, output_format);
+            let result =
+                pipeline.save_spooled_replay_as_with_audio(duration, output_format, || {
+                    lock_unpoisoned(&self.audio)
+                        .buffer
+                        .snapshot_between(0, u64::MAX)
+                });
             let completed = pipeline.take_completed_inputs();
             if enqueue_completed(&mut state, completed).is_err() {
-                mark_failed(&mut state, ReplayFailure::EncoderFailed);
+                mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
                 return Err(ReplayRuntimeError::new(
                     "Instant Replay completion queue exceeded its fixed bound",
                 ));
@@ -365,7 +391,7 @@ impl ProductionReplayRuntime {
                     if matches!(error, ReplayPipelineError::InsufficientHistory) {
                         return Err(ReplayRuntimeError::new(error.to_string()));
                     }
-                    mark_failed(&mut state, replay_failure(&error));
+                    mark_failed(&mut state, &self.audio, replay_failure(&error));
                     return Err(ReplayRuntimeError::new(error.to_string()));
                 }
             }
@@ -443,6 +469,9 @@ impl ProductionReplayRuntime {
             .map_or_else(Vec::new, ReplayHardwarePipeline::take_completed_inputs);
         let completion_result = enqueue_completed(&mut state, completed);
         state.pipeline = None;
+        let mut audio = lock_unpoisoned(&self.audio);
+        audio.recording = false;
+        audio.buffer.clear();
         state.status.phase = if state.status.backend_readiness.validation_allowed() {
             ReplayPhase::Inactive
         } else {
@@ -474,13 +503,20 @@ fn replay_failure(error: &ReplayPipelineError) -> ReplayFailure {
     }
 }
 
-fn mark_failed(state: &mut RuntimeState, failure: ReplayFailure) {
+fn mark_failed(
+    state: &mut RuntimeState,
+    audio: &Mutex<ProductionAudioState>,
+    failure: ReplayFailure,
+) {
     if let Some(pipeline) = state.pipeline.as_mut() {
         let _ = pipeline.shutdown();
         let completed = pipeline.take_completed_inputs();
         let _ = enqueue_completed(state, completed);
     }
     state.pipeline = None;
+    let mut audio = lock_unpoisoned(audio);
+    audio.recording = false;
+    audio.buffer.clear();
     state.status.phase = ReplayPhase::Failed;
     state.status.last_failure = Some(failure);
 }

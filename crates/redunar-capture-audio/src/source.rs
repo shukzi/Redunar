@@ -6,8 +6,8 @@ use crate::{
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use std::error::Error;
 use std::fmt;
-use std::io::{Read, Take};
-use std::os::fd::AsFd;
+use std::io::{ErrorKind, Read};
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -18,7 +18,34 @@ const PW_CAT_PATH: &str = "/usr/bin/pw-cat";
 const WPCTL_PATH: &str = "/usr/bin/wpctl";
 const PACTL_PATH: &str = "/usr/bin/pactl";
 const PAREC_PATH: &str = "/usr/bin/parec";
-const MAX_REGISTRY_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_REGISTRY_BYTES: usize = 4 * 1024 * 1024;
+const DISCOVERY_COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
+const PIPEWIRE_SINK_CAPTURE_PROPERTIES: &str = r#"{"stream.capture.sink":true}"#;
+// Raw PCM carries no presentation timestamps; excessive clock skew requires
+// fresh capture rather than relabeling buffered samples as current audio.
+const MAX_AUDIO_CLOCK_SKEW_NS: u64 = 250_000_000;
+
+/// Read the same monotonic clock used by game-frame presentation timestamps.
+///
+/// Returns `None` when the system clock cannot be read or overflows nanoseconds.
+#[must_use]
+pub fn monotonic_now_ns() -> Option<u64> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `time` is writable storage for one timespec.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut time) } != 0
+        || time.tv_sec < 0
+        || !(0..1_000_000_000).contains(&time.tv_nsec)
+    {
+        return None;
+    }
+    u64::try_from(time.tv_sec)
+        .ok()?
+        .checked_mul(1_000_000_000)?
+        .checked_add(u64::try_from(time.tv_nsec).ok()?)
+}
 
 #[derive(Debug)]
 pub struct AudioCaptureError(String);
@@ -124,42 +151,114 @@ fn inspect_pipewire_registry() -> Result<Vec<u8>, AudioCaptureError> {
             "PipeWire registry utility is unavailable",
         ));
     };
-    let mut child = Command::new(pw_dump)
-        .args(["-N", "-i0"])
+    run_discovery_command(
+        Command::new(pw_dump).args(["-N", "-i0"]),
+        MAX_REGISTRY_BYTES,
+    )
+}
+
+/// Bound both output collection and process completion. Discovery commands may
+/// hang with stdout open, or close stdout without exiting. Every failure kills
+/// and reaps the child; successful `try_wait` also reaps it. Never include their
+/// output in errors: registry data and device names can contain private values.
+fn run_discovery_command(
+    command: &mut Command,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, AudioCaptureError> {
+    let deadline = Instant::now() + DISCOVERY_COMMAND_TIMEOUT;
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| AudioCaptureError::new(format!("could not inspect PipeWire: {error}")))?;
+        .map_err(|_| AudioCaptureError::new("could not start audio discovery command"))?;
+    let result = read_discovery_output(&mut child, deadline, maximum_bytes);
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+fn read_discovery_output(
+    child: &mut Child,
+    deadline: Instant,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, AudioCaptureError> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AudioCaptureError::new("audio discovery output pipe is unavailable"))?;
+    // SAFETY: stdout owns this live descriptor throughout both fcntl calls.
+    // Nonblocking reads ensure the deadline still applies after poll returns.
+    let flags = unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0
+        || unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
+        return Err(AudioCaptureError::new(
+            "could not configure audio discovery pipe",
+        ));
+    }
     let mut bytes = Vec::new();
-    let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(AudioCaptureError::new(
-            "PipeWire registry pipe is unavailable",
-        ));
-    };
-    let mut bounded: Take<ChildStdout> = stdout.take(MAX_REGISTRY_BYTES + 1);
-    bounded.read_to_end(&mut bytes).map_err(|error| {
-        AudioCaptureError::new(format!("could not read PipeWire registry: {error}"))
-    })?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_REGISTRY_BYTES {
-        drop(bounded);
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(AudioCaptureError::new(
-            "PipeWire registry query exceeded its bound",
-        ));
+    let mut buffer = [0_u8; 8_192];
+    let mut eof = false;
+    let mut exited = false;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(AudioCaptureError::new("audio discovery command timed out"));
+        }
+        if !exited
+            && let Some(status) = child
+                .try_wait()
+                .map_err(|_| AudioCaptureError::new("could not inspect audio discovery process"))?
+        {
+            if !status.success() {
+                return Err(AudioCaptureError::new("audio discovery command failed"));
+            }
+            exited = true;
+        }
+        if eof && exited {
+            return Ok(bytes);
+        }
+        let timeout =
+            PollTimeout::from(u16::try_from(remaining.as_millis().clamp(1, 20)).unwrap_or(20));
+        let mut descriptors = [PollFd::new(stdout.as_fd(), PollFlags::POLLIN)];
+        // Once stdout closes, wait briefly without polling its persistent HUP
+        // flag, then check child completion again under the same deadline.
+        let watched = if eof {
+            &mut descriptors[..0]
+        } else {
+            &mut descriptors[..]
+        };
+        match poll(watched, timeout) {
+            Ok(0) | Err(nix::errno::Errno::EINTR) => continue,
+            Ok(_) => {}
+            Err(_) => {
+                return Err(AudioCaptureError::new(
+                    "audio discovery pipe polling failed",
+                ));
+            }
+        }
+        match stdout.read(&mut buffer) {
+            Ok(0) => eof = true,
+            Ok(count) => {
+                if count > maximum_bytes.saturating_sub(bytes.len()) {
+                    return Err(AudioCaptureError::new(
+                        "audio discovery output exceeded its bound",
+                    ));
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {}
+            Err(_) => {
+                return Err(AudioCaptureError::new(
+                    "could not read audio discovery output",
+                ));
+            }
+        }
     }
-    let status = child.wait().map_err(|error| {
-        AudioCaptureError::new(format!("could not join PipeWire registry query: {error}"))
-    })?;
-    if !status.success() {
-        return Err(AudioCaptureError::new(
-            "PipeWire registry query failed or exceeded its bound",
-        ));
-    }
-    Ok(bytes)
 }
 
 fn discover_pulse_default_monitor() -> Option<AudioCaptureSource> {
@@ -177,14 +276,11 @@ fn discover_default_output_monitor_node(
 
 fn inspect_default_sink_name() -> Option<String> {
     if let Some(wpctl) = system_utility(WPCTL_PATH, "wpctl")
-        && let Ok(output) = Command::new(wpctl)
-            .args(["inspect", "@DEFAULT_AUDIO_SINK@"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-        && output.status.success()
-        && output.stdout.len() <= 64 * 1024
-        && let Some(name) = parse_default_sink_name(&output.stdout)
+        && let Ok(output) = run_discovery_command(
+            Command::new(wpctl).args(["inspect", "@DEFAULT_AUDIO_SINK@"]),
+            64 * 1024,
+        )
+        && let Some(name) = parse_default_sink_name(&output)
     {
         return Some(name);
     }
@@ -193,15 +289,9 @@ fn inspect_default_sink_name() -> Option<String> {
 
 fn inspect_pactl_default_sink_name() -> Option<String> {
     let pactl = system_utility(PACTL_PATH, "pactl")?;
-    let output = Command::new(&pactl)
-        .arg("get-default-sink")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if output.status.success()
-        && output.stdout.len() <= 4 * 1024
-        && let Some(name) = parse_pactl_default_sink_name(&output.stdout)
+    if let Ok(output) =
+        run_discovery_command(Command::new(&pactl).arg("get-default-sink"), 4 * 1024)
+        && let Some(name) = parse_pactl_default_sink_name(&output)
     {
         return Some(name);
     }
@@ -209,16 +299,8 @@ fn inspect_pactl_default_sink_name() -> Option<String> {
     // `get-default-sink` is newer than the long-standing `info` command.
     // Accept the latter so supported PulseAudio installations on older Linux
     // distributions do not lose replay audio solely due to client age.
-    let output = Command::new(pactl)
-        .arg("info")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() || output.stdout.len() > 64 * 1024 {
-        return None;
-    }
-    parse_pactl_info_default_sink_name(&output.stdout)
+    let output = run_discovery_command(Command::new(pactl).arg("info"), 64 * 1024).ok()?;
+    parse_pactl_info_default_sink_name(&output)
 }
 
 fn parse_default_sink_name(output: &[u8]) -> Option<String> {
@@ -401,13 +483,22 @@ impl SystemAudioCapture {
         for (sample, bytes) in samples.iter_mut().zip(self.pcm.chunks_exact(2)) {
             *sample = i16::from_le_bytes([bytes[0], bytes[1]]);
         }
-        let timestamp_ns = self.next_timestamp_ns.unwrap_or_else(|| {
-            self.timeline_timestamp_ns
-                .saturating_add(
-                    u64::try_from(self.timeline_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
-                )
-                .saturating_sub(AUDIO_FRAME_DURATION_NS)
-        });
+        let live_timestamp_ns = self
+            .timeline_timestamp_ns
+            .saturating_add(
+                u64::try_from(self.timeline_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            )
+            .saturating_sub(AUDIO_FRAME_DURATION_NS);
+        if let Some(expected_timestamp_ns) = self.next_timestamp_ns
+            && live_timestamp_ns.abs_diff(expected_timestamp_ns) > MAX_AUDIO_CLOCK_SKEW_NS
+        {
+            // Let the worker drop the helper and its backlog. Either direction
+            // can misdate sound; the first packet still establishes its anchor.
+            return Err(AudioCaptureError::new(
+                "audio capture timeline discontinuity",
+            ));
+        }
+        let timestamp_ns = self.next_timestamp_ns.unwrap_or(live_timestamp_ns);
         let packet = self
             .encoder
             .encode_frame(timestamp_ns, &samples)
@@ -444,6 +535,10 @@ fn capture_command(source: &AudioCaptureSource) -> Result<Command, AudioCaptureE
             command.args([
                 "--record",
                 "--raw",
+                // A sink target alone does not request its monitor ports.
+                // Capture the output mix rather than an input source.
+                "--properties",
+                PIPEWIRE_SINK_CAPTURE_PROPERTIES,
                 "--rate",
                 &AUDIO_SAMPLE_RATE.to_string(),
                 "--channels",

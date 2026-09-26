@@ -27,7 +27,10 @@ the whole desktop or compositor scanout, and no picker appears. The same
 Efficient, Balanced, and High quality presets apply to either mode before launch.
 The output container remains selectable between MKV and
 MP4 from Global settings or the in-game Replay menu; changes apply to future
-saves without rebuilding the active buffer. The default is 60 FPS / Balanced.
+saves without rebuilding the active buffer. The menu labels Variable FPS as
+Variable, rather than showing the encoder's maximum capture rate. If its state
+cannot reach the game, shortcut activation reports a failure without taking
+mouse control. The default is 60 FPS / Balanced.
 Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes. The spool retains the
 bounded 15-minute horizon; choosing a shorter manual save length selects a suffix,
 not a smaller rolling horizon. Fixed 120 FPS is gated by display/game-surface
@@ -147,6 +150,8 @@ A save assembles available retained history, including the active spool tail,
 into a private local MKV or MP4. It requires a healthy populated buffer and
 preserves a 512 MiB filesystem reserve. Store markers, validated names, atomic
 commit, no-overwrite behavior, and owned-file deletion prevent arbitrary access.
+An audio track is included only when its packets overlap the saved video window;
+out-of-window audio must not produce an empty audio track.
 Save success is reported only after native completion and inventory revision.
 Each committed clip name is queued beside the completed-save revision so the
 game-session coordinator can attribute the clip to the recording game. The
@@ -166,7 +171,8 @@ game audio.
 
 `crates/redunar-capture-audio/src/source.rs` prefers the native PipeWire route:
 when the PipeWire registry exposes a default output node, Redunar records it
-directly with `pw-cat`. Recording through pipewire-pulse's compatibility layer
+directly with `pw-cat`, explicitly requesting that sink's monitor ports.
+Recording through pipewire-pulse's compatibility layer
 instead was observed on 2026-09-24 to disturb a game's own Pulse client
 (Stardew's music went silent while a Pulse monitor recorder was attached during
 a Redunar session and returned once the recorder was removed), so the Pulse
@@ -174,7 +180,21 @@ monitor API now serves as the fallback for hosts without a usable native
 PipeWire route; it still works with a native PulseAudio server and with
 PipeWire's Pulse server. Both paths produce fixed 48 kHz
 stereo PCM, bounded 20 ms Opus packets, and timestamped muxing. The worker
-rechecks the default route every two seconds, reconnects within 250 ms after a
+puts encoded audio into a separate bounded timeline, so hardware video
+encoding and the save-time encoder drain cannot stall audio ingestion. A save
+reads the audio snapshot after draining video output to include the clip tail.
+The audio timeline is cleared when the video epoch resets or Replay stops.
+Because the PCM helpers do not provide timestamps, capture advances in 20 ms
+steps while samples arrive steadily. Audio starts on the same monotonic clock
+as game-frame timestamps. If the PCM timeline drifts more than 250 ms from
+that clock, the worker discards the helper's queued samples and reconnects;
+it never assigns current timestamps to stale sound.
+The MP4 muxer starts a new audio fragment at each gap so that the time jump is
+preserved in the saved clip.
+One separate worker rechecks the default route every two seconds after each
+completed check, with one-second deadlines and kill/reap cleanup for each
+discovery command. The audio-reading worker never waits for route discovery.
+It begins a retry after 250 ms following a
 route change or capture failure, and treats three seconds without samples as a
 stalled transport that must be restarted. When both backends are available, a
 failed or stalled recorder is retried through the other backend instead of

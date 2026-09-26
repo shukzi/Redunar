@@ -21,8 +21,8 @@
 use crate::ffi::*;
 use redunar_capture::{
     OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayFailureReason, OverlayHardwareTelemetry,
-    REPLAY_MENU_TELEMETRY_BYTES, ReplayMenuStatus, ReplayMenuTelemetry, ReplayShortcutLabel,
-    decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
+    REPLAY_MENU_TELEMETRY_BYTES, REPLAY_MENU_VARIABLE_FPS, ReplayMenuStatus, ReplayMenuTelemetry,
+    ReplayShortcutLabel, decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
 };
 use redunar_core::overlay_font;
 use std::collections::BTreeMap;
@@ -563,7 +563,7 @@ struct ReplayMenuView {
     animation_progress: u16,
     status: u8,
     available_seconds: u16,
-    capture_fps: u16,
+    capture_fps: u8,
     quality: u8,
     format: u8,
     selected_duration: u8,
@@ -590,7 +590,7 @@ impl ReplayMenuView {
                 ReplayMenuStatus::Failed => 4,
             },
             available_seconds: menu.available_seconds,
-            capture_fps: u16::from(menu.frame_rate),
+            capture_fps: menu.frame_rate,
             quality: menu.quality,
             format: menu.output_format,
             selected_duration: menu.selected_duration_index,
@@ -1153,7 +1153,7 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
         120 => b"120 FPS".as_slice(),
-        240 => b"VARIABLE".as_slice(),
+        REPLAY_MENU_VARIABLE_FPS => b"VARIABLE".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
     push_ui_text_centered(&mut plan.text_glyphs, capture, 0, 173, 30, 2);

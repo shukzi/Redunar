@@ -360,6 +360,18 @@ impl ReplayHardwarePipeline {
         duration: ReplayDuration,
         output_format: ReplayOutputFormat,
     ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
+        let audio = self.audio.snapshot_between(0, u64::MAX);
+        self.save_spooled_replay_as_with_audio(duration, output_format, || audio)
+    }
+
+    /// Production audio lives behind its own short-held lock. Read it after
+    /// draining video so a slow encoder cannot truncate the clip's audio tail.
+    pub(crate) fn save_spooled_replay_as_with_audio(
+        &mut self,
+        duration: ReplayDuration,
+        output_format: ReplayOutputFormat,
+        audio_snapshot: impl FnOnce() -> ReplayAudioSnapshot,
+    ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
         if self.phase != ReplayPipelinePhase::Buffering {
             return Err(ReplayPipelineError::InvalidLifecycle);
         }
@@ -390,7 +402,7 @@ impl ReplayHardwarePipeline {
                 self.flow.stream().clone(),
                 self.store.clone(),
                 output_format,
-                self.audio.snapshot_between(0, u64::MAX),
+                audio_snapshot(),
             )
             .map_err(|error| {
                 if error.is_insufficient_history() {

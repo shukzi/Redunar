@@ -4,6 +4,8 @@ use std::fmt;
 pub const OVERLAY_HARDWARE_TELEMETRY_BYTES: usize = 48;
 pub const REPLAY_MENU_TELEMETRY_BYTES: usize = 128;
 pub const REPLAY_SHORTCUT_LABEL_BYTES: usize = 40;
+/// Private menu ABI marker for Variable FPS; this is not a fixed 240 FPS rate.
+pub const REPLAY_MENU_VARIABLE_FPS: u8 = 240;
 
 const MAGIC: [u8; 8] = *b"RDOVL001";
 const VERSION: u16 = 4;
@@ -45,6 +47,7 @@ pub struct ReplayMenuTelemetry {
     pub status: ReplayMenuStatus,
     pub available_seconds: u16,
     pub click_revision: u16,
+    /// Fixed FPS, or [`REPLAY_MENU_VARIABLE_FPS`] for Variable FPS mode.
     pub frame_rate: u8,
     pub quality: u8,
     pub output_format: u8,
@@ -224,7 +227,7 @@ fn validate_replay_menu(value: ReplayMenuTelemetry) -> Result<(), OverlayTelemet
         || value.pressed_target > 11
         || value.selected_duration_index > 7
         || value.available_seconds > 900
-        || !matches!(value.frame_rate, 30 | 60 | 120)
+        || !matches!(value.frame_rate, 30 | 60 | 120 | REPLAY_MENU_VARIABLE_FPS)
         || value.quality > 2
         || value.output_format > 1
         || (!value.pointer_pressed && value.pressed_target != 0)

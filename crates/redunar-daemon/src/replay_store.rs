@@ -334,7 +334,20 @@ impl ReplayClipStore {
         audio: &ReplayAudioSnapshot,
         output_format: ReplayOutputFormat,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
-        if audio.packets.is_empty() {
+        let Some(first_video) = ring.packets().next() else {
+            return self.save_video_only_as(stream, ring, output_format);
+        };
+        let last_video = ring.packets().last().unwrap_or(first_video);
+        let video_start = first_video.timestamp_ns();
+        let video_end = last_video
+            .timestamp_ns()
+            .saturating_add(last_video.duration_ns());
+        if !audio
+            .packets
+            .iter()
+            .any(|packet| packet.timestamp_ns >= video_start && packet.timestamp_ns < video_end)
+        {
+            // Out-of-window audio must not create an empty track.
             return self.save_video_only_as(stream, ring, output_format);
         }
         self.save_generated(output_format, false, |temporary| {

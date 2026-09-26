@@ -15,7 +15,7 @@ pub use node::{
 pub use opus::{EncodedOpusPacket, OpusEncoder, OpusEncoderError, OpusStreamDescription};
 pub use source::{
     AudioCaptureError, AudioCaptureSource, SystemAudioCapture, discover_system_audio_source,
-    discover_system_audio_sources,
+    discover_system_audio_sources, monotonic_now_ns,
 };
 
 pub const AUDIO_SAMPLE_RATE: u32 = 48_000;

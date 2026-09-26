@@ -187,9 +187,32 @@ pub fn write_audio_video_mp4(
         write_fragment(&mut output, fragments, origin, &packets[start..end])?;
         start = end;
     }
-    for chunk in audio_packets.chunks(1_500) {
+    // Each fragment has fixed 20 ms sample durations. Start a new fragment
+    // after a capture gap so tfdt preserves the missing time instead of
+    // collapsing the later sound toward the beginning of the clip.
+    let mut audio_start = 0;
+    while audio_start < audio_packets.len() {
+        let mut audio_end = audio_start + 1;
+        while audio_end < audio_packets.len() && audio_end - audio_start < 1_500 {
+            let previous = audio_packets[audio_end - 1];
+            let expected = previous.timestamp_ns.saturating_add(previous.duration_ns);
+            if audio_packets[audio_end]
+                .timestamp_ns
+                .saturating_sub(expected)
+                > 5_000_000
+            {
+                break;
+            }
+            audio_end += 1;
+        }
         fragments = fragments.saturating_add(1);
-        write_audio_fragment(&mut output, fragments, origin, chunk)?;
+        write_audio_fragment(
+            &mut output,
+            fragments,
+            origin,
+            &audio_packets[audio_start..audio_end],
+        )?;
+        audio_start = audio_end;
     }
     Ok(Mp4VideoSummary {
         packets: u32::try_from(packets.len()).unwrap_or(u32::MAX),
