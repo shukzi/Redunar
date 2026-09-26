@@ -1037,10 +1037,7 @@ document.addEventListener('click',event=>{
   }
   if(action==='folder')await call('open_replay_folder');
   if(action==='open-clip-external'){if(!clip())throw new Error('Select a clip first.');await call('open_clip_external',{fileName:clip().file_name});notify('Opened the selected clip in your desktop player.');}
-  if(action==='open-diagnostic-log-folder'){
-  perform(async()=>{await call('open_diagnostic_log_folder');});
-  return;
- }
+  if(action==='open-diagnostic-log-folder')await call('open_diagnostic_log_folder');
   if(action==='change-replay-folder'){
    modal('Choose replay folder','<form id="replay-folder-form"><label class="form-label">Parent directory<input name="parent" required maxlength="4096" placeholder="/home/you/Videos"></label><p class="small-note">Redunar will create and own a <code>Redunar Replays</code> folder inside this directory. Existing clips stay where they are.</p><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Save folder</button></div></form>');
   }
