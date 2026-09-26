@@ -364,6 +364,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branches, worktrees, and review.
 point. Full checks cover both Rust workspaces and UI; release adds the existing
 compatibility/package gate. Reports and isolated targets live in the checkout's
 ignored `.redunar-build/` directory. Hardware and installation remain separate.
+The audio command-construction test requires `parec` to be installed
+(`pulseaudio-utils` on Debian/Ubuntu). It constructs the command without starting
+capture or connecting to a sound server. The shared CI setup installs this
+utility alongside the audio libraries.
 New detailed results belong in [docs/verification](docs/verification/README.md).
 See the [September 26 workflow verification](docs/verification/2026-09-26-development-workflow.md)
 for the isolated build and validation entry point.
