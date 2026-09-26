@@ -3,6 +3,7 @@ set -euo pipefail
 
 workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$workspace_root"
+export CARGO_TARGET_DIR="$workspace_root/.redunar-build/checks/tauri"
 mkdir -p "$workspace_root/target"
 release_check_root=$(mktemp -d "${TMPDIR:-/tmp}/redunar-release.XXXXXX")
 trap 'rm -rf -- "$release_check_root"' EXIT
@@ -27,6 +28,8 @@ bash -n tools/check-installed-tauri-runtime.sh
 test -x install.sh
 sh -n install.sh
 test -x tools/build-linux-release.sh
+# Compatibility compilation uses a snapshot; host Tauri tests need their own frontend.
+npm --prefix output/tauri-redunar run build
 bash -n tools/build-linux-release.sh
 cargo deny --locked check licenses --hide-inclusion-graph -A license-not-encountered
 cargo deny --manifest-path output/tauri-redunar/src-tauri/Cargo.toml \
@@ -60,9 +63,9 @@ tools/build-linux-release.sh
 python3 tools/generate-license-inventory.py --check
 # Session fixtures append random capture directory and socket names. /dev/shm is
 # both outside the quota-constrained /tmp and short enough for AF_UNIX paths.
-TMPDIR=/dev/shm cargo test --offline \
+TMPDIR=/dev/shm cargo test --locked --offline \
   --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets --quiet
-cargo clippy --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml \
+cargo clippy --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml \
   --all-targets -- -D warnings
 node --test output/tauri-redunar/tests/*.test.mjs
 node --check output/tauri-redunar/ui/app.js

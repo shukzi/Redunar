@@ -1,5 +1,6 @@
 # Local build products, including compatibility symlinks.
 /target
+/.redunar-build/
 **/target
 **/node_modules
 **/dist

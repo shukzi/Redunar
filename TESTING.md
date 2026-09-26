@@ -357,6 +357,18 @@ The OpenGL metric panel was visually inspected in a separate isolated
 inspected in that run. Automated test suites from the preceding section were
 not rerun for this follow-up.
 
+## Development entry point
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branches, worktrees, and review.
+`tools/validate.sh quick`, `full`, and `release` share the same local/CI entry
+point. Full checks cover both Rust workspaces and UI; release adds the existing
+compatibility/package gate. Reports and isolated targets live in the checkout's
+ignored `.redunar-build/` directory. Hardware and installation remain separate.
+New detailed results belong in [docs/verification](docs/verification/README.md).
+See the [September 26 workflow verification](docs/verification/2026-09-26-development-workflow.md)
+for the isolated build and validation entry point.
+Existing dated records below describe their original builds and paths.
+
 ## Automated commands
 
 Shared Rust workspace:

@@ -370,7 +370,7 @@ unsafe extern "C" fn interposed_dlsym(handle: *mut c_void, symbol: *const c_char
     // SAFETY: dlsym requires a valid NUL-terminated symbol name.
     match unsafe { CStr::from_ptr(symbol) }.to_bytes() {
         b"dlopen" => {
-            if resolved as usize == interposed_dlopen as *const () as usize {
+            if std::ptr::eq(resolved.cast(), interposed_dlopen as *const ()) {
                 launch_diag!(
                     DLOPEN_DYNSYM_ALREADY_WRAPPED,
                     "dlopen-function-already-resolves-to-redunar"
@@ -383,7 +383,7 @@ unsafe extern "C" fn interposed_dlsym(handle: *mut c_void, symbol: *const c_char
             interposed_dlopen as *const () as *mut c_void
         }
         b"dlsym" => {
-            if resolved as usize == interposed_dlsym as *const () as usize {
+            if std::ptr::eq(resolved.cast(), interposed_dlsym as *const ()) {
                 launch_diag!(
                     DLSYM_DYNSYM_ALREADY_WRAPPED,
                     "dlsym-function-already-resolves-to-redunar"

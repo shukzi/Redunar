@@ -15,7 +15,9 @@ fi
 
 cd -- "$workspace_root"
 native_root="$workspace_root/output/tauri-redunar"
-release_root="$native_root/src-tauri/target/release"
+source "$workspace_root/tools/lib/release-paths.sh"
+lock_release_artifacts
+verify_release_artifacts
 
 required_artifacts=(
   "$release_root/redunar-tauri"

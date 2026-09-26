@@ -13,8 +13,10 @@ test('ended unlocked sessions are hidden from the live Overview while pending se
 
 test('release assets publish the VERSION metadata consumed by the updater',()=>{
  const workflow=readFileSync(new URL('../../../.github/workflows/release.yml',import.meta.url),'utf8');
+ const candidate=readFileSync(new URL('../../../tools/prepare-release.sh',import.meta.url),'utf8');
  const signer=readFileSync(new URL('../../../tools/sign-release-assets.sh',import.meta.url),'utf8');
- assert.match(workflow,/printf '%s\\n' "\$\{RELEASE_TAG#v\}" >"\$assets\/VERSION"/);
+ assert.match(workflow,/candidate\/VERSION/);
+ assert.match(candidate,/tools\/write-release-version\.sh "\$assets"/);
  assert.match(signer,/sha256sum VERSION/);
 });
 
@@ -98,10 +100,12 @@ test('Desktop launcher metadata uses the production tooltip copy',()=>{
 });
 test('Embedded sidebar product version is generated from the package version',()=>{
  const index=readFileSync(new URL('../ui/index.html',import.meta.url),'utf8');
+ const config=readFileSync(new URL('../vite.config.js',import.meta.url),'utf8');
  const build=readFileSync(new URL('../build-native.py',import.meta.url),'utf8');
  assert.match(index,/Version __REDUNAR_VERSION__/);
- assert.match(build,/Version:\\s\+\(\[\^%\\s\]\+\)/);
- assert.match(build,/replace\("__REDUNAR_VERSION__", version_label\)/);
+ assert.match(config,/packaging\/redunar-app\.spec/);
+ assert.match(config,/replaceAll\('__REDUNAR_VERSION__', version\)/);
+ assert.doesNotMatch(build,/index\.write_text/);
 });
 test('Overview uses ended language after a completed game session',()=>{
  const source=readFileSync(new URL('../src-tauri/src/sessions.rs',import.meta.url),'utf8');

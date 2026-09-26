@@ -6,6 +6,14 @@ is `redunar-app`, with version/release owned by
 
 ## Build and verify
 
+Use [the release procedure](../docs/RELEASING.md) for qualification before
+publication. Compatibility binaries now live under
+`.redunar-build/linux/native/tauri/release` and their source/hash records under
+`.redunar-build/linux`. Packaging verifies the completed build manifest before
+staging. `REDUNAR_RELEASE_ROOT` is an explicit absolute-path override for a
+deliberate alternative payload; it does not establish compatibility validation.
+
+
 From the repository root:
 
 ```sh

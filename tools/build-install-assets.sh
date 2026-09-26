@@ -2,6 +2,7 @@
 set -euo pipefail
 
 workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$workspace_root/tools/lib/release-paths.sh"
 output_directory=${1:-"$workspace_root/target/install-assets"}
 private_key=${2:-${REDUNAR_RELEASE_SIGNING_KEY:-}}
 public_key=${3:-"$workspace_root/packaging/release-signing-public.pem"}
@@ -22,6 +23,8 @@ if [[ -z "$private_key" || "$private_key" != /* ]]; then
 fi
 
 "$workspace_root/tools/build-linux-release.sh"
+lock_release_artifacts
+verify_release_artifacts
 
 installer_glibc=$(awk -F= '$1 == "minimum_glibc" { print $2; exit }' "$workspace_root/install.sh")
 if [[ ! "$installer_glibc" =~ ^[0-9]+\.[0-9]+$ ]]; then
@@ -29,12 +32,12 @@ if [[ ! "$installer_glibc" =~ ^[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 for binary in \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-tauri" \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-steam-launch" \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-hotkey-helper" \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/redunar-update-helper" \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_vulkan.so" \
-  "$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_opengl.so"
+  "$release_root/redunar-tauri" \
+  "$release_root/redunar-steam-launch" \
+  "$release_root/redunar-hotkey-helper" \
+  "$release_root/redunar-update-helper" \
+  "$release_root/libredunar_capture_vulkan.so" \
+  "$release_root/libredunar_capture_opengl.so"
 do
   if [[ ! -f "$binary" ]]; then
     printf 'release component is missing: %s\n' "$binary" >&2

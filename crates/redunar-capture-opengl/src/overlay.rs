@@ -2264,8 +2264,13 @@ mod tests {
 
         render_plan(&mut canvas, snapshot, config, metrics, (0, 0), 100);
 
-        let muted = palette.muted.map(super::normalized_byte);
-        let text = palette.text.map(super::normalized_byte);
+        // The renderer encodes squared palette channels before writing RGBA8.
+        let muted = palette
+            .muted
+            .map(|channel| super::normalized_byte(channel.sqrt()));
+        let text = palette
+            .text
+            .map(|channel| super::normalized_byte(channel.sqrt()));
         assert!(has_rgb(&canvas, 6..18, [muted[0], muted[1], muted[2]]));
         assert!(!has_rgb(&canvas, 6..18, [text[0], text[1], text[2]]));
         assert!(has_rgb(&canvas, 22..34, [text[0], text[1], text[2]]));
@@ -2296,8 +2301,13 @@ mod tests {
 
         render_plan(&mut canvas, snapshot, config, metrics, (0, 0), 100);
 
-        let muted = palette.muted.map(super::normalized_byte);
-        let divider = palette.divider.map(super::normalized_byte);
+        // The renderer encodes squared palette channels before writing RGBA8.
+        let muted = palette
+            .muted
+            .map(|channel| super::normalized_byte(channel.sqrt()));
+        let divider = palette
+            .divider
+            .map(|channel| super::normalized_byte(channel.sqrt()));
         let width = usize::try_from(width).unwrap();
         assert!(has_rgb(&canvas, 6..18, [muted[0], muted[1], muted[2]]));
         assert_eq!(&canvas.pixels[(24 * width + 20) * 4..][..3], &divider[..3]);

@@ -1,98 +1,125 @@
 name: Redunar release
-
+# Qualification happens before publication. A published release never triggers a build.
 on:
-  release:
-    types:
-      - published
   workflow_dispatch:
     inputs:
       release_tag:
+        description: Existing approved tag (vMAJOR.MINOR.PATCH)
         required: true
-
+        type: string
+      publish:
+        description: Publish after qualification and release-environment approval
+        required: true
+        type: boolean
+        default: false
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: release-${{ inputs.release_tag }}
+  cancel-in-progress: false
 jobs:
-  release:
-    name: Build and verify release assets
+  candidate:
+    name: Qualify release candidate
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
     steps:
-      - name: Check release inputs
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          # Manual recovery builds the exact published tag, even when the
-          # workflow definition has been repaired on the default branch.
-          ref: ${{ github.event.inputs.release_tag || github.sha }}
-      - name: Validate release version
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require an integrated release tag
+        id: source
         env:
-          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
-        run: tools/check-release-inputs.sh "$RELEASE_TAG"
-
-      - name: Build Linux packages
-        env:
-          CARGO_TERM_COLOR: always
-          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PUBLISH: ${{ inputs.publish }}
+          PUBLICATION_ENABLED: ${{ vars.REDUNAR_RELEASE_PUBLICATION_ENABLED }}
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes podman rpm zstd
-          cd output/tauri-redunar
-          npm ci
-          cd ../..
-          mkdir -p ../local-builds
-          rm -rf ../local-builds/node_modules
-          cp -a output/tauri-redunar/node_modules ../local-builds/node_modules
-          cargo fetch --manifest-path Cargo.toml
-          cargo fetch --manifest-path output/tauri-redunar/src-tauri/Cargo.toml
-          # Fresh runners do not have the pinned Debian image. Bootstrap that
-          # image online, then keep the actual release build offline below.
+          if [[ "$PUBLISH" == true && "$PUBLICATION_ENABLED" != true ]]; then
+            printf '%s\n' 'Configure and approve the release environment before enabling publication.' >&2
+            exit 1
+          fi
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git merge-base --is-ancestor HEAD origin/main
+          tools/check-release-inputs.sh "$RELEASE_TAG"
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup
+      - name: Bootstrap compatibility image
+        run: |
           podman build --pull=always --network=host \
             --tag localhost/redunar-build-glibc-2.36:bookworm \
             --file packaging/build-images/glibc-2.36.Containerfile \
             packaging/build-images
-          assets="$RUNNER_TEMP/install-assets"
-          mkdir -p "$assets"
-          tools/build-linux-release.sh
-          tools/build-tauri-deb.sh "$assets"
-          tools/build-tauri-arch-package.sh "$assets"
-          tools/build-tauri-opensuse-rpm.sh "$assets"
-          rpm_assets="$RUNNER_TEMP/rpm-assets"
-          mkdir -p "$rpm_assets"
-          tools/build-local-tauri-rpm.sh "$rpm_assets"
-          cp "$rpm_assets/redunar-app.rpm" "$assets/redunar-app-linux-x86_64.rpm"
-          tools/build-tauri-portable.sh "$assets"
-          for asset in "$assets"/redunar-app-linux-*; do
-            sha256sum "$asset" >"$asset.sha256"
-          done
-          printf '%s\n' "${RELEASE_TAG#v}" >"$assets/VERSION"
-
-      - name: Sign release manifest
+      - name: Validate and prepare unsigned packages
+        id: prepare
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          tools/prepare-release.sh "$RELEASE_TAG"
+          printf 'assets=%s/.redunar-build/candidates/%s-%s\n' "$GITHUB_WORKSPACE" "$RELEASE_TAG" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ github.run_id }}
+          path: ${{ steps.prepare.outputs.assets }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verification-${{ github.run_id }}
+          path: .redunar-build/reports/
+          include-hidden-files: true
+          retention-days: 30
+  publish:
+    name: Sign and publish approved candidate
+    needs: candidate
+    if: ${{ inputs.publish && vars.REDUNAR_RELEASE_PUBLICATION_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Configure required maintainer review and keep the signing secret here, not
+    # in repository-wide secrets. See docs/RELEASING.md before enabling.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-${{ github.run_id }}
+          path: candidate
+      - name: Check candidate identity and release notes
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT: ${{ needs.candidate.outputs.commit }}
+        run: |
+          test "$(cat candidate/SOURCE_COMMIT)" = "$SOURCE_COMMIT"
+          test "$(cat candidate/RELEASE_TAG)" = "$RELEASE_TAG"
+          test "$(cat candidate/VERSION)" = "${RELEASE_TAG#v}"
+          test -s "docs/releases/$RELEASE_TAG.md"
+          (cd candidate; sha256sum --check ./*.sha256)
+      - name: Sign and verify packages
         env:
           REDUNAR_RELEASE_SIGNING_KEY: ${{ secrets.REDUNAR_RELEASE_SIGNING_KEY }}
         run: |
+          umask 077
           key_file="$RUNNER_TEMP/redunar-release-private.pem"
+          trap 'rm -f -- "$key_file"' EXIT
           printf '%s' "$REDUNAR_RELEASE_SIGNING_KEY" >"$key_file"
-          tools/sign-release-assets.sh \
-            "$RUNNER_TEMP/install-assets" \
-            "$key_file"
-          rm -f "$key_file"
-
-      - name: Verify release assets
-        run: |
-          openssl pkey \
-            -pubin \
-            -in packaging/release-signing-public.pem \
-            -noout
-          openssl dgst -sha256 \
-            -verify packaging/release-signing-public.pem \
-            -signature "$RUNNER_TEMP/install-assets/SHA256SUMS.sig" \
-            "$RUNNER_TEMP/install-assets/SHA256SUMS"
-          (cd "$RUNNER_TEMP/install-assets" && sha256sum -c SHA256SUMS)
-
-      - name: Upload release assets
+          tools/sign-release-assets.sh "$GITHUB_WORKSPACE/candidate" "$key_file"
+          (cd candidate; sha256sum --check SHA256SUMS)
+      - name: Publish the reviewed release notes and qualified assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/install-assets"/* \
-            --clobber
+          gh release create "$RELEASE_TAG" --verify-tag \
+            --title "$RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md" \
+            candidate/redunar-app-linux-* candidate/VERSION \
+            candidate/SHA256SUMS candidate/SHA256SUMS.sig
