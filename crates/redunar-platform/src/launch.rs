@@ -518,6 +518,7 @@ impl CaptureLaunchPlan {
                 ReplayFrameRate::Fps30 => "30",
                 ReplayFrameRate::Fps60 => "60",
                 ReplayFrameRate::Fps120 => "120",
+                ReplayFrameRate::Variable => "variable",
             }),
         );
         self

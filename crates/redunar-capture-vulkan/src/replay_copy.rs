@@ -168,6 +168,8 @@ struct Route {
     candidate: ReplaySourceCandidate,
     copied_bytes: u32,
     frame_interval_ns: u64,
+    sampling_rate: u8,
+    variable_min_interval_ns: u64,
     next_submit_ns: u64,
     command_pool: VkCommandPool,
     contexts: Vec<CopyContext>,
@@ -250,6 +252,20 @@ fn frame_interval_for_fps(frames_per_second: u8) -> u64 {
     NANOSECONDS_PER_SECOND / u64::from(frames_per_second)
 }
 
+// Variable mode budgets up to 240 presents/second with a two-frame burst.
+// The explicit variable launch token selects this mode; fixed 120 stays fixed.
+const VFR_MIN_INTERVAL_NS: u64 = NANOSECONDS_PER_SECOND.div_ceil(240);
+const MAX_ENCODE_MACROBLOCKS_PER_SECOND: u64 = 2_073_600;
+
+fn variable_min_interval_ns(width: u32, height: u32) -> u64 {
+    let macroblocks = u64::from(width.div_ceil(16)) * u64::from(height.div_ceil(16));
+    VFR_MIN_INTERVAL_NS.max(
+        NANOSECONDS_PER_SECOND
+            .saturating_mul(macroblocks)
+            .div_ceil(MAX_ENCODE_MACROBLOCKS_PER_SECOND),
+    )
+}
+
 fn next_capture_deadline(current_deadline_ns: u64, now_ns: u64, interval_ns: u64) -> u64 {
     let scheduled_ns = if current_deadline_ns == 0 {
         now_ns
@@ -264,11 +280,50 @@ fn next_capture_deadline(current_deadline_ns: u64, now_ns: u64, interval_ns: u64
     }
 }
 
+fn capture_due(sampling_rate: u8, deadline_ns: u64, now_ns: u64, interval_ns: u64) -> bool {
+    if sampling_rate == 0 {
+        // VFR admits a second closely spaced game present after idle time.
+        // The advance below charges both frames against the 240 FPS budget.
+        now_ns.saturating_add(interval_ns) >= deadline_ns
+    } else {
+        deadline_ns == 0 || now_ns >= deadline_ns
+    }
+}
+
+fn advance_capture_deadline(
+    sampling_rate: u8,
+    deadline_ns: u64,
+    now_ns: u64,
+    interval_ns: u64,
+) -> u64 {
+    if sampling_rate == 0 {
+        deadline_ns.max(now_ns).saturating_add(interval_ns)
+    } else {
+        next_capture_deadline(deadline_ns, now_ns, interval_ns)
+    }
+}
+
 fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64) -> u64 {
     if current_deadline_ns == 0 {
         now_ns
     } else {
         current_deadline_ns
+    }
+}
+
+fn capture_timing(
+    sampling_rate: u8,
+    deadline_ns: u64,
+    now_ns: u64,
+    interval_ns: u64,
+) -> (u64, u64) {
+    if sampling_rate == 0 {
+        (now_ns, interval_ns)
+    } else {
+        (
+            capture_presentation_timestamp(deadline_ns, now_ns),
+            frame_interval_for_fps(sampling_rate),
+        )
     }
 }
 
@@ -333,9 +388,11 @@ pub(crate) fn device_created(
     );
 }
 
-pub(crate) fn release_sequence(sequence: u64) {
+/// Return false when the route lock is busy so the producer can retry this
+/// acknowledgement instead of permanently stranding an exported buffer.
+pub(crate) fn release_sequence(sequence: u64) -> bool {
     let Ok(mut state) = STATE.try_lock() else {
-        return;
+        return false;
     };
     if let Some(route) = state.route.as_mut() {
         release_route_sequence(route, sequence);
@@ -346,6 +403,7 @@ pub(crate) fn release_sequence(sequence: u64) {
     if let Some(route) = state.abandoned_route.as_mut() {
         release_route_sequence(route, sequence);
     }
+    true
 }
 
 fn release_route_sequence(route: &mut Route, sequence: u64) {
@@ -591,9 +649,6 @@ pub(crate) unsafe fn prepare_present(
         return None;
     }
     let now_ns = producer::monotonic_ns()?;
-    if route.next_submit_ns != 0 && now_ns < route.next_submit_ns {
-        return None;
-    }
     let present = unsafe { &*present_info };
     if present.s_type != VK_STRUCTURE_TYPE_PRESENT_INFO_KHR
         || present.swapchain_count == 0
@@ -610,10 +665,22 @@ pub(crate) unsafe fn prepare_present(
     if image == 0 || usize::try_from(image_index).ok()? >= route.image_count {
         return None;
     }
-    // Use the cadence deadline as the encoded presentation timestamp. Source
-    // presents need not divide evenly into 30/60/120 FPS, and stamping the
-    // selected frame with wall time would create variable-frame-rate judder.
-    let presentation_timestamp_ns = capture_presentation_timestamp(route.next_submit_ns, now_ns);
+    if !capture_due(
+        route.sampling_rate,
+        route.next_submit_ns,
+        now_ns,
+        route.variable_min_interval_ns,
+    ) {
+        return None;
+    }
+    // Fixed-rate modes keep deadline timestamps; variable mode uses the
+    // selected game's monotonic presentation timestamp.
+    let (presentation_timestamp_ns, capture_interval_ns) = capture_timing(
+        route.sampling_rate,
+        route.next_submit_ns,
+        now_ns,
+        route.variable_min_interval_ns,
+    );
     let (semaphore, proof) = unsafe {
         submit_copy(
             route,
@@ -624,8 +691,12 @@ pub(crate) unsafe fn prepare_present(
         )
     }?;
     if semaphore != 0 {
-        route.next_submit_ns =
-            next_capture_deadline(route.next_submit_ns, now_ns, route.frame_interval_ns);
+        route.next_submit_ns = advance_capture_deadline(
+            route.sampling_rate,
+            route.next_submit_ns,
+            now_ns,
+            capture_interval_ns,
+        );
     }
     let exported_timestamp_ns = proof.map(|proof| {
         let timestamp_ns =
@@ -821,7 +892,8 @@ unsafe fn create_route(
         validation_setup_failure(export_requested, "vkGetSwapchainImagesKHR(count)", result);
         return None;
     }
-    let context_count = context_count_for_swapchain(image_count)?;
+    let variable_rate = replay_transfer::variable_rate_requested();
+    let context_count = context_count_for_swapchain(image_count, variable_rate)?;
     let mut images = [0; MAX_IMAGES];
     let mut supplied = image_count;
     let result = unsafe {
@@ -851,6 +923,12 @@ unsafe fn create_route(
         candidate,
         copied_bytes,
         frame_interval_ns: frame_interval_for_fps(candidate.target_frames_per_second),
+        sampling_rate: if variable_rate {
+            0
+        } else {
+            candidate.target_frames_per_second
+        },
+        variable_min_interval_ns: variable_min_interval_ns(candidate.width, candidate.height),
         next_submit_ns: 0,
         command_pool: 0,
         // A binary semaphore is reused only after the same swapchain image is
@@ -919,7 +997,7 @@ unsafe fn initialize_route_contexts(route: &mut Route) -> bool {
     true
 }
 
-fn context_count_for_swapchain(image_count: u32) -> Option<usize> {
+fn context_count_for_swapchain(image_count: u32, variable_rate: bool) -> Option<usize> {
     usize::try_from(image_count)
         .ok()
         .filter(|count| (1..=MAX_IMAGES).contains(count))
@@ -927,9 +1005,10 @@ fn context_count_for_swapchain(image_count: u32) -> Option<usize> {
         // two/three-image swapchains. The fifth submission collects slot zero
         // and returns its export before this bounded set can fill again.
         .map(|count| {
-            count
-                .saturating_add(1)
-                .clamp(redunar_capture::REPLAY_PRODUCER_CONTEXT_COUNT, MAX_IMAGES)
+            count.saturating_add(1).clamp(
+                replay_transfer::producer_context_count(variable_rate),
+                MAX_IMAGES,
+            )
         })
 }
 
@@ -1500,13 +1579,13 @@ mod tests {
 
     #[test]
     fn staging_contexts_cover_every_bounded_swapchain_image() {
-        assert_eq!(context_count_for_swapchain(1), Some(5));
-        assert_eq!(context_count_for_swapchain(2), Some(5));
-        assert_eq!(context_count_for_swapchain(3), Some(5));
-        assert_eq!(context_count_for_swapchain(4), Some(5));
-        assert_eq!(context_count_for_swapchain(8), Some(8));
-        assert_eq!(context_count_for_swapchain(0), None);
-        assert_eq!(context_count_for_swapchain(9), None);
+        assert_eq!(context_count_for_swapchain(1, false), Some(5));
+        assert_eq!(context_count_for_swapchain(2, false), Some(5));
+        assert_eq!(context_count_for_swapchain(3, false), Some(5));
+        assert_eq!(context_count_for_swapchain(4, false), Some(5));
+        assert_eq!(context_count_for_swapchain(8, false), Some(8));
+        assert_eq!(context_count_for_swapchain(0, false), None);
+        assert_eq!(context_count_for_swapchain(9, false), None);
     }
 
     #[test]

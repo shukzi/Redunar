@@ -1166,6 +1166,7 @@ const fn replay_frame_rate_token(value: ReplayFrameRate) -> &'static str {
         ReplayFrameRate::Fps30 => "30",
         ReplayFrameRate::Fps60 => "60",
         ReplayFrameRate::Fps120 => "120",
+        ReplayFrameRate::Variable => "variable",
     }
 }
 
@@ -1174,6 +1175,7 @@ fn parse_replay_frame_rate(value: &str) -> Result<ReplayFrameRate, GameCatalogEr
         "30" => Ok(ReplayFrameRate::Fps30),
         "60" | "adaptive" => Ok(ReplayFrameRate::Fps60),
         "120" => Ok(ReplayFrameRate::Fps120),
+        "variable" => Ok(ReplayFrameRate::Variable),
         _ => Err(GameCatalogError::new(
             "catalog replay frame rate is invalid",
         )),

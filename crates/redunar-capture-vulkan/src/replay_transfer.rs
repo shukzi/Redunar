@@ -20,11 +20,27 @@ const MIN_SOURCE_HEIGHT: u32 = 180;
 // Four encoder slots plus one producer handoff are required for forward
 // progress; the fifth export immediately releases the oldest completed slot.
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+// Match the encoder request's H.264 macroblock throughput bound. Variable
+// mode announces nominal 120 while timestamps follow accepted presents.
+const MAX_ENCODE_MACROBLOCKS_PER_SECOND: u32 = 2_073_600;
+// Keep the four-slot encoder fixed while giving the variable-rate
+// Vulkan producer three additional handoff buffers. Fixed-rate paths retain
+// their existing five-buffer bound.
+const VFR_PRODUCER_CONTEXT_COUNT: usize = 8;
+
+pub(crate) const fn producer_context_count(variable_rate: bool) -> usize {
+    if variable_rate {
+        VFR_PRODUCER_CONTEXT_COUNT
+    } else {
+        redunar_capture::REPLAY_PRODUCER_CONTEXT_COUNT
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplayTransferConfig {
     requested: bool,
     target_frames_per_second: u8,
+    variable_rate: bool,
 }
 
 impl ReplayTransferConfig {
@@ -40,11 +56,16 @@ impl ReplayTransferConfig {
             requested: requested == Some("1"),
             target_frames_per_second: match frame_rate {
                 Some("30") => 30,
-                Some("120") => 120,
+                Some("120" | "variable") => 120,
                 _ => 60,
             },
+            variable_rate: frame_rate == Some("variable"),
         }
     }
+}
+
+pub(crate) fn variable_rate_requested() -> bool {
+    ReplayTransferConfig::from_environment().variable_rate
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,8 +184,19 @@ fn plan(
         }
     };
     if config.target_frames_per_second == 120
+        && !config.variable_rate
         && !((info.image_extent.width <= 1_920 && info.image_extent.height <= 1_080)
             || (info.image_extent.height <= 1_920 && info.image_extent.width <= 1_080))
+    {
+        return Err(ReplayTransferRejection::DimensionsUnsupported);
+    }
+    if info
+        .image_extent
+        .width
+        .div_ceil(16)
+        .saturating_mul(info.image_extent.height.div_ceil(16))
+        .saturating_mul(u32::from(config.target_frames_per_second))
+        > MAX_ENCODE_MACROBLOCKS_PER_SECOND
     {
         return Err(ReplayTransferRejection::DimensionsUnsupported);
     }
@@ -176,7 +208,7 @@ fn plan(
             target_frames_per_second: config.target_frames_per_second,
         },
         frame_interval_ns: NANOSECONDS_PER_SECOND / u64::from(config.target_frames_per_second),
-        maximum_in_flight_images: u8::try_from(redunar_capture::REPLAY_PRODUCER_CONTEXT_COUNT)
+        maximum_in_flight_images: u8::try_from(producer_context_count(config.variable_rate))
             .unwrap_or(u8::MAX),
     })
 }
@@ -219,6 +251,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: false,
                 target_frames_per_second: 60,
+                variable_rate: false,
             }
         );
         assert_eq!(
@@ -226,6 +259,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: true,
                 target_frames_per_second: 30,
+                variable_rate: false,
             }
         );
         assert_eq!(
@@ -233,6 +267,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: true,
                 target_frames_per_second: 120,
+                variable_rate: false,
             }
         );
         assert_eq!(
@@ -240,6 +275,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: false,
                 target_frames_per_second: 60,
+                variable_rate: false,
             }
         );
     }
@@ -250,6 +286,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: true,
                 target_frames_per_second: 30,
+                variable_rate: false,
             },
             &create_info(),
         )
@@ -271,6 +308,7 @@ mod tests {
         let config = ReplayTransferConfig {
             requested: true,
             target_frames_per_second: 120,
+            variable_rate: false,
         };
         let mut info = create_info();
         assert_eq!(
@@ -308,6 +346,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: true,
                 target_frames_per_second: 60,
+                variable_rate: false,
             },
             &info,
         )
@@ -322,6 +361,7 @@ mod tests {
             ReplayTransferConfig {
                 requested: true,
                 target_frames_per_second: 60,
+                variable_rate: false,
             },
             &info,
         )
@@ -337,6 +377,7 @@ mod tests {
         let config = ReplayTransferConfig {
             requested: true,
             target_frames_per_second: 60,
+            variable_rate: false,
         };
         let mut info = create_info();
         info.flags = VK_SWAPCHAIN_CREATE_PROTECTED_BIT_KHR;

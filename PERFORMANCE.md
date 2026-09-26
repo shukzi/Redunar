@@ -79,6 +79,12 @@ Fixed 120 FPS is subject to the implemented display/surface limits and hardware
 validation. A capability check or short encode probe is not sustained frame-pacing
 proof. Measure drops, queue pressure, disk latency, memory, GPU use, and output
 quality through resize/reset and long sessions.
+Variable FPS admits at most 240 selected game presents per second at 1080p and
+144 at 2560×1440 under the H.264 macroblock ceiling, with a two-frame burst
+allowance. It uses eight bounded Vulkan producer buffers, while fixed-rate
+capture keeps five; the encoder remains four slots. Ring and spool byte budgets
+double only in Variable mode. A source or encoder backlog drops Replay work
+without pausing game presentation.
 
 ## Desktop media and history
 

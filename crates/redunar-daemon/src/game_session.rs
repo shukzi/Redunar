@@ -869,7 +869,11 @@ fn run_replay_export_pump(
     let mut consecutive_source_errors = 0_u32;
     let mut last_source_error_log: Option<Instant> = None;
     let mut audio_worker = None;
+    let mut pending_releases = VecDeque::new();
     while !stop.load(Ordering::Acquire) {
+        // Retry ownership acknowledgements even when a full producer has no
+        // free slot to export another frame. Never log sequence identifiers.
+        let _ = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
         let frame = match source.wait_next(REPLAY_EXPORT_WAIT) {
             Ok(Some(frame)) => frame,
             Ok(None) => continue,
@@ -910,20 +914,24 @@ fn run_replay_export_pump(
         let (sequence, frame) = frame;
         if let Some(deadline) = rearm_deadline {
             if Instant::now() < deadline {
-                let _ = source.release(sequence);
+                let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
+                    source.release(completed)
+                });
                 continue;
             }
             // The backoff elapsed, so this frame attempts the re-arm.
             rearm_deadline = None;
             // Retire the failed pipeline's finished GPU fences before the
             // replacement records, so the producer's staging contexts return.
-            let _ = release_runtime_completions(source.as_ref(), &replay);
+            let _ = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
         }
         let frame_dimensions = (frame.width, frame.height);
         if dimensions.is_none() {
             let Ok(pipeline) = pipeline_factory(&frame) else {
                 crate::log_op!("Redunar Replay: hardware encoder pipeline creation failed");
-                let _ = source.release(sequence);
+                let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
+                    source.release(completed)
+                });
                 enter_replay_recovery(
                     &replay,
                     &coordinator,
@@ -936,7 +944,9 @@ fn run_replay_export_pump(
             };
             if let Err(error) = replay.start_validated_pipeline(settings, pipeline, readiness) {
                 crate::log_op!("Redunar Replay: recorder activation failed: {error}");
-                let _ = source.release(sequence);
+                let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
+                    source.release(completed)
+                });
                 enter_replay_recovery(
                     &replay,
                     &coordinator,
@@ -967,8 +977,11 @@ fn run_replay_export_pump(
                 crate::log_op!(
                     "Redunar Replay: replacement encoder creation failed after a source resize"
                 );
-                let _ = source.release(sequence);
-                let _ = release_runtime_completions(source.as_ref(), &replay);
+                let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
+                    source.release(completed)
+                });
+                let _ =
+                    release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
                 enter_replay_recovery(
                     &replay,
                     &coordinator,
@@ -983,8 +996,11 @@ fn run_replay_export_pump(
                 crate::log_op!(
                     "Redunar Replay: recorder reset failed after a source resize: {error}"
                 );
-                let _ = source.release(sequence);
-                let _ = release_runtime_completions(source.as_ref(), &replay);
+                let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
+                    source.release(completed)
+                });
+                let _ =
+                    release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
                 enter_replay_recovery(
                     &replay,
                     &coordinator,
@@ -1002,17 +1018,19 @@ fn run_replay_export_pump(
                 frame_dimensions.0,
                 frame_dimensions.1
             );
-            let _ = release_runtime_completions(source.as_ref(), &replay);
+            let _ = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
         }
         if let Err(error) = replay.submit_frame(sequence, frame) {
             crate::log_op!("Redunar Replay: hardware frame submission failed: {error}");
             let completed = replay.take_completed_exports();
-            if !completed.contains(&sequence) {
-                let _ = source.release(sequence);
-            }
-            for completed_sequence in completed {
-                let _ = source.release(completed_sequence);
-            }
+            let release_current = !completed.contains(&sequence);
+            let _ = release_sequences(
+                &mut pending_releases,
+                std::iter::once(sequence)
+                    .filter(|_| release_current)
+                    .chain(completed),
+                |completed| source.release(completed),
+            );
             enter_replay_recovery(
                 &replay,
                 &coordinator,
@@ -1023,7 +1041,7 @@ fn run_replay_export_pump(
             );
             continue;
         }
-        if release_runtime_completions(source.as_ref(), &replay).is_err() {
+        if release_runtime_completions(source.as_ref(), &replay, &mut pending_releases).is_err() {
             enter_replay_recovery(
                 &replay,
                 &coordinator,
@@ -1039,7 +1057,7 @@ fn run_replay_export_pump(
         let _ = worker.join();
     }
     let shutdown = replay.shutdown();
-    let releases = release_runtime_completions(source.as_ref(), &replay);
+    let releases = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
     source.drain_and_release();
     shutdown.and(releases)
 }
@@ -1079,10 +1097,6 @@ fn start_game_audio_worker(
         .ok()
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the audio reconnect loop keeps each route and failure transition together"
-)]
 fn run_game_audio_worker(
     stop: &AtomicBool,
     replay: &ProductionReplayRuntime,
@@ -1093,32 +1107,29 @@ fn run_game_audio_worker(
     // so audio does not silently disappear for the rest of the session.
     let mut backend_attempt = 0_usize;
     while !stop.load(Ordering::Acquire) {
-        let sources = match redunar_capture_audio::discover_system_audio_sources() {
-            Ok(found) => found,
-            Err(error) => {
-                crate::log_op!("Redunar Replay: game audio discovery failed; retrying: {error}");
-                thread::sleep(Duration::from_secs(1));
-                continue;
-            }
+        let Ok(sources) = redunar_capture_audio::discover_system_audio_sources() else {
+            // Sound-server diagnostics can include user-named devices.
+            crate::log_op!("Redunar Replay: game audio discovery failed; retrying");
+            thread::sleep(Duration::from_secs(1));
+            continue;
         };
         let source = sources[backend_attempt % sources.len()].clone();
-        let mut capture = match redunar_capture_audio::SystemAudioCapture::start(
+        let Ok(mut capture) = redunar_capture_audio::SystemAudioCapture::start(
             &source,
             timeline_timestamp_ns,
             timeline_started,
-        ) {
-            Ok(capture) => capture,
-            Err(error) => {
-                crate::log_op!("Redunar Replay: game audio capture unavailable; retrying: {error}");
-                backend_attempt = backend_attempt.saturating_add(1);
-                thread::sleep(Duration::from_secs(1));
-                continue;
-            }
+        ) else {
+            crate::log_op!(
+                "Redunar Replay: game audio capture unavailable via {}; retrying",
+                source.backend_name()
+            );
+            backend_attempt = backend_attempt.saturating_add(1);
+            thread::sleep(Duration::from_secs(1));
+            continue;
         };
         crate::log_op!(
-            "Redunar Replay: audio capture active from the default output via {} ({})",
-            source.backend_name(),
-            source.name()
+            "Redunar Replay: audio capture active from the default output via {}",
+            source.backend_name()
         );
         let mut reconnect = false;
         let mut backend_failed = false;
@@ -1134,13 +1145,13 @@ fn run_game_audio_worker(
                         received_packet = true;
                     }
                     last_packet_at = Instant::now();
-                    if let Err(error) = replay.submit_audio(packet) {
+                    if let Err(_error) = replay.submit_audio(packet) {
                         if matches!(
                             replay.status().phase,
                             ReplayPhase::Buffering | ReplayPhase::Saving
                         ) {
                             crate::log_op!(
-                                "Redunar Replay: game audio buffering stopped; retrying: {error}"
+                                "Redunar Replay: game audio buffering stopped; retrying"
                             );
                             reconnect = true;
                             break;
@@ -1152,9 +1163,7 @@ fn run_game_audio_worker(
                         // reconnecting here would respawn the capture helper
                         // about once per second for the rest of the session.
                         if !recorder_pause_logged {
-                            crate::log_op!(
-                                "Redunar Replay: game audio paused with the recorder: {error}"
-                            );
+                            crate::log_op!("Redunar Replay: game audio paused with the recorder");
                             recorder_pause_logged = true;
                         }
                     } else {
@@ -1171,8 +1180,8 @@ fn run_game_audio_worker(
                         break;
                     }
                 }
-                Err(error) => {
-                    crate::log_op!("Redunar Replay: game audio capture stopped; retrying: {error}");
+                Err(_) => {
+                    crate::log_op!("Redunar Replay: game audio capture stopped; retrying");
                     reconnect = true;
                     backend_failed = true;
                     break;
@@ -1187,9 +1196,8 @@ fn run_game_audio_worker(
                     && updated != source
                 {
                     crate::log_op!(
-                        "Redunar Replay: audio output changed from {} to {}; reconnecting",
-                        source.name(),
-                        updated.name()
+                        "Redunar Replay: audio output changed on {}; reconnecting",
+                        source.backend_name()
                     );
                     reconnect = true;
                     break;
@@ -1210,11 +1218,34 @@ fn run_game_audio_worker(
 fn release_runtime_completions(
     source: &dyn ReplayFrameSource,
     replay: &ProductionReplayRuntime,
+    pending: &mut VecDeque<u64>,
 ) -> Result<(), ReplayRuntimeError> {
-    for sequence in replay.take_completed_exports() {
-        source.release(sequence)?;
+    release_sequences(pending, replay.take_completed_exports(), |sequence| {
+        source.release(sequence)
+    })
+}
+
+fn release_sequences(
+    pending: &mut VecDeque<u64>,
+    completed: impl IntoIterator<Item = u64>,
+    mut release: impl FnMut(u64) -> Result<(), ReplayRuntimeError>,
+) -> Result<(), ReplayRuntimeError> {
+    // The producer's bounded slot pool limits outstanding acknowledgements.
+    // Keep every failure for the next pump turn instead of discarding the
+    // remainder when one acknowledgement fails.
+    pending.extend(completed);
+    let attempts = pending.len();
+    let mut first_error = None;
+    for _ in 0..attempts {
+        let sequence = pending.pop_front().expect("attempt count is bounded");
+        if let Err(error) = release(sequence) {
+            pending.push_back(sequence);
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 fn publish_replay_component(

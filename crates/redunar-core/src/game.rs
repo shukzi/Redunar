@@ -288,6 +288,8 @@ pub enum ReplayFrameRate {
     #[default]
     Fps60,
     Fps120,
+    /// Capture accepted game presents with their individual timestamps.
+    Variable,
 }
 
 impl ReplayFrameRate {
@@ -296,15 +298,14 @@ impl ReplayFrameRate {
         match self {
             Self::Fps30 => 30,
             Self::Fps60 => 60,
-            Self::Fps120 => 120,
+            Self::Fps120 | Self::Variable => 120,
         }
     }
 
     /// Whether these coded dimensions are supported at this capture rate.
     ///
-    /// Redunar deliberately limits 120 FPS capture to 1080p-or-lower surfaces
-    /// so the high-rate option cannot be selected for 1440p or 4K games, even
-    /// when an encoder could technically accept the request.
+    /// Fixed 120 FPS remains limited to 1080p. Variable mode uses the encoder's
+    /// bounded macroblock throughput instead of that fixed-rate surface limit.
     #[must_use]
     pub const fn supports_dimensions(self, width: u32, height: u32) -> bool {
         width > 0

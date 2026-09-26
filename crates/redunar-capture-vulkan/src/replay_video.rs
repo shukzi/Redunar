@@ -124,8 +124,21 @@ const REQUIRED_DEVICE_EXTENSION_NAMES: [&[u8]; 7] = [
 pub struct VulkanVideoH264Request {
     pub width: u32,
     pub height: u32,
+    /// Fixed capture cadence, or the upper accepted cadence for VFR.
     pub frames_per_second: u8,
+    pub variable_rate: bool,
     pub target_megabits_per_second: u16,
+}
+
+/// Bound VFR by the H.264 level 5.2 macroblock rate used by this encoder.
+/// The Vulkan and OpenGL producers apply the same ceiling at admission time.
+#[must_use]
+pub fn maximum_variable_frame_rate(width: u32, height: u32) -> u8 {
+    let macroblocks = width.div_ceil(16).saturating_mul(height.div_ceil(16));
+    if macroblocks == 0 {
+        return 0;
+    }
+    u8::try_from((2_073_600 / macroblocks).min(240)).unwrap_or(240)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -286,8 +299,13 @@ impl VulkanVideoH264Request {
             && self.height <= 2_160
             && self.width.is_multiple_of(2)
             && self.height.is_multiple_of(2)
-            && matches!(self.frames_per_second, 30 | 60 | 120)
-            && matches!(self.frames_per_second, 30 | 60 | 120)
+            && if self.variable_rate {
+                (120..=240).contains(&self.frames_per_second)
+                    && self.frames_per_second
+                        == maximum_variable_frame_rate(self.width, self.height)
+            } else {
+                matches!(self.frames_per_second, 30 | 60 | 120)
+            }
             && self
                 .width
                 .div_ceil(16)
@@ -388,7 +406,8 @@ impl VulkanVideoH264Probe {
         Self::local_with_nvidia_beta(request, false)
     }
 
-    /// Also consider NVIDIA devices when a caller has enabled Beta access.
+    /// Select NVIDIA devices for an explicitly eligible Beta access attempt.
+    /// The ordinary AMD path continues to use `local`.
     #[must_use]
     pub fn local_with_nvidia_beta(
         request: VulkanVideoH264Request,
@@ -1469,7 +1488,9 @@ unsafe fn probe_local(
         let (api_version, vendor_id) = unsafe {
             physical_device_api_and_vendor(physical_device, get_physical_device_properties)
         };
-        if vendor_id != AMD_VENDOR_ID && !(allow_nvidia_beta && vendor_id == NVIDIA_VENDOR_ID) {
+        if (allow_nvidia_beta && vendor_id != NVIDIA_VENDOR_ID)
+            || (!allow_nvidia_beta && vendor_id != AMD_VENDOR_ID)
+        {
             continue;
         }
         saw_supported_device = true;
@@ -1533,13 +1554,12 @@ unsafe fn probe_local(
         match unsafe { h264_capabilities(physical_device, request, get_video_capabilities) } {
             Ok(capability) => {
                 let selected_level_idc = required_h264_level(request);
-                // RADV 26.1 reports enum zero here even though its Vulkan H.264
-                // path successfully encodes streams above Level 1.0. Treat
-                // zero as an unreliable maximum and let video-session creation
-                // validate the bounded Redunar level. Every nonzero maximum is
-                // still enforced before allocating encoder resources.
-                if capability.h264.max_level_idc != 0
-                    && selected_level_idc > capability.h264.max_level_idc
+                // The zero-level workaround is established only for the
+                // AMD/RADV path. Do not extend that exception to NVIDIA beta:
+                // an unknown level there must fail before encoder allocation.
+                if (capability.h264.max_level_idc == 0 && vendor_id != AMD_VENDOR_ID)
+                    || (capability.h264.max_level_idc != 0
+                        && selected_level_idc > capability.h264.max_level_idc)
                 {
                     last_blockers = vec![VulkanVideoProbeBlocker::H264LevelUnsupported {
                         required: selected_level_idc,
@@ -2131,9 +2151,14 @@ unsafe fn create_h264_parameters(
     let frame_cropping = crop_right != 0 || crop_bottom != 0;
 
     let vui = StdVideoH264SequenceParameterSetVui {
-        // Square pixels, video signal type, BT.709 description, timing,
-        // fixed frame rate, and zero-reorder bitstream restriction.
-        flags: (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 9),
+        // Packet timestamps carry VFR pacing; only fixed modes declare a
+        // constant H.264 timing relationship in the VUI.
+        flags: (1 << 0)
+            | (1 << 3)
+            | (1 << 5)
+            | (1 << 7)
+            | (u32::from(!request.variable_rate) << 8)
+            | (1 << 9),
         aspect_ratio_idc: 1,
         sar_width: 0,
         sar_height: 0,
@@ -3026,6 +3051,7 @@ mod tests {
                 width: 3_840,
                 height: 2_160,
                 frames_per_second: 60,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }
             .is_valid()
@@ -3035,6 +3061,7 @@ mod tests {
                 width: 7_680,
                 height: 4_320,
                 frames_per_second: 60,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }
             .is_valid()
@@ -3044,6 +3071,7 @@ mod tests {
                 width: 1_920,
                 height: 1_080,
                 frames_per_second: 120,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }
             .is_valid()
@@ -3053,6 +3081,7 @@ mod tests {
                 width: 3_840,
                 height: 2_160,
                 frames_per_second: 120,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }
             .is_valid()
@@ -3062,6 +3091,7 @@ mod tests {
                 width: 1_919,
                 height: 1_080,
                 frames_per_second: 60,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }
             .is_valid()
@@ -3074,6 +3104,7 @@ mod tests {
             width: 1_920,
             height: 1_080,
             frames_per_second: 60,
+            variable_rate: false,
             target_megabits_per_second,
         };
         assert_eq!(request(12).quality_level(4), 0);
@@ -3089,6 +3120,7 @@ mod tests {
                 width: 1_280,
                 height: 720,
                 frames_per_second: 30,
+                variable_rate: false,
                 target_megabits_per_second: 12,
             }),
             8
@@ -3098,6 +3130,7 @@ mod tests {
                 width: 1_280,
                 height: 720,
                 frames_per_second: 30,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }),
             9
@@ -3107,6 +3140,7 @@ mod tests {
                 width: 1_280,
                 height: 720,
                 frames_per_second: 30,
+                variable_rate: false,
                 target_megabits_per_second: 40,
             }),
             11
@@ -3116,6 +3150,7 @@ mod tests {
                 width: 1_920,
                 height: 1_080,
                 frames_per_second: 60,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }),
             12
@@ -3125,6 +3160,7 @@ mod tests {
                 width: 2_560,
                 height: 1_440,
                 frames_per_second: 60,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }),
             14
@@ -3134,6 +3170,7 @@ mod tests {
                 width: 3_840,
                 height: 2_160,
                 frames_per_second: 60,
+                variable_rate: false,
                 target_megabits_per_second: 24,
             }),
             15
@@ -3153,6 +3190,7 @@ mod tests {
             width: 0,
             height: 1_080,
             frames_per_second: 60,
+            variable_rate: false,
             target_megabits_per_second: 24,
         });
         assert_eq!(probe.candidate, None);

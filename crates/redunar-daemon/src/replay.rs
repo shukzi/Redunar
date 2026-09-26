@@ -155,11 +155,21 @@ impl ReplayBudget {
     #[must_use]
     pub fn from_settings(settings: ReplaySettings) -> Self {
         let seconds = u64::from(settings.duration.seconds());
-        let frames_per_second = u64::from(settings.frame_rate.frames_per_second());
+        // Variable mode can accept up to 240 game presents per second. Keep
+        // packet and byte limits bounded while retaining the requested span.
+        let rate_multiplier =
+            if matches!(settings.frame_rate, redunar_core::ReplayFrameRate::Variable) {
+                2
+            } else {
+                1
+            };
+        let frames_per_second =
+            u64::from(settings.frame_rate.frames_per_second()).saturating_mul(rate_multiplier);
         let bitrate = settings.quality.target_megabits_per_second();
         let video_bytes = seconds
             .saturating_mul(u64::from(bitrate))
-            .saturating_mul(BYTES_PER_MEGABIT);
+            .saturating_mul(BYTES_PER_MEGABIT)
+            .saturating_mul(rate_multiplier);
         let maximum_ring_bytes = video_bytes
             .saturating_mul(100 + CONTAINER_HEADROOM_PERCENT)
             .div_ceil(100);

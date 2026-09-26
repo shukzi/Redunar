@@ -761,6 +761,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
         120 => b"120 FPS".as_slice(),
+        240 => b"VARIABLE".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
     let quality = match menu.quality {

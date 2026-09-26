@@ -8,6 +8,7 @@ fn main() {
         width: 2_560,
         height: 1_440,
         frames_per_second: 60,
+        variable_rate: false,
         target_megabits_per_second: 24,
     };
     match VulkanVideoH264Device::open(request)

@@ -2,7 +2,7 @@ use crate::{
     EncodedReplayPacket, ReplayBudget, ReplayClipStore, ReplayOutputFormat, ReplayRing,
     ReplayVideoStream, StoredReplayClip,
 };
-use redunar_core::{ReplayDuration, ReplayQuality, ReplaySettings};
+use redunar_core::{ReplayDuration, ReplayFrameRate, ReplayQuality, ReplaySettings};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -187,11 +187,17 @@ struct SpoolLimits {
 }
 
 impl SpoolLimits {
-    fn new(duration: ReplayDuration, quality: ReplayQuality) -> Self {
+    fn new(duration: ReplayDuration, quality: ReplayQuality, frame_rate: ReplayFrameRate) -> Self {
         let seconds = u64::from(duration.seconds());
+        let rate_multiplier = if frame_rate == ReplayFrameRate::Variable {
+            2
+        } else {
+            1
+        };
         let video_bytes = seconds
             .saturating_mul(u64::from(quality.target_megabits_per_second()))
-            .saturating_mul(BYTES_PER_MEGABIT);
+            .saturating_mul(BYTES_PER_MEGABIT)
+            .saturating_mul(rate_multiplier);
         Self {
             duration_ns: seconds.saturating_mul(NANOSECONDS_PER_SECOND),
             bytes: video_bytes.saturating_mul(110).div_ceil(100),
@@ -251,7 +257,7 @@ impl ReplaySegmentSpool {
             return Err(ReplaySpoolError::new("Replay spool path must be absolute"));
         }
         initialize_spool(&directory)?;
-        let limits = SpoolLimits::new(RETAINED_DURATION, settings.quality);
+        let limits = SpoolLimits::new(RETAINED_DURATION, settings.quality, settings.frame_rate);
         let mut index = recover_index(&directory)?;
         enforce_limits(&directory, &mut index, limits)?;
         let index = Arc::new(Mutex::new(index));
@@ -1245,7 +1251,12 @@ mod tests {
         assert!(stats.active_segments <= u32::try_from(MAX_SEGMENTS).unwrap_or(u32::MAX));
         assert!(
             stats.active_bytes
-                <= SpoolLimits::new(RETAINED_DURATION, ReplayQuality::Efficient).bytes
+                <= SpoolLimits::new(
+                    RETAINED_DURATION,
+                    ReplayQuality::Efficient,
+                    ReplayFrameRate::Fps60
+                )
+                .bytes
         );
         assert_eq!(stats.buffered_duration_ns, 40 * NANOSECONDS_PER_SECOND);
         assert_eq!(COMMAND_CAPACITY, 4);
@@ -1255,9 +1266,21 @@ mod tests {
 
     #[test]
     fn fifteen_minute_spool_budget_is_disk_bounded_without_growing_the_queue() {
-        let efficient = SpoolLimits::new(ReplayDuration::Seconds900, ReplayQuality::Efficient);
-        let balanced = SpoolLimits::new(ReplayDuration::Seconds900, ReplayQuality::Balanced);
-        let high = SpoolLimits::new(ReplayDuration::Seconds900, ReplayQuality::High);
+        let efficient = SpoolLimits::new(
+            ReplayDuration::Seconds900,
+            ReplayQuality::Efficient,
+            ReplayFrameRate::Fps60,
+        );
+        let balanced = SpoolLimits::new(
+            ReplayDuration::Seconds900,
+            ReplayQuality::Balanced,
+            ReplayFrameRate::Fps60,
+        );
+        let high = SpoolLimits::new(
+            ReplayDuration::Seconds900,
+            ReplayQuality::High,
+            ReplayFrameRate::Fps60,
+        );
         assert_eq!(efficient.bytes, 1_485_000_000);
         assert_eq!(balanced.bytes, 2_970_000_000);
         assert_eq!(high.bytes, 4_950_000_000);

@@ -1,8 +1,96 @@
 # Verification guide
 
-Current Tauri and shared-backend checks, reviewed September 24, 2026. Run commands
+Current Tauri and shared-backend checks, reviewed September 26, 2026. Run commands
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
+
+## September 26, 2026 production Variable FPS integration
+
+The v0.1.8 candidate based on `eff0f9c` plus the production Variable FPS
+integration passed offline root and separate Tauri `cargo check --all-targets`,
+the frontend production build and JavaScript syntax check, and the offline
+Debian 12 release build. Local Debian, Arch, openSUSE, Fedora, and portable
+packages were rebuilt from that source. The release build report records a
+glibc 2.36 ceiling. This is source and package validation, not an installed
+upgrade or another distribution's runtime test.
+Separate Tauri strict Clippy passed. Root strict Clippy passed with only
+`clippy::ptr_eq` allowed for two unchanged OpenGL interposer comparisons;
+without that allowance it stops on those two existing lines.
+
+On AMD/RADV in the local Wayland session, the production Vulkan probe with
+Variable FPS saved a 640×360 MKV through the real Replay menu. The saved video
+had 339 packets averaging 167.5 FPS, mostly 5–6 ms apart; the fixture reported
+about 170 game FPS. The same production probe with a GLX game through Xwayland
+saved 238 packets averaging 116.7 FPS, mostly 8–9 ms apart; the fixture
+reported about 118 game FPS. Both reported active metrics overlay, buffering,
+and completed save. These observations validate accepted game presents and
+their encoded timestamps on this host; they do not prove every present is
+captured or that playback tracks compositor scanout exactly.
+
+The isolated fixed-rate Vulkan Tauri session acceptance passed outside the
+sandbox. Its first sandbox run stopped at the hardware validation gate before
+capture. The Xvfb OpenGL Variable FPS attempt exposed no Replay candidate;
+the real Xwayland GLX run above supplied the X11-client evidence instead.
+The WebKit workspace fixture reached the Global settings page and produced a
+screenshot but stopped on its existing Glacier overlay-accent assertion before
+the Replay controls. The changed recording selector therefore has a successful
+production build but no completed fixture visual assertion. Native Xorg,
+NVIDIA hardware, installed upgrades, and other-distro runtime behavior remain
+unverified.
+
+## September 26, 2026 initial v0.1.8 candidate
+
+The initial v0.1.8 source at `eff0f9c` passed the release-input check, offline
+root and Tauri Cargo checks, formatting, diff whitespace, AppStream and desktop
+metadata validation, and the locked license-inventory check. The production
+frontend and native binaries built in the offline Debian 12 image; all six
+native components reference at most glibc 2.34, below the 2.36 release ceiling.
+Local Fedora, Debian, Arch, openSUSE, and portable packages built from that
+payload. The release workflow remains responsible for production signing and
+uploading. No automated tests, NVIDIA hardware run, installed upgrade, or
+other-distribution runtime run was performed for this preparation.
+
+## September 26, 2026 NVIDIA beta diagnostic review
+
+On source based on v0.1.7, the NVIDIA beta encoder path gained opt-in,
+rate-limited stage/reason diagnostics and NVIDIA-only device selection; the
+AMD/RADV zero-level workaround was restricted to AMD. Replay audio operational
+messages no longer include output-device names or sound-server error text.
+Failed producer-release acknowledgements are retained and retried on later
+pump turns. Offline root
+`cargo check --offline -p redunar-daemon -p redunar-capture-vulkan`, separate
+Tauri `cargo check --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml`,
+strict root and Tauri Clippy, workspace formatting checks, and `git diff --check`
+passed. No NVIDIA
+hardware, game run, automated tests, or package build was used for this review.
+
+## September 25, 2026 isolated variable-frame-rate media probe
+
+On source `1ae716e` plus the uncommitted
+[`tools/probe-vfr-replay.py`](tools/probe-vfr-replay.py), Fedora 44's FFmpeg
+8.1.2 generated a three-second H.264 clip from synthetic 156, 120, and 136
+FPS inputs without resampling. MP4 and remuxed MKV each decoded 412 frames:
+156/120/136 in successive one-second sections. MP4 median frame intervals
+were 6.410/8.333/7.353 ms, with no section exceeding 0.001 ms error from
+its requested interval. MKV's one-millisecond timestamp scale produced up to
+0.667 ms interval error. A copy-only MP4 preparation matching the Tauri
+player's video path retained all 412 frames and the MKV timestamps. A
+fixed-60-FPS comparison contained 180 frames.
+
+Reproduce without starting Redunar or accessing game hardware:
+
+```sh
+python3 tools/probe-vfr-replay.py /tmp/redunar-vfr-156-120-136.mp4
+```
+
+This proves that the local media tools can produce and decode a VFR clip at
+these rates. It does not exercise Redunar's recorder, hardware encoder,
+presentation feedback, display refresh, audio sync, visual playback, WebKit
+playback, or sustained game performance. A headless `ffplay` attempt timed out
+after a PulseAudio wake error in this sandbox; decoded-frame counts and
+timestamps are the media evidence here. Production capture and stream
+validation accepted only 30/60/120 FPS at the time of this isolated media
+probe. It was not evidence that the production recorder could capture 156 FPS.
 
 ## September 25, 2026 v0.1.7 release preparation
 

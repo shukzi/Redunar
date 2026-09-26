@@ -106,6 +106,8 @@ fn global_profile_from_input(
         30 => ReplayFrameRate::Fps30,
         60 => ReplayFrameRate::Fps60,
         120 => ReplayFrameRate::Fps120,
+        // UI transport value; the encoder ceiling depends on dimensions.
+        240 => ReplayFrameRate::Variable,
         value => return Err(format!("Unsupported replay frame rate: {value}")),
     };
     let quality = match input.quality.as_str() {
@@ -222,7 +224,7 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
             .collect(),
             capture_metrics: profile.capture_metrics,
             replay_enabled: true,
-            fps: profile.replay.frame_rate.frames_per_second(),
+            fps: replay_frame_rate_input(profile.replay.frame_rate),
             quality: match profile.replay.quality {
                 Q::Efficient => "Efficient",
                 Q::Balanced => "Balanced",
@@ -317,6 +319,14 @@ pub fn save_shortcuts(
         .set_replay_hotkeys(overlay, bindings)
         .map_err(|e| e.to_string())?;
     workspace(&service)
+}
+
+// Keep the UI transport distinct from the nominal encoder frame rate.
+const fn replay_frame_rate_input(rate: redunar_core::ReplayFrameRate) -> u16 {
+    match rate {
+        redunar_core::ReplayFrameRate::Variable => 240,
+        fixed => fixed.frames_per_second(),
+    }
 }
 
 #[cfg(test)]

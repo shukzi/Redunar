@@ -395,6 +395,7 @@ impl SteamCaptureEnvironment {
                 ReplayFrameRate::Fps30 => "30",
                 ReplayFrameRate::Fps60 => "60",
                 ReplayFrameRate::Fps120 => "120",
+                ReplayFrameRate::Variable => "variable",
             }),
         );
         Ok(updates)
@@ -927,6 +928,7 @@ fn encode_granted(environment: &SteamCaptureEnvironment) -> Result<Vec<u8>, Stea
         ReplayFrameRate::Fps30 => 30,
         ReplayFrameRate::Fps60 => 60,
         ReplayFrameRate::Fps120 => 120,
+        ReplayFrameRate::Variable => 240,
     });
     bytes.push(u8::from(environment.replay.is_requested()));
     if bytes.len() > MAX_RESPONSE_BYTES {
@@ -982,6 +984,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
         30 => ReplayFrameRate::Fps30,
         60 => ReplayFrameRate::Fps60,
         120 => ReplayFrameRate::Fps120,
+        240 => ReplayFrameRate::Variable,
         _ => return Err(SteamActivationError::new("invalid replay frame rate")),
     };
     let replay_requested = take_bool(bytes, &mut cursor)?;

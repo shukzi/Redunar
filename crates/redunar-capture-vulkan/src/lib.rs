@@ -641,6 +641,8 @@ unsafe extern "system" fn queue_present(
     let Some(next) = dispatch.queue_present else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    // Reuse acknowledged exports before selecting a buffer for this present.
+    producer::poll_replay_releases();
     // Optional submissions form one binary-semaphore chain. Replay must never
     // consume the application's waits independently after the overlay has
     // already consumed them.

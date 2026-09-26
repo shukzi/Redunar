@@ -28,6 +28,7 @@ mod replay_h264;
 mod replay_matroska;
 mod replay_menu;
 mod replay_mp4;
+mod replay_nvidia_diagnostics;
 mod replay_pipeline;
 mod replay_preferences;
 mod replay_ring;
@@ -1414,41 +1415,62 @@ fn vulkan_replay_backend_with_nvidia_beta(
     settings: redunar_core::ReplaySettings,
     allow_nvidia_beta: bool,
 ) -> Result<Box<dyn HardwareEncoderBackend>, String> {
+    use replay_nvidia_diagnostics::{Stage, startup_result};
     const DRM_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
     const DRM_FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
     const DRM_FORMAT_XBGR8888: u32 = u32::from_le_bytes(*b"XB24");
     const DRM_FORMAT_ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
+    let variable_rate = settings.frame_rate == redunar_core::ReplayFrameRate::Variable;
     let request = redunar_capture_vulkan::replay_video::VulkanVideoH264Request {
         width: frame.width,
         height: frame.height,
-        frames_per_second: u8::try_from(settings.frame_rate.frames_per_second())
-            .map_err(|_| "Replay frame rate exceeds the Vulkan backend bound".to_owned())?,
+        frames_per_second: if variable_rate {
+            redunar_capture_vulkan::replay_video::maximum_variable_frame_rate(
+                frame.width,
+                frame.height,
+            )
+        } else {
+            u8::try_from(settings.frame_rate.frames_per_second())
+                .map_err(|_| "Replay frame rate exceeds the Vulkan backend bound".to_owned())?
+        },
+        variable_rate,
         target_megabits_per_second: settings.quality.target_megabits_per_second(),
     };
-    let encoder =
+    let device = startup_result(
+        allow_nvidia_beta,
+        Stage::Device,
         redunar_capture_vulkan::replay_video::VulkanVideoH264Device::open_with_nvidia_beta(
             request,
             allow_nvidia_beta,
-        )
-        .and_then(redunar_capture_vulkan::replay_video::VulkanVideoH264Device::create_session)
-        .and_then(redunar_capture_vulkan::replay_video::VulkanVideoH264Session::create_parameters)
-        .and_then(|parameters| {
-            if matches!(
-                frame.drm_fourcc,
-                DRM_FORMAT_XRGB8888
-                    | DRM_FORMAT_ARGB8888
-                    | DRM_FORMAT_XBGR8888
-                    | DRM_FORMAT_ABGR8888
-            ) {
-                parameters.create_production_kms_encoder()
-            } else {
-                parameters.create_production_encoder()
-            }
-        })
-        .map_err(|error| error.to_string())?;
+        ),
+    )?;
+    let session = startup_result(allow_nvidia_beta, Stage::Session, device.create_session())?;
+    let parameters = startup_result(
+        allow_nvidia_beta,
+        Stage::Parameters,
+        session.create_parameters(),
+    )?;
+    let encoder = startup_result(
+        allow_nvidia_beta,
+        Stage::Encoder,
+        if matches!(
+            frame.drm_fourcc,
+            DRM_FORMAT_XRGB8888 | DRM_FORMAT_ARGB8888 | DRM_FORMAT_XBGR8888 | DRM_FORMAT_ABGR8888
+        ) {
+            parameters.create_production_kms_encoder()
+        } else {
+            parameters.create_production_encoder()
+        },
+    )?;
     VulkanVideoH264Backend::new(encoder)
         .map(|backend| Box::new(backend) as Box<dyn HardwareEncoderBackend>)
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            if !allow_nvidia_beta {
+                return error.to_string();
+            }
+            replay_nvidia_diagnostics::backend_failed(allow_nvidia_beta);
+            "Replay hardware encoder startup failed".to_owned()
+        })
 }
 
 fn default_state_directory() -> PathBuf {

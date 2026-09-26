@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.8" date="2026-09-26">
+      <description>
+        <p>Adds Variable FPS recording for accepted game presents alongside fixed 60 FPS; improves NVIDIA Replay beta diagnostics and frame release recovery.</p>
+      </description>
+    </release>
     <release version="0.1.7" date="2026-09-25">
       <description>
         <p>Installs signed updates directly after a polkit authorization prompt, with retryable cancellation and installed-package confirmation.</p>

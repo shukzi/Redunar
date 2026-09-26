@@ -6,7 +6,7 @@ use crate::{
     ReplaySegmentSpool, ReplaySpoolError, ReplaySpoolPhase, ReplaySpoolStats,
     ReplaySpoolSubmitError, ReplayStoreError, ReplayVideoStream, StoredReplayClip,
 };
-use redunar_core::{ReplayDuration, ReplaySettings};
+use redunar_core::{ReplayDuration, ReplayFrameRate, ReplaySettings};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -578,7 +578,16 @@ impl Drop for ReplayHardwarePipeline {
 }
 
 fn stream_matches_settings(stream: &ReplayVideoStream, settings: ReplaySettings) -> bool {
-    u16::from(stream.frames_per_second()) == settings.frame_rate.frames_per_second()
+    if settings.frame_rate == ReplayFrameRate::Variable {
+        stream.codec() == crate::ReplayVideoCodec::H264
+            && stream.frames_per_second()
+                == redunar_capture_vulkan::replay_video::maximum_variable_frame_rate(
+                    stream.width(),
+                    stream.height(),
+                )
+    } else {
+        u16::from(stream.frames_per_second()) == settings.frame_rate.frames_per_second()
+    }
 }
 
 fn in_memory_settings(mut settings: ReplaySettings) -> ReplaySettings {

@@ -1153,6 +1153,7 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
         120 => b"120 FPS".as_slice(),
+        240 => b"VARIABLE".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
     push_ui_text_centered(&mut plan.text_glyphs, capture, 0, 173, 30, 2);

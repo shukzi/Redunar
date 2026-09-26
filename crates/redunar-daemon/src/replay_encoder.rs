@@ -82,7 +82,11 @@ impl ReplayVideoStream {
         if width == 0 || height == 0 || width > 3_840 || height > 2_160 {
             return Err(ReplayEncoderError::InvalidStream);
         }
-        if !matches!(frames_per_second, 30 | 60 | 120) {
+        // VFR H.264 initializes at a bounded ceiling; packets retain their
+        // individual presentation timestamps.
+        if !(matches!(frames_per_second, 30 | 60 | 120)
+            || codec == ReplayVideoCodec::H264 && (121..=240).contains(&frames_per_second))
+        {
             return Err(ReplayEncoderError::InvalidStream);
         }
         if codec_private.len() > MAX_CODEC_PRIVATE_BYTES {

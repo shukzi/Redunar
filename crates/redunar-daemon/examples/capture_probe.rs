@@ -679,11 +679,20 @@ fn validation_backend(
     settings: ReplaySettings,
     frame: &DmaBufReplayFrame,
 ) -> Result<VulkanVideoH264Backend, Box<dyn Error>> {
+    let variable_rate = settings.frame_rate == ReplayFrameRate::Variable;
     let request = VulkanVideoH264Request {
         width: frame.width,
         height: frame.height,
-        frames_per_second: u8::try_from(settings.frame_rate.frames_per_second())
-            .expect("Replay frame rates are bounded to 30 or 60"),
+        frames_per_second: if variable_rate {
+            redunar_capture_vulkan::replay_video::maximum_variable_frame_rate(
+                frame.width,
+                frame.height,
+            )
+        } else {
+            u8::try_from(settings.frame_rate.frames_per_second())
+                .expect("fixed Replay frame rates are bounded")
+        },
+        variable_rate,
         target_megabits_per_second: settings.quality.target_megabits_per_second(),
     };
     let encoder = VulkanVideoH264Device::open(request)?
@@ -822,9 +831,10 @@ fn replay_probe_frame_rate() -> Result<ReplayFrameRate, Box<dyn Error>> {
         None | Some("60") => Ok(ReplayFrameRate::Fps60),
         Some("30") => Ok(ReplayFrameRate::Fps30),
         Some("120") => Ok(ReplayFrameRate::Fps120),
+        Some("variable") => Ok(ReplayFrameRate::Variable),
         Some(_) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "REDUNAR_CAPTURE_PROBE_REPLAY_FPS must be 30, 60, or 120",
+            "REDUNAR_CAPTURE_PROBE_REPLAY_FPS must be 30, 60, 120, or variable",
         )
         .into()),
     }

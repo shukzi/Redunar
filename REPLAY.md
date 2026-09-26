@@ -1,6 +1,6 @@
 # Instant Replay contract
 
-Current Tauri behavior, reviewed September 22, 2026. Recording and saving remain
+Current Tauri behavior, reviewed September 26, 2026. Recording and saving remain
 local. This guide owns replay behavior; [DESIGN.md](DESIGN.md) owns presentation
 and [PERFORMANCE.md](PERFORMANCE.md) owns resource budgets.
 
@@ -16,14 +16,24 @@ showing/hiding metrics during that game.
 Hiding metrics does not dismantle capture or disable future visibility changes.
 This does not allow attaching a runtime to an unrelated running game.
 
-Recording frame rate and quality are configured before launch and locked until
-the owned game closes. The output container remains selectable between MKV and
+Recording mode and quality are configured before launch and locked until the
+owned game closes. **60 FPS** keeps fixed-cadence capture; **Variable FPS**
+timestamps accepted game presents. Existing 30/120 FPS profiles remain readable,
+with fixed 120 retaining its previous 1080p surface limit. Variable FPS is
+bounded by the encoder's macroblock throughput: at most 240 captures/second
+at 1080p and 144 at 2560×1440. GPU backpressure may drop frames. The source is
+the launched game's Vulkan or supported desktop OpenGL presentation hook, not
+the whole desktop or compositor scanout, and no picker appears. The same
+Efficient, Balanced, and High quality presets apply to either mode before launch.
+The output container remains selectable between MKV and
 MP4 from Global settings or the in-game Replay menu; changes apply to future
 saves without rebuilding the active buffer. The default is 60 FPS / Balanced.
 Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes. The spool retains the
 bounded 15-minute horizon; choosing a shorter manual save length selects a suffix,
 not a smaller rolling horizon. Fixed 120 FPS is gated by display/game-surface
-limits of 1080p or lower and actual encoder capability.
+limits of 1080p or lower and actual encoder capability. Variable mode retains
+bounded extra producer buffers and ring/spool space so faster bursts do not
+shorten the requested history solely through the packet count cap.
 
 Global settings also owns replay folder, initial save duration, menu dismissal,
 and shortcuts. Changing the folder parent keeps existing files in their old
@@ -98,7 +108,17 @@ With Beta access enabled at startup, a single-render-node NVIDIA system may
 attempt the same Vulkan Video H.264 path. The driver must expose the required
 Vulkan Video encode, external-memory import, and queue capabilities. Multi-GPU
 NVIDIA systems are withheld until Redunar can match the game's render GPU to the
-encoder. This is an unverified beta path, not an NVIDIA recording guarantee.
+encoder. An eligible NVIDIA attempt selects only a NVIDIA Vulkan device; the
+ordinary AMD route remains separate. This is an unverified beta path, not an
+NVIDIA recording guarantee.
+When Debug log was enabled before launch, NVIDIA encoder-start failures add
+bounded `NVIDIA Replay` lines with an allowlisted stage and reason code and,
+where available, a numeric Vulkan result. These lines omit game names, paths,
+device names, PCI addresses, UUIDs, and process IDs. The general logger still
+prefixes each line with an absolute timestamp, and other lines may contain
+session details. Ask testers to share only the relevant `NVIDIA Replay` lines
+and remove their timestamp prefix if they prefer. Logs stay local until the
+owner explicitly shares them.
 
 Backpressure drops replay work rather than waiting for an encoder on the game's
 presentation path. Resize starts a fresh codec epoch: completed old-generation
@@ -108,6 +128,9 @@ Context destruction closes producer ownership while transferred DMA-BUF
 duplicates remain valid in the daemon. Audio or recorder
 failure must not stall the game. Recording has no software-video fallback;
 FFmpeg's role in playback/export below is separate from live capture.
+Failed producer-release acknowledgements are retained for retry on later pump
+turns, including turns with no new frame. Audio operational messages report
+only the allowlisted backend and transition, without output-device names.
 If the daemon exits, the game continues presenting; telemetry batches reset
 after failed sends and exported OpenGL slots remain bounded while release
 messages are unavailable. A restarted daemon starts a new capture session,

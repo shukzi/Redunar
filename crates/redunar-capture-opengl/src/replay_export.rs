@@ -35,6 +35,8 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 const PRODUCTION_ENV: &str = "REDUNAR_REPLAY_PRODUCTION";
 const TRANSFER_ENV: &str = "REDUNAR_REPLAY_TRANSFER";
 const FAILURE_ENV: &str = "REDUNAR_REPLAY_GL_FAIL";
+static VARIABLE_FRAME_RATE: LazyLock<bool> =
+    LazyLock::new(|| variable_frame_rate(env::var(FRAME_RATE_ENV).ok().as_deref()));
 /// Release-gated slots cover the encoder pipeline depth plus two handoffs.
 /// Direct GLX needs one frame while the daemon returns encoder completion;
 /// SDL's swap dispatch adds one more presentation before that token can be
@@ -46,6 +48,7 @@ const MAX_POOLS: usize = 4;
 const MIN_WIDTH: u32 = 320;
 const MIN_HEIGHT: u32 = 180;
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const MAX_ENCODE_MACROBLOCKS_PER_SECOND: u32 = 2_073_600;
 const DRM_FORMAT_RA24: u32 = 0x3432_4152;
 const LINEAR_MODIFIER: u64 = 0;
 const CLOCK_MONOTONIC: c_int = 1;
@@ -469,13 +472,59 @@ fn failure_injected(stage: &str) -> bool {
 fn target_frames_per_second(raw: Option<&str>) -> u8 {
     match raw {
         Some("30") => 30,
-        Some("120") => 120,
+        Some("120" | "variable") => 120,
         _ => 60,
     }
 }
 
+// The launch token selects VFR; 120 remains a fixed-rate protocol value.
+fn variable_frame_rate(raw: Option<&str>) -> bool {
+    raw == Some("variable")
+}
+
 fn frame_interval_ns(source: ReplaySourceCandidate) -> u64 {
     NANOSECONDS_PER_SECOND / u64::from(source.target_frames_per_second)
+}
+
+// Bounded capture ceiling; packet timestamps follow accepted presents.
+const VFR_MIN_INTERVAL_NS: u64 = NANOSECONDS_PER_SECOND.div_ceil(240);
+
+fn variable_frame_interval_ns(source: ReplaySourceCandidate) -> u64 {
+    let macroblocks = u64::from(source.width.div_ceil(16)) * u64::from(source.height.div_ceil(16));
+    // Round up so the sustained rate cannot exceed the encoder's existing
+    // throughput bound, including partially filled edge macroblocks.
+    (macroblocks * NANOSECONDS_PER_SECOND)
+        .div_ceil(u64::from(MAX_ENCODE_MACROBLOCKS_PER_SECOND))
+        .max(VFR_MIN_INTERVAL_NS)
+}
+
+fn capture_due(
+    variable: bool,
+    source: ReplaySourceCandidate,
+    deadline_ns: u64,
+    now_ns: u64,
+) -> bool {
+    if variable {
+        now_ns.saturating_add(variable_frame_interval_ns(source)) >= deadline_ns
+    } else {
+        now_ns >= deadline_ns
+    }
+}
+
+fn advance_capture_deadline(
+    variable: bool,
+    deadline_ns: u64,
+    now_ns: u64,
+    interval_ns: u64,
+) -> u64 {
+    if variable {
+        // Match Vulkan's two-frame allowance. Idle time restores
+        // only one frame of credit; every attempt (even a busy-slot drop)
+        // charges the budget, so sustained capture stays bounded.
+        deadline_ns.max(now_ns).saturating_add(interval_ns)
+    } else {
+        next_capture_deadline(deadline_ns, now_ns, interval_ns)
+    }
 }
 
 /// Fixed-rate capture deadline. A cold or fallen-behind schedule restarts
@@ -505,6 +554,22 @@ fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64) -> u64 
     }
 }
 
+fn capture_timing(
+    variable: bool,
+    source: ReplaySourceCandidate,
+    deadline_ns: u64,
+    now_ns: u64,
+) -> (u64, u64) {
+    if variable {
+        (now_ns, variable_frame_interval_ns(source))
+    } else {
+        (
+            capture_presentation_timestamp(deadline_ns, now_ns),
+            frame_interval_ns(source),
+        )
+    }
+}
+
 /// Keep exported presentation times strictly increasing. The replay
 /// pipeline treats a non-monotonic timestamp as a terminal codec-epoch
 /// violation, so a stale candidate stamp is bumped past the previous one.
@@ -524,10 +589,10 @@ fn exportable_stride(stride: u32) -> bool {
 }
 
 /// Pure source selection so the bounds rules are testable without a GL
-/// context. 120 FPS is only accepted within the 1080p class in either
-/// orientation; anything else outside 320x180..3840x2160 is rejected.
+/// context. Match the encoder request's macroblock throughput bound.
 fn source_for(
     target_fps: u8,
+    variable_rate: bool,
     width: u32,
     height: u32,
 ) -> Result<ReplaySourceCandidate, ReplaySourceRejection> {
@@ -538,7 +603,18 @@ fn source_for(
     {
         return Err(ReplaySourceRejection::DimensionsUnsupported);
     }
-    if target_fps == 120 && width.saturating_mul(height) > 1_920_u32 * 1_080 {
+    if target_fps == 120
+        && !variable_rate
+        && !((width <= 1_920 && height <= 1_080) || (width <= 1_080 && height <= 1_920))
+    {
+        return Err(ReplaySourceRejection::DimensionsUnsupported);
+    }
+    if width
+        .div_ceil(16)
+        .saturating_mul(height.div_ceil(16))
+        .saturating_mul(u32::from(target_fps))
+        > MAX_ENCODE_MACROBLOCKS_PER_SECOND
+    {
         return Err(ReplaySourceRejection::DimensionsUnsupported);
     }
     Ok(ReplaySourceCandidate {
@@ -1073,6 +1149,7 @@ pub(crate) unsafe fn capture(context: usize, api: ApiFlavor) {
     let Some(now_ns) = monotonic_now() else {
         return;
     };
+    let variable = *VARIABLE_FRAME_RATE;
     let source = match viewport_source(&functions) {
         Ok(source) => source,
         Err(reason) => {
@@ -1113,24 +1190,26 @@ pub(crate) unsafe fn capture(context: usize, api: ApiFlavor) {
     // Sequential field updates keep the borrow checker happy: the long
     // mutable borrow of the pool starts only once every process-wide
     // timestamp update is finished.
-    if now_ns < state.pools[pool_index].next_capture_ns {
+    if !capture_due(
+        variable,
+        source,
+        state.pools[pool_index].next_capture_ns,
+        now_ns,
+    ) {
         return;
     }
-    let interval_ns = frame_interval_ns(source);
+    let deadline = state.pools[pool_index].next_capture_ns;
+    let (presentation_ns, interval_ns) = capture_timing(variable, source, deadline, now_ns);
+    state.pools[pool_index].next_capture_ns =
+        advance_capture_deadline(variable, deadline, now_ns, interval_ns);
     let Some(slot_index) = state.pools[pool_index]
         .slots
         .iter()
         .position(Slot::is_available)
     else {
         state.pools[pool_index].drops += 1;
-        let deadline = state.pools[pool_index].next_capture_ns;
-        state.pools[pool_index].next_capture_ns =
-            next_capture_deadline(deadline, now_ns, interval_ns);
         return;
     };
-    let deadline = state.pools[pool_index].next_capture_ns;
-    let presentation_ns = capture_presentation_timestamp(deadline, now_ns);
-    state.pools[pool_index].next_capture_ns = next_capture_deadline(deadline, now_ns, interval_ns);
     let timestamp_ns = monotonic_export_timestamp(state.last_export_timestamp_ns, presentation_ns);
     state.last_export_timestamp_ns = state.last_export_timestamp_ns.max(timestamp_ns);
     let pool = &mut state.pools[pool_index];
@@ -1154,6 +1233,7 @@ fn viewport_source(
     let height = u32::try_from(viewport[3]).unwrap_or(0);
     source_for(
         target_frames_per_second(env::var(FRAME_RATE_ENV).ok().as_deref()),
+        *VARIABLE_FRAME_RATE,
         width,
         height,
     )
@@ -1425,26 +1505,35 @@ mod tests {
 
     #[test]
     fn source_bounds_reject_undersized_oversized_and_4k120() {
-        assert_eq!(source_for(60, 320, 180), Ok(source_at(60, 320, 180)));
+        assert_eq!(source_for(60, false, 320, 180), Ok(source_at(60, 320, 180)));
         assert_eq!(
-            source_for(60, 319, 180),
+            source_for(60, false, 319, 180),
             Err(ReplaySourceRejection::DimensionsUnsupported)
         );
         assert_eq!(
-            source_for(60, 320, 179),
+            source_for(60, false, 320, 179),
             Err(ReplaySourceRejection::DimensionsUnsupported)
         );
         assert_eq!(
-            source_for(60, MAX_REPLAY_SOURCE_WIDTH + 1, 180),
+            source_for(60, false, MAX_REPLAY_SOURCE_WIDTH + 1, 180),
             Err(ReplaySourceRejection::DimensionsUnsupported)
         );
-        assert_eq!(source_for(120, 1920, 1080), Ok(source_at(120, 1920, 1080)));
-        assert_eq!(source_for(120, 1080, 1920), Ok(source_at(120, 1080, 1920)));
         assert_eq!(
-            source_for(120, 3840, 2160),
+            source_for(120, false, 1920, 1080),
+            Ok(source_at(120, 1920, 1080))
+        );
+        assert_eq!(
+            source_for(120, false, 1080, 1920),
+            Ok(source_at(120, 1080, 1920))
+        );
+        assert_eq!(
+            source_for(120, false, 3840, 2160),
             Err(ReplaySourceRejection::DimensionsUnsupported)
         );
-        assert_eq!(source_for(30, 3840, 2160), Ok(source_at(30, 3840, 2160)));
+        assert_eq!(
+            source_for(30, false, 3840, 2160),
+            Ok(source_at(30, 3840, 2160))
+        );
     }
 
     #[test]

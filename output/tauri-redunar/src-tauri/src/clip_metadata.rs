@@ -2,7 +2,8 @@
 //! No frame decoding, network access or game-name inference is involved.
 use serde::Serialize;
 use std::{
-    io::Read,
+    fs::File,
+    io::{Read, Seek, SeekFrom},
     process::Stdio,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -43,27 +44,53 @@ pub async fn clip_metadata(file_name: String) -> Result<ClipMetadata, String> {
 
 fn inspect(file_name: &str) -> Result<ClipMetadata, String> {
     let opened = crate::media::open_inventory_clip(file_name)?;
+    let count_file = opened
+        .file
+        .try_clone()
+        .map_err(|_| "Clip details are unavailable")?;
+    let bytes = probe(opened.file, false)?;
+    let mut metadata = parse(&bytes)?;
+    // Packet counting scans the clip. Keep the UI responsive for long saves;
+    // absent is more honest than FFprobe's nominal H.264 frame rate for VFR.
+    if metadata
+        .duration_seconds
+        .is_some_and(|seconds| seconds <= 120.0)
+    {
+        if let Ok(bytes) = probe(count_file, true) {
+            metadata.fps = recorded_fps(&bytes, metadata.duration_seconds);
+        }
+    }
+    Ok(metadata)
+}
+
+fn probe(mut file: File, count_packets: bool) -> Result<Vec<u8>, String> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| "Clip details are unavailable")?;
     // The descriptor remains pinned to the validated inode. The proc path
     // permits seeking for MP4 files whose metadata follows the media data.
-    let mut child = crate::media_tools::ffprobe()?
-        .args([
-            "-v",
-            "error",
-            "-protocol_whitelist",
-            "file,pipe",
-            "-probesize",
-            "2097152",
-            "-analyzeduration",
-            "1000000",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "format=duration:stream=width,height,avg_frame_rate",
-            "-of",
-            "json",
-            "/proc/self/fd/0",
-        ])
-        .stdin(Stdio::from(opened.file))
+    let mut command = crate::media_tools::ffprobe()?;
+    if count_packets {
+        command.arg("-count_packets");
+    }
+    command.args([
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-probesize",
+        "2097152",
+        "-analyzeduration",
+        "1000000",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "format=duration:stream=width,height,nb_read_packets",
+        "-of",
+        "json",
+        "/proc/self/fd/0",
+    ]);
+    let mut child = command
+        .stdin(Stdio::from(file))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -97,7 +124,7 @@ fn inspect(file_name: &str) -> Result<ClipMetadata, String> {
     if !outcome?.success() || bytes.len() as u64 > OUTPUT_LIMIT {
         return Err("Clip details are unavailable".into());
     }
-    parse(&bytes)
+    Ok(bytes)
 }
 
 fn parse(bytes: &[u8]) -> Result<ClipMetadata, String> {
@@ -107,10 +134,6 @@ fn parse(bytes: &[u8]) -> Result<ClipMetadata, String> {
     let positive = |number: Option<f64>, max| {
         number.filter(|number| number.is_finite() && *number > 0.0 && *number <= max)
     };
-    let fps = stream["avg_frame_rate"].as_str().and_then(|rate| {
-        let (numerator, denominator) = rate.split_once('/')?;
-        Some(numerator.parse::<f64>().ok()? / denominator.parse::<f64>().ok()?)
-    });
     Ok(ClipMetadata {
         duration_seconds: positive(
             value["format"]["duration"]
@@ -122,20 +145,30 @@ fn parse(bytes: &[u8]) -> Result<ClipMetadata, String> {
         height: stream["height"]
             .as_u64()
             .filter(|v| (1..=16384).contains(v)),
-        fps: positive(fps, 1000.0),
+        fps: None,
     })
+}
+
+fn recorded_fps(bytes: &[u8], duration: Option<f64>) -> Option<f64> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let packets = value["streams"][0]["nb_read_packets"]
+        .as_str()?
+        .parse::<u64>()
+        .ok()?;
+    let rate = packets as f64 / duration?;
+    (rate.is_finite() && rate > 0.0 && rate <= 1000.0).then_some(rate)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn reads_real_container_values_and_fractional_frame_rates() {
+    fn reads_real_container_values_without_trusting_nominal_frame_rate() {
         let result = parse(br#"{"format":{"duration":"29.5"},"streams":[{"width":2560,"height":1440,"avg_frame_rate":"60000/1001"}]}"#).unwrap();
         assert_eq!(result.duration_seconds, Some(29.5));
         assert_eq!(result.width, Some(2560));
         assert_eq!(result.height, Some(1440));
-        assert!((result.fps.unwrap() - 59.94).abs() < 0.001);
+        assert_eq!(result.fps, None);
     }
     #[test]
     fn absent_or_invalid_values_remain_unavailable() {

@@ -186,6 +186,15 @@ provider. Native Steam activation carries both private capture libraries through
 the same bounded one-shot wrapper protocol; the OpenGL library is copied into
 the session directory already shared with the Steam Linux runtime. Flatpak
 Steam remains a separate unsupported sandbox boundary by owner decision.
+The launch profile sends either a fixed rate or a distinct `variable` token to
+the same private game capture path. Fixed capture retains deadline-based
+timestamps; Variable mode stamps accepted presents with their monotonic game
+presentation time and uses resolution-bounded admission. Vulkan and supported
+OpenGL exports feed the existing hardware H.264 encoder. The stream advertises
+a bounded rate ceiling while each encoded packet keeps its actual timestamp;
+the ring and spool retain a bounded larger budget for this mode. The in-game
+menu carries a distinct Variable value so an older fixed 120 FPS profile is
+never mislabeled. Neither path observes desktop scanout.
 The service validates observations and owns summaries. Completed sessions retain
 bounded frame data and timeline observations through `session_history.rs`.
 This is not an unlimited per-frame archive; older records may lack hardware data.

@@ -34,6 +34,7 @@ struct Producer {
     active_devices: u32,
     overlay_status: Option<OverlayRuntimeStatus>,
     reply_path: Option<std::path::PathBuf>,
+    pending_release: Option<u64>,
 }
 
 impl Default for Producer {
@@ -49,6 +50,7 @@ impl Default for Producer {
             active_devices: 0,
             overlay_status: None,
             reply_path: None,
+            pending_release: None,
         }
     }
 }
@@ -79,7 +81,6 @@ pub(crate) fn device_destroyed() {
 }
 
 pub(crate) fn record_present_at(now_ns: u64) {
-    poll_replay_releases();
     let previous_ns = LAST_PRESENT_NS.swap(now_ns, Ordering::Relaxed);
     if previous_ns == 0 || now_ns <= previous_ns {
         return;
@@ -92,10 +93,16 @@ pub(crate) fn record_present_at(now_ns: u64) {
     producer.push(sequence, interval_ns);
 }
 
-fn poll_replay_releases() {
-    let Ok(producer) = PRODUCER.try_lock() else {
+pub(crate) fn poll_replay_releases() {
+    let Ok(mut producer) = PRODUCER.try_lock() else {
         return;
     };
+    if let Some(sequence) = producer.pending_release {
+        if !crate::replay_copy::release_sequence(sequence) {
+            return;
+        }
+        producer.pending_release = None;
+    }
     let Some(socket) = producer.socket.as_ref() else {
         return;
     };
@@ -105,8 +112,10 @@ fn poll_replay_releases() {
             Ok(length) => {
                 if let Ok(CaptureMessage::ReplayFrameReleased { sequence, .. }) =
                     redunar_capture::decode_message(&bytes[..length])
+                    && !crate::replay_copy::release_sequence(sequence)
                 {
-                    crate::replay_copy::release_sequence(sequence);
+                    producer.pending_release = Some(sequence);
+                    break;
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -397,6 +406,7 @@ impl Producer {
         self.interval_count = 0;
         self.previous_sequence = None;
         self.overlay_status = None;
+        self.pending_release = None;
         OVERLAY_ACTIVE_REPORTED.store(false, Ordering::Relaxed);
         self.initialized = false;
     }
