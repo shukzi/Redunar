@@ -4,6 +4,18 @@ Current Tauri and shared-backend checks, reviewed September 26, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## September 26, 2026 v0.1.9 release preparation
+
+Source commit `897fdcd` plus the v0.1.9 version and package metadata changes
+passed the release-input check, root and separate Tauri offline Cargo checks,
+the frontend production build and JavaScript syntax check, AppStream and
+desktop metadata validation, the locked license-inventory check, and diff
+whitespace validation. The offline Debian 12 release build passed its glibc
+2.36 ceiling. Local Fedora, Debian, Arch, openSUSE, and portable packages
+were built from that payload. No automated or installed-app runtime test was
+run for this release preparation; GitHub's release workflow builds and signs
+the published packages.
+
 ## September 26, 2026 production Variable FPS integration
 
 The v0.1.8 candidate based on `eff0f9c` plus the production Variable FPS

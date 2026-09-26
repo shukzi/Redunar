@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.8
+Version:        0.1.9
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,9 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Sat Sep 26 2026 Redunar <local@redunar.invalid> - 0.1.9-1.local
+- Open the diagnostic log folder from Settings when requested.
+
 * Sat Sep 26 2026 Redunar <local@redunar.invalid> - 0.1.8-1.local
 - Add Variable FPS Replay recording alongside fixed 60 FPS.
 - Improve NVIDIA Replay beta diagnostics while limiting shared log details.
