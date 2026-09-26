@@ -69,6 +69,13 @@ Never install a development package as an incidental build step.
 
 ## Checks and review
 
+Pull requests are optional. Use them when a visible diff and discussion help;
+the maintainer can also integrate a locally reviewed branch directly. GitHub
+does not require additional reviewers or passing status checks for `main`.
+The validation expectations below still guide acceptance. The branch rule
+blocks force pushes and deletion for users subject to it; administrators retain
+GitHub's default bypass. It does not restrict normal branch work.
+
 ```sh
 tools/validate.sh quick   # syntax, formatting, both Cargo checks, frontend build and UI tests
 tools/validate.sh full    # also both Rust test suites and strict Clippy

@@ -1,7 +1,8 @@
 # 0001 — Isolated development and qualification before release
 
 - Date: September 26, 2026
-- Status: Implemented locally; hosted activation pending
+- Status: Open implementation pull request; lightweight branch protection active;
+  hosted validation still failing; release publication activation pending
 
 ## Context
 
@@ -16,6 +17,11 @@ Give compatibility builds copied source inputs and checkout-owned targets. Use
 one local/CI validation entry point covering both Cargo workspaces. Qualify exact
 candidate bytes before signing and publication. Require release review before
 publishing.
+
+Use lightweight protection for `main`: block force pushes and branch deletion,
+retain the default administrator bypass, and leave pull requests, additional
+reviewers, and required status checks optional. Local diff review and validation
+remain the development practice; release qualification is a separate gate.
 
 ## Alternatives and consequences
 

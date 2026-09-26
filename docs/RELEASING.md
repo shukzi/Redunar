@@ -57,10 +57,11 @@ Before enabling publication:
   environment secret is configured correctly.
 - Set the repository variable `REDUNAR_RELEASE_PUBLICATION_ENABLED` to `true`
   only after the environment and workflow configuration have been reviewed.
-- Protect `main` with pull-request review, resolved review conversations, and
-  the `Validate source` status check. Enable that required context after the
-  first hosted run confirms its name. Prevent force pushes and branch deletion;
-  configure review requirements for the available maintainers.
+- Keep the lightweight `main` protection: prevent force pushes and branch
+  deletion, with the default administrator bypass. Pull requests, additional
+  reviewers, and status checks are not mandatory GitHub merge gates. Review
+  the diff and validation results before integration as described in
+  [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 If required environment review is unavailable for the repository, keep automated
 publication disabled and use a reviewed manual release process. Workflow files
