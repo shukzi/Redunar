@@ -368,6 +368,13 @@ The audio command-construction test requires `parec` to be installed
 (`pulseaudio-utils` on Debian/Ubuntu). It constructs the command without starting
 capture or connecting to a sound server. The shared CI setup installs this
 utility alongside the audio libraries.
+The synthetic playback preparation test uses FFmpeg with `libx264` to generate
+a tiny H.264 Matroska file without a seek index, matching Redunar's recorded video
+codec. It checks MP4 preparation, decoding, private temporary-file cleanup, and
+preservation of the original. It needs no GPU, display, or real recording. FFV1
+is unsuitable for this copy-video-to-MP4 path on older FFmpeg versions. If FFmpeg
+is absent the test returns early; acceptance runs must have FFmpeg installed,
+as the shared CI setup does. A missing `libx264` encoder fails fixture generation.
 New detailed results belong in [docs/verification](docs/verification/README.md).
 See the [September 26 workflow verification](docs/verification/2026-09-26-development-workflow.md)
 for the isolated build and validation entry point.
