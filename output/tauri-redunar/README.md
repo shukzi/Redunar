@@ -22,8 +22,12 @@ python3 output/tauri-redunar/build-native.py
 node --test output/tauri-redunar/tests/*.test.mjs
 cargo test --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets
 cargo clippy --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets -- -D warnings
-tools/run-tauri-release-local.sh
+REDUNAR_RELEASE_ROOT="$PWD/.redunar-build/native/tauri/release" tools/run-tauri-release-local.sh
 ```
+
+Host native builds now use `.redunar-build/native`; compatibility builds use
+`.redunar-build/linux/native`. Packaging and the runner default to the compatible
+release artifacts. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for isolation.
 
 The runner starts the real local app with matching adjacent capture components
 and same-user shortcut helper. It does not install files into `/usr`; ordinary

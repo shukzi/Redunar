@@ -357,6 +357,29 @@ The OpenGL metric panel was visually inspected in a separate isolated
 inspected in that run. Automated test suites from the preceding section were
 not rerun for this follow-up.
 
+## Development entry point
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branches, worktrees, and review.
+`tools/validate.sh quick`, `full`, and `release` share the same local/CI entry
+point. Full checks cover both Rust workspaces and UI; release adds the existing
+compatibility/package gate. Reports and isolated targets live in the checkout's
+ignored `.redunar-build/` directory. Hardware and installation remain separate.
+The audio command-construction test requires `parec` to be installed
+(`pulseaudio-utils` on Debian/Ubuntu). It constructs the command without starting
+capture or connecting to a sound server. The shared CI setup installs this
+utility alongside the audio libraries.
+The synthetic playback preparation test uses FFmpeg with `libx264` to generate
+a tiny H.264 Matroska file without a seek index, matching Redunar's recorded video
+codec. It checks MP4 preparation, decoding, private temporary-file cleanup, and
+preservation of the original. It needs no GPU, display, or real recording. FFV1
+is unsuitable for this copy-video-to-MP4 path on older FFmpeg versions. If FFmpeg
+is absent the test returns early; acceptance runs must have FFmpeg installed,
+as the shared CI setup does. A missing `libx264` encoder fails fixture generation.
+New detailed results belong in [docs/verification](docs/verification/README.md).
+See the [September 26 workflow verification](docs/verification/2026-09-26-development-workflow.md)
+for the isolated build and validation entry point.
+Existing dated records below describe their original builds and paths.
+
 ## Automated commands
 
 Shared Rust workspace:

@@ -74,7 +74,8 @@ also untouched unless that location is inside `~/.local/state/redunar/`.
 From the repository root:
 
 ```sh
-python3 output/tauri-redunar/build-native.py
+tools/build-linux-release.sh
+# Explicit manual launch; uses real user state:
 tools/run-tauri-release-local.sh
 ```
 
@@ -86,6 +87,8 @@ tools/check-tauri-release.sh
 
 ## Documentation
 
+- [Development workflow](CONTRIBUTING.md) — branches, worktrees, checks, and review
+- [Release procedure](docs/RELEASING.md) — qualify candidates before publication
 - [Architecture](ARCHITECTURE.md) — components, lifecycle, persistence, and recovery
 - [Replay](REPLAY.md) — recording, shortcuts, playback, and audio behavior
 - [OpenGL completion](OPENGL-COMPLETION.md) — production parity checklist and acceptance gates

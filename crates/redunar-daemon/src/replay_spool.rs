@@ -1408,17 +1408,16 @@ mod tests {
         let configured = settings(ReplayDuration::Seconds15);
         let mut spool = ReplaySegmentSpool::open(&spool_root, configured).expect("open spool");
         for second in 0..15_u64 {
-            let mut packet =
-                target_bitrate_packet(second * NANOSECONDS_PER_SECOND, second % 2 == 0);
-            loop {
-                match spool.try_submit(packet) {
-                    Ok(()) => break,
-                    Err(ReplaySpoolSubmitError::QueueFull(returned)) => {
-                        packet = returned;
-                        thread::yield_now();
-                    }
-                    Err(error) => panic!("submit failed: {error}"),
-                }
+            let packet = target_bitrate_packet(second * NANOSECONDS_PER_SECOND, second % 2 == 0);
+            spool
+                .try_submit(packet)
+                .expect("queue budget fixture packet");
+            // Drain each keyframe pair so this budget test cannot trigger the
+            // queue-full discontinuity policy on a slower storage worker.
+            if second % 2 == 1 {
+                spool
+                    .seal_active_tail()
+                    .expect("commit budget fixture pair");
             }
         }
         let store = ReplayClipStore::open(&clip_root, ReplayBudget::from_settings(configured))
@@ -1429,6 +1428,8 @@ mod tests {
             .join()
             .expect("full target bitrate history fits its single configured headroom");
         assert!(clip.bytes > 5 * 1024 * 1024);
+        assert_eq!(spool.stats().dropped_queue_full, 0);
+        assert_eq!(spool.stats().accepted_packets, 15);
         spool.shutdown();
         let _ = fs::remove_dir_all(root);
     }
@@ -1441,20 +1442,20 @@ mod tests {
         let configured = settings(ReplayDuration::Seconds15);
         let mut spool = ReplaySegmentSpool::open(&spool_root, configured).expect("open spool");
         for second in 0..30_u64 {
-            let mut packet = packet_with_payload_bytes(
+            let packet = packet_with_payload_bytes(
                 second * NANOSECONDS_PER_SECOND,
                 second % 2 == 0,
                 2_500_000,
             );
-            loop {
-                match spool.try_submit(packet) {
-                    Ok(()) => break,
-                    Err(ReplaySpoolSubmitError::QueueFull(returned)) => {
-                        packet = returned;
-                        thread::yield_now();
-                    }
-                    Err(error) => panic!("submit failed: {error}"),
-                }
+            spool
+                .try_submit(packet)
+                .expect("queue budget fixture packet");
+            // Keep the full history deterministic: retrying QueueFull also
+            // signals a discontinuity and can discard the active segment.
+            if second % 2 == 1 {
+                spool
+                    .seal_active_tail()
+                    .expect("commit budget fixture pair");
             }
         }
         let legacy_budget = ReplayBudget::from_settings(configured).maximum_ring_bytes;
@@ -1467,6 +1468,8 @@ mod tests {
             .expect("requested duration supplies the clip byte budget");
 
         assert!(clip.bytes > legacy_budget);
+        assert_eq!(spool.stats().dropped_queue_full, 0);
+        assert_eq!(spool.stats().accepted_packets, 30);
         spool.shutdown();
         let _ = fs::remove_dir_all(root);
     }

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-release_root="$workspace_root/output/tauri-redunar/src-tauri/target/release"
+source "$workspace_root/tools/lib/release-paths.sh"
+verify_release_artifacts
 binary="$release_root/redunar-tauri"
 helper="$release_root/redunar-hotkey-helper"
 

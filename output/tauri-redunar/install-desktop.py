@@ -8,7 +8,10 @@ from pathlib import Path
 APP_ID = "com.redunar.Redunar"
 MARKER = "X-Redunar-Local-Tauri=true"
 root = Path(__file__).resolve().parent
-build_binary = root / "src-tauri/target/release/redunar-tauri"
+release_root = Path(os.environ.get("REDUNAR_RELEASE_ROOT", root.parent.parent / ".redunar-build/linux/native/tauri/release"))
+if not release_root.is_absolute():
+    raise SystemExit("REDUNAR_RELEASE_ROOT must be absolute.")
+build_binary = release_root / "redunar-tauri"
 binary = Path("/usr/bin/redunar-tauri")
 icon = root / "src-tauri/icons/icon.png"
 release_root = build_binary.parent

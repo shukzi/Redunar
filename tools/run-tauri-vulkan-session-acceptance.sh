@@ -2,7 +2,9 @@
 set -euo pipefail
 
 workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-layer="$workspace_root/output/tauri-redunar/src-tauri/target/release/libredunar_capture_vulkan.so"
+source "$workspace_root/tools/lib/release-paths.sh"
+verify_release_artifacts
+layer="$release_root/libredunar_capture_vulkan.so"
 
 if [[ ! -f "$layer" ]]; then
   printf 'Build the Tauri release first; capture layer is missing at %s\n' "$layer" >&2

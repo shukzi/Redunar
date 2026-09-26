@@ -1,0 +1,25 @@
+name: Set up Redunar checks
+description: Install build dependencies and fetch the two locked Rust workspaces.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Install Linux build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes build-essential pkg-config libgtk-3-dev \
+          libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+          libssl-dev libgl-dev libegl-dev libgles-dev libx11-dev \
+          libopus0 libpulse0 pulseaudio-utils ffmpeg desktop-file-utils appstream podman rpm zstd
+        rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+        rustup override set 1.97.1
+        cargo install cargo-deny --version 0.20.2 --locked
+    - name: Fetch locked dependencies
+      shell: bash
+      run: |
+        npm --prefix output/tauri-redunar ci
+        cargo fetch --locked --manifest-path Cargo.toml
+        cargo fetch --locked --manifest-path output/tauri-redunar/src-tauri/Cargo.toml

@@ -175,6 +175,9 @@ fn matroska_preparation_creates_fast_start_mp4_and_removes_its_private_copy() {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let output = File::create(&source).unwrap();
+    // Playback copies Redunar's H.264 video into MP4. FFV1 is not a
+    // representative fixture: older FFmpeg MP4 muxers cannot carry it.
+    // Software encoding keeps this fixture independent of GPU/display access.
     let generated = Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -185,17 +188,27 @@ fn matroska_preparation_creates_fast_start_mp4_and_removes_its_private_copy() {
             "-i",
             "color=c=black:s=32x32:r=2:d=1",
             "-c:v",
-            "ffv1",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-threads",
+            "1",
             "-f",
             "matroska",
             "pipe:1",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::from(output))
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .output()
         .unwrap();
-    assert!(generated.success());
+    assert!(
+        generated.status.success(),
+        "H.264 fixture generation requires FFmpeg with libx264: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
     let source_bytes = std::fs::read(&source).unwrap();
     let cues = [0x1c, 0x53, 0xbb, 0x6b];
     assert!(!source_bytes.windows(cues.len()).any(|bytes| bytes == cues));
@@ -220,6 +233,18 @@ fn matroska_preparation_creates_fast_start_mp4_and_removes_its_private_copy() {
         .windows(4)
         .take(128 * 1024)
         .any(|bytes| bytes == b"moov"));
+    let decoded = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-xerror", "-i"])
+        .arg(&prepared_path)
+        .args(["-map", "0:v:0", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        decoded.status.success(),
+        "prepared H.264 MP4 must decode: {}",
+        String::from_utf8_lossy(&decoded.stderr)
+    );
     assert_eq!(
         std::fs::metadata(&prepared_directory)
             .unwrap()
@@ -231,6 +256,7 @@ fn matroska_preparation_creates_fast_start_mp4_and_removes_its_private_copy() {
     drop(prepared);
     assert!(!prepared_path.exists());
     assert!(!prepared_directory.exists());
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
     std::fs::remove_file(source).unwrap();
 }
 
