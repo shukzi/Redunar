@@ -7,6 +7,7 @@ use redunar_core::{ReplayDuration, ReplaySettings};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ pub struct ProductionReplayRuntime {
 struct ProductionAudioState {
     recording: bool,
     buffer: ReplayAudioBuffer,
+    last_progress: Option<Instant>,
 }
 
 struct RuntimeState {
@@ -35,6 +37,8 @@ struct RuntimeState {
     pipeline: Option<ReplayHardwarePipeline>,
     completed_exports: VecDeque<u64>,
     save_worker: Option<thread::JoinHandle<()>>,
+    save_cancel: Option<Arc<AtomicBool>>,
+    stopping: bool,
     /// File names of clips durably committed since the coordinator last
     /// drained them. The save worker pushes under the same mutex that bumps
     /// the completed-save revision, so the two always move together.
@@ -42,8 +46,6 @@ struct RuntimeState {
     received_frame_count: u64,
     observed_packet_count: u64,
     last_encoded_progress: Option<Instant>,
-    observed_audio_packet_count: u64,
-    last_audio_progress: Option<Instant>,
     output_format: ReplayOutputFormat,
 }
 
@@ -74,6 +76,7 @@ impl ProductionReplayRuntime {
         Self {
             audio: Arc::new(Mutex::new(ProductionAudioState {
                 recording: false,
+                last_progress: None,
                 buffer: ReplayAudioBuffer::new(
                     ReplayDuration::Seconds900,
                     redunar_capture_audio::OpusStreamDescription::default(),
@@ -84,12 +87,12 @@ impl ProductionReplayRuntime {
                 pipeline: None,
                 completed_exports: VecDeque::with_capacity(MAX_COMPLETED_EXPORTS),
                 save_worker: None,
+                save_cancel: None,
+                stopping: false,
                 committed_clips: VecDeque::new(),
                 received_frame_count: 0,
                 observed_packet_count: 0,
                 last_encoded_progress: None,
-                observed_audio_packet_count: 0,
-                last_audio_progress: None,
                 output_format: ReplayOutputFormat::Matroska,
             })),
         }
@@ -103,25 +106,22 @@ impl ProductionReplayRuntime {
             .pipeline
             .as_ref()
             .and_then(ReplayHardwarePipeline::spool_stats);
-        let audio_stats = if state.pipeline.is_some() {
+        let audio_stats = if matches!(status.phase, ReplayPhase::Buffering | ReplayPhase::Saving) {
             let audio = lock_unpoisoned(&self.audio);
-            (audio.buffer.packet_count(), audio.buffer.byte_count())
+            (
+                audio.buffer.packet_count(),
+                audio.buffer.byte_count(),
+                audio.last_progress.map(|progress| progress.elapsed()),
+            )
         } else {
-            (0, 0)
+            (0, 0, None)
         };
         status.buffered_duration_ns = spool_stats.map_or(0, |stats| stats.buffered_duration_ns);
         status.received_frame_count = state.received_frame_count;
         status.encoded_packet_count = spool_stats.map_or(0, |stats| stats.accepted_packets);
         status.audio_packet_count = audio_stats.0;
         status.audio_byte_count = audio_stats.1;
-        if status.audio_packet_count > state.observed_audio_packet_count {
-            state.observed_audio_packet_count = status.audio_packet_count;
-            state.last_audio_progress = Some(Instant::now());
-        }
-        status.audio_active = audio_is_active(
-            status.phase,
-            state.last_audio_progress.map(|progress| progress.elapsed()),
-        );
+        status.audio_active = audio_is_active(status.phase, audio_stats.2);
         if status.encoded_packet_count > state.observed_packet_count {
             state.observed_packet_count = status.encoded_packet_count;
             state.last_encoded_progress = Some(Instant::now());
@@ -134,6 +134,22 @@ impl ProductionReplayRuntime {
                 .map(|progress| progress.elapsed()),
         );
         status
+    }
+
+    /// Diagnostic aggregates only; never infer drops by subtracting counters
+    /// belonging to different epochs or to in-flight work.
+    pub(crate) fn diagnostic_counters(&self) -> (usize, Option<crate::ReplaySpoolStats>) {
+        let state = lock_unpoisoned(&self.inner);
+        state.pipeline.as_ref().map_or((0, None), |pipeline| {
+            (pipeline.in_flight_count(), pipeline.spool_stats())
+        })
+    }
+
+    pub(crate) fn teardown_incomplete(&self) -> bool {
+        lock_unpoisoned(&self.inner)
+            .pipeline
+            .as_ref()
+            .is_some_and(ReplayHardwarePipeline::teardown_incomplete)
     }
 
     pub fn set_output_format(&self, output_format: ReplayOutputFormat) {
@@ -168,6 +184,7 @@ impl ProductionReplayRuntime {
         pipeline: ReplayHardwarePipeline,
         readiness: ReplayBackendReadiness,
     ) -> Result<(), ReplayRuntimeError> {
+        self.reap_finished_save();
         validate_production_readiness(readiness)?;
         let mut state = lock_unpoisoned(&self.inner);
         if state.pipeline.is_some() {
@@ -180,7 +197,7 @@ impl ProductionReplayRuntime {
         // While a clip assembly is still finishing, replacing the pipeline
         // would let a second save race the pending completion worker, so the
         // retry waits for that worker to restore the recording phase.
-        if state.status.phase == ReplayPhase::Saving {
+        if state.status.phase == ReplayPhase::Saving || state.save_worker.is_some() {
             return Err(ReplayRuntimeError::new(
                 "an Instant Replay clip is still being saved",
             ));
@@ -211,12 +228,12 @@ impl ProductionReplayRuntime {
             budget: ReplayBudget::from_settings(settings),
         };
         state.received_frame_count = 0;
+        state.stopping = false;
         state.observed_packet_count = 0;
         state.last_encoded_progress = None;
-        state.observed_audio_packet_count = 0;
-        state.last_audio_progress = None;
         let mut audio = lock_unpoisoned(&self.audio);
         audio.buffer.clear();
+        audio.last_progress = None;
         audio.recording = true;
         state.pipeline = Some(pipeline);
         Ok(())
@@ -275,7 +292,9 @@ impl ProductionReplayRuntime {
         audio
             .buffer
             .push(packet)
-            .map_err(|error| ReplayRuntimeError::new(error.to_string()))
+            .map_err(|error| ReplayRuntimeError::new(error.to_string()))?;
+        audio.last_progress = Some(Instant::now());
+        Ok(())
     }
 
     /// Replace the active encoder after the capture source changes size.
@@ -302,7 +321,9 @@ impl ProductionReplayRuntime {
             mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
             return Err(ReplayRuntimeError::new(error.to_string()));
         }
-        lock_unpoisoned(&self.audio).buffer.clear();
+        let mut audio = lock_unpoisoned(&self.audio);
+        audio.buffer.clear();
+        audio.last_progress = None;
         Ok(())
     }
 
@@ -339,63 +360,19 @@ impl ProductionReplayRuntime {
     /// Returns an error when Replay is not buffering, a save is already in
     /// flight, the spool cannot form a snapshot, or the status worker fails.
     pub fn save(&self, duration: ReplayDuration) -> Result<(), ReplayRuntimeError> {
-        let finished_worker = {
-            let mut state = lock_unpoisoned(&self.inner);
-            if state
-                .save_worker
-                .as_ref()
-                .is_some_and(thread::JoinHandle::is_finished)
-            {
-                state.save_worker.take()
-            } else {
-                None
-            }
-        };
-        if let Some(worker) = finished_worker {
-            let _ = worker.join();
+        self.reap_finished_save();
+        let mut state = lock_unpoisoned(&self.inner);
+        if state.stopping || state.save_worker.is_some() {
+            return Err(ReplayRuntimeError::new(
+                "Instant Replay is stopping or finishing a save",
+            ));
         }
-        let job = {
-            let mut state = lock_unpoisoned(&self.inner);
-            if state.status.phase != ReplayPhase::Buffering {
-                return Err(ReplayRuntimeError::new(match state.status.phase {
-                    ReplayPhase::Saving => "an Instant Replay clip is already being saved",
-                    ReplayPhase::Failed => "Instant Replay stopped after a recording error",
-                    _ => "Instant Replay is not recording",
-                }));
-            }
-            let output_format = state.output_format;
-            let pipeline = state
-                .pipeline
-                .as_mut()
-                .ok_or_else(|| ReplayRuntimeError::new("Instant Replay is not recording"))?;
-            let result =
-                pipeline.save_spooled_replay_as_with_audio(duration, output_format, || {
-                    lock_unpoisoned(&self.audio)
-                        .buffer
-                        .snapshot_between(0, u64::MAX)
-                });
-            let completed = pipeline.take_completed_inputs();
-            if enqueue_completed(&mut state, completed).is_err() {
-                mark_failed(&mut state, &self.audio, ReplayFailure::EncoderFailed);
-                return Err(ReplayRuntimeError::new(
-                    "Instant Replay completion queue exceeded its fixed bound",
-                ));
-            }
-            match result {
-                Ok(job) => {
-                    state.status.phase = ReplayPhase::Saving;
-                    state.status.last_failure = None;
-                    job
-                }
-                Err(error) => {
-                    if matches!(error, ReplayPipelineError::InsufficientHistory) {
-                        return Err(ReplayRuntimeError::new(error.to_string()));
-                    }
-                    mark_failed(&mut state, &self.audio, replay_failure(&error));
-                    return Err(ReplayRuntimeError::new(error.to_string()));
-                }
-            }
-        };
+        let job = self.prepare_save(&mut state, duration)?;
+        crate::diagnostic_log::log(&format!(
+            "Replay event=save_requested seconds={}",
+            duration.seconds()
+        ));
+        state.save_cancel = Some(job.cancellation());
 
         let runtime = self.clone();
         let worker = thread::Builder::new()
@@ -405,6 +382,7 @@ impl ProductionReplayRuntime {
                 let mut state = lock_unpoisoned(&runtime.inner);
                 match result {
                     Ok(stored) if state.status.phase == ReplayPhase::Saving => {
+                        crate::diagnostic_log::log("Replay event=save_committed");
                         // Remember the committed file name beside the revision
                         // bump so the game-session coordinator can attribute
                         // the clip to the game that recorded it. Only the name
@@ -433,11 +411,10 @@ impl ProductionReplayRuntime {
             });
         match worker {
             Ok(worker) => {
-                lock_unpoisoned(&self.inner).save_worker = Some(worker);
+                state.save_worker = Some(worker);
                 Ok(())
             }
             Err(error) => {
-                let mut state = lock_unpoisoned(&self.inner);
                 if state.status.phase == ReplayPhase::Saving {
                     state.status.phase = ReplayPhase::Buffering;
                 }
@@ -448,13 +425,98 @@ impl ProductionReplayRuntime {
         }
     }
 
+    fn prepare_save(
+        &self,
+        state: &mut RuntimeState,
+        duration: ReplayDuration,
+    ) -> Result<crate::ReplayAssemblyJob, ReplayRuntimeError> {
+        if state.status.phase != ReplayPhase::Buffering {
+            return Err(ReplayRuntimeError::new(match state.status.phase {
+                ReplayPhase::Saving => "an Instant Replay clip is already being saved",
+                ReplayPhase::Failed => "Instant Replay stopped after a recording error",
+                _ => "Instant Replay is not recording",
+            }));
+        }
+        let output_format = state.output_format;
+        let pipeline = state
+            .pipeline
+            .as_mut()
+            .ok_or_else(|| ReplayRuntimeError::new("Instant Replay is not recording"))?;
+        if pipeline
+            .spool_stats()
+            .is_none_or(|stats| stats.buffered_duration_ns < 1_000_000_000)
+        {
+            return Err(ReplayRuntimeError::new(
+                "Instant Replay is still buffering; wait at least one second before saving",
+            ));
+        }
+        let result = pipeline.save_spooled_replay_as_with_audio(duration, output_format, || {
+            lock_unpoisoned(&self.audio)
+                .buffer
+                .snapshot_between(0, u64::MAX)
+        });
+        let completed = pipeline.take_completed_inputs();
+        if enqueue_completed(state, completed).is_err() {
+            mark_failed(state, &self.audio, ReplayFailure::EncoderFailed);
+            return Err(ReplayRuntimeError::new(
+                "Instant Replay completion queue exceeded its fixed bound",
+            ));
+        }
+        match result {
+            Ok(job) => {
+                state.status.phase = ReplayPhase::Saving;
+                state.status.last_failure = None;
+                Ok(job)
+            }
+            Err(error) => {
+                if matches!(error, ReplayPipelineError::InsufficientHistory) {
+                    return Err(ReplayRuntimeError::new(error.to_string()));
+                }
+                if matches!(
+                    error,
+                    ReplayPipelineError::Spool(_) | ReplayPipelineError::Store(_)
+                ) {
+                    state.status.last_failure = Some(ReplayFailure::StorageFailed);
+                } else {
+                    mark_failed(state, &self.audio, replay_failure(&error));
+                }
+                Err(ReplayRuntimeError::new(error.to_string()))
+            }
+        }
+    }
+
+    fn reap_finished_save(&self) {
+        let finished_worker = {
+            let mut state = lock_unpoisoned(&self.inner);
+            if state
+                .save_worker
+                .as_ref()
+                .is_some_and(thread::JoinHandle::is_finished)
+            {
+                state.save_worker.take()
+            } else {
+                None
+            }
+        };
+        if let Some(worker) = finished_worker {
+            let _ = worker.join();
+        }
+    }
+
     /// Stop encoding, discard buffered history, and release backend resources.
     ///
     /// # Errors
     ///
     /// Returns an error if the hardware backend cannot shut down cleanly.
     pub fn shutdown(&self) -> Result<(), ReplayRuntimeError> {
-        let save_worker = lock_unpoisoned(&self.inner).save_worker.take();
+        let save_worker = {
+            let mut state = lock_unpoisoned(&self.inner);
+            state.stopping = true;
+            if let Some(cancel) = state.save_cancel.take() {
+                cancel.store(true, Ordering::Release);
+            }
+            state.save_worker.take()
+        };
         if let Some(worker) = save_worker {
             let _ = worker.join();
         }
@@ -468,11 +530,16 @@ impl ProductionReplayRuntime {
             .as_mut()
             .map_or_else(Vec::new, ReplayHardwarePipeline::take_completed_inputs);
         let completion_result = enqueue_completed(&mut state, completed);
-        state.pipeline = None;
+        if result.is_ok() {
+            state.pipeline = None;
+        }
         let mut audio = lock_unpoisoned(&self.audio);
         audio.recording = false;
         audio.buffer.clear();
-        state.status.phase = if state.status.backend_readiness.validation_allowed() {
+        state.status.phase = if result.is_err() {
+            state.status.last_failure = Some(ReplayFailure::EncoderFailed);
+            ReplayPhase::Failed
+        } else if state.status.backend_readiness.validation_allowed() {
             ReplayPhase::Inactive
         } else {
             ReplayPhase::Unavailable
@@ -508,12 +575,17 @@ fn mark_failed(
     audio: &Mutex<ProductionAudioState>,
     failure: ReplayFailure,
 ) {
-    if let Some(pipeline) = state.pipeline.as_mut() {
-        let _ = pipeline.shutdown();
+    let shutdown_ok = if let Some(pipeline) = state.pipeline.as_mut() {
+        let shutdown_ok = pipeline.shutdown().is_ok();
         let completed = pipeline.take_completed_inputs();
         let _ = enqueue_completed(state, completed);
+        shutdown_ok
+    } else {
+        true
+    };
+    if shutdown_ok {
+        state.pipeline = None;
     }
-    state.pipeline = None;
     let mut audio = lock_unpoisoned(audio);
     audio.recording = false;
     audio.buffer.clear();
@@ -573,6 +645,36 @@ fn audio_is_active(phase: ReplayPhase, progress_age: Option<Duration>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_progress_survives_full_buffer_and_reset_without_polling() {
+        let runtime = ProductionReplayRuntime::unavailable(ReplaySettings::default());
+        lock_unpoisoned(&runtime.inner).status.phase = ReplayPhase::Buffering;
+        lock_unpoisoned(&runtime.audio).recording = true;
+        let packet = |index: u64| redunar_capture_audio::EncodedOpusPacket {
+            timestamp_ns: index * 20_000_000,
+            duration_ns: 20_000_000,
+            bytes: vec![1, 2, 3],
+        };
+        for index in 0..45_000 {
+            runtime.submit_audio(packet(index)).unwrap();
+        }
+        assert_eq!(runtime.status().audio_packet_count, 45_000);
+        lock_unpoisoned(&runtime.audio).last_progress =
+            Some(Instant::now().checked_sub(Duration::from_secs(4)).unwrap());
+        assert!(!runtime.status().audio_active);
+        runtime.submit_audio(packet(45_000)).unwrap();
+        assert!(runtime.status().audio_active);
+        assert_eq!(runtime.status().audio_packet_count, 45_000);
+        {
+            let mut audio = lock_unpoisoned(&runtime.audio);
+            audio.buffer.clear();
+            audio.last_progress = None;
+        }
+        assert!(!runtime.status().audio_active);
+        runtime.submit_audio(packet(0)).unwrap();
+        assert!(runtime.status().audio_active);
+    }
 
     #[test]
     fn unavailable_runtime_refuses_frame_and_save_without_mutating_capability() {

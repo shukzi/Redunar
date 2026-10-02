@@ -46,6 +46,8 @@ pub struct CaptureSnapshot {
     pub replay_latest_sample_checksum: Option<u64>,
     pub replay_exported_frame_count: u64,
     pub replay_latest_export_fd: Option<u32>,
+    /// Session-unique receiver token in production; never a cross-process wire
+    /// sequence. Validation callers use it with the retained descriptor route.
     pub replay_latest_export_sequence: Option<u64>,
     pub replay_latest_export_source: Option<ReplaySourceCandidate>,
     pub replay_latest_export_offset: Option<u32>,
@@ -82,6 +84,7 @@ pub struct CaptureSessionModel {
     replay_exported_frame_count: u64,
     replay_latest_export_fd: Option<u32>,
     replay_latest_export_sequence: Option<u64>,
+    replay_last_export_sequence: Option<u64>,
     replay_latest_export_source: Option<ReplaySourceCandidate>,
     replay_latest_export_offset: Option<u32>,
     replay_latest_export_stride: Option<u32>,
@@ -117,6 +120,7 @@ impl CaptureSessionModel {
             replay_exported_frame_count: 0,
             replay_latest_export_fd: None,
             replay_latest_export_sequence: None,
+            replay_last_export_sequence: None,
             replay_latest_export_source: None,
             replay_latest_export_offset: None,
             replay_latest_export_stride: None,
@@ -292,6 +296,7 @@ impl CaptureSessionModel {
         self.replay_exported_frame_count = 0;
         self.replay_latest_export_fd = None;
         self.replay_latest_export_sequence = None;
+        self.replay_last_export_sequence = None;
         self.replay_latest_export_source = None;
         self.replay_latest_export_offset = None;
         self.replay_latest_export_stride = None;
@@ -407,11 +412,44 @@ impl CaptureSessionModel {
         if self.phase != CapturePhase::Capturing {
             return self.reject("replay source rejection requires an active producer");
         }
-        if self.replay_source_candidate.is_none() && self.replay_source_rejection != Some(reason) {
+        if self.replay_source_candidate.is_some() || self.replay_source_rejection != Some(reason) {
+            // Rejection invalidates this producer's current Replay epoch, not
+            // its metrics or overlay. Stale exports cannot establish readiness.
+            self.replay_source_candidate = None;
+            self.replay_announced_sources.clear();
+            self.replay_latest_copy_source = None;
+            self.replay_latest_copied_bytes = None;
+            self.replay_latest_sample_checksum = None;
+            self.replay_latest_export_fd = None;
+            self.replay_latest_export_sequence = None;
+            self.replay_latest_export_source = None;
+            self.replay_latest_export_offset = None;
+            self.replay_latest_export_stride = None;
+            self.replay_latest_export_modifier = None;
+            self.replay_latest_export_timestamp_ns = None;
+            self.replay_latest_export_duration_ns = None;
             self.replay_source_rejection = Some(reason);
             self.bump_revision();
         }
         Ok(())
+    }
+
+    pub(crate) fn select_replay_source(&mut self, source: ReplaySourceCandidate) {
+        // The receiver has validated this export and confirmed its process.
+        // A helper's larger surface must not override the actual game's source.
+        if self.replay_source_candidate != Some(source) {
+            self.replay_source_candidate = Some(source);
+            self.replay_source_rejection = None;
+            self.bump_revision();
+        }
+    }
+
+    pub(crate) fn clear_replay_copy_tracking(&mut self) {
+        self.replay_last_copy_sequence = None;
+        self.replay_latest_copy_source = None;
+        self.replay_latest_copied_bytes = None;
+        self.replay_latest_sample_checksum = None;
+        self.bump_revision();
     }
 
     fn accept_replay_frame_copied(
@@ -478,12 +516,13 @@ impl CaptureSessionModel {
             || duration_ns == 0
             || timestamp_ns.checked_add(duration_ns).is_none()
             || self
-                .replay_latest_export_sequence
+                .replay_last_export_sequence
                 .is_some_and(|previous| sequence <= previous)
         {
             return self.reject("replay frame export metadata is invalid or out of order");
         }
         self.replay_latest_export_sequence = Some(sequence);
+        self.replay_last_export_sequence = Some(sequence);
         self.replay_latest_export_fd = Some(fd_number);
         self.replay_latest_export_source = Some(source);
         self.replay_latest_export_offset = Some(offset);
@@ -1030,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_source_rejection_is_active_only_and_never_overwrites_a_candidate() {
+    fn replay_source_rejection_invalidates_candidate_until_a_fresh_announcement() {
         let mut session = CaptureSessionModel::new(session_id());
         let rejection = CaptureMessage::ReplaySourceRejected {
             session_id: session_id(),
@@ -1062,10 +1101,111 @@ mod tests {
                 session_id: session_id(),
                 reason: ReplaySourceRejection::PixelFormatUnsupported,
             })
-            .expect("later rejection is harmless");
+            .expect("later rejection invalidates Replay");
         let snapshot = session.snapshot();
-        assert_eq!(snapshot.replay_source_candidate, Some(candidate));
-        assert_eq!(snapshot.replay_source_rejection, None);
+        assert_eq!(snapshot.replay_source_candidate, None);
+        assert_eq!(
+            snapshot.replay_source_rejection,
+            Some(ReplaySourceRejection::PixelFormatUnsupported)
+        );
+        assert_eq!(snapshot.phase, CapturePhase::Capturing);
+        assert!(
+            session
+                .accept(CaptureMessage::ReplayFrameCopied {
+                    session_id: session_id(),
+                    sequence: 1,
+                    source: candidate,
+                    copied_bytes: candidate.width * candidate.height * 4,
+                    sample_checksum: 1,
+                })
+                .is_err()
+        );
+        let replacement = ReplaySourceCandidate {
+            width: 640,
+            height: 480,
+            ..candidate
+        };
+        session
+            .accept(CaptureMessage::ReplaySourceCandidate {
+                session_id: session_id(),
+                candidate: replacement,
+            })
+            .expect("fresh smaller source can recover");
+        assert_eq!(
+            session.snapshot().replay_source_candidate,
+            Some(replacement)
+        );
+        assert_eq!(session.snapshot().replay_source_rejection, None);
+    }
+
+    #[test]
+    fn source_rejection_preserves_metrics_overlay_and_export_sequence_history() {
+        let mut session = CaptureSessionModel::new(session_id());
+        session.accept(hello()).unwrap();
+        session
+            .accept(CaptureMessage::FrameBatch {
+                session_id: session_id(),
+                api: CaptureApi::Vulkan,
+                first_sequence: 0,
+                frame_intervals_ns: vec![16_666_667; 2],
+            })
+            .unwrap();
+        for status in [
+            OverlayRuntimeStatus::Requested,
+            OverlayRuntimeStatus::Active,
+        ] {
+            session
+                .accept(CaptureMessage::OverlayStatus {
+                    session_id: session_id(),
+                    status,
+                })
+                .unwrap();
+        }
+        let source = ReplaySourceCandidate {
+            width: 320,
+            height: 240,
+            pixel_format: ReplayPixelFormat::Bgra8Unorm,
+            target_frames_per_second: 60,
+        };
+        session
+            .accept(CaptureMessage::ReplaySourceCandidate {
+                session_id: session_id(),
+                candidate: source,
+            })
+            .unwrap();
+        let export = |sequence| CaptureMessage::ReplayFrameExported {
+            session_id: session_id(),
+            sequence,
+            fd_number: 3,
+            source,
+            offset: 0,
+            stride: 1280,
+            modifier: 0,
+            timestamp_ns: sequence,
+            duration_ns: 16_666_667,
+        };
+        session.accept(export(10)).unwrap();
+        let before = session.snapshot();
+        session
+            .accept(CaptureMessage::ReplaySourceRejected {
+                session_id: session_id(),
+                reason: ReplaySourceRejection::ExternalMemoryUnsupported,
+            })
+            .unwrap();
+        let rejected = session.snapshot();
+        assert!(rejected.replay_latest_export_sequence.is_none());
+        assert!(rejected.replay_latest_export_fd.is_none());
+        assert_eq!(rejected.metrics, before.metrics);
+        assert_eq!(rejected.overlay_status, before.overlay_status);
+        assert_eq!(rejected.phase, CapturePhase::Capturing);
+        session
+            .accept(CaptureMessage::ReplaySourceCandidate {
+                session_id: session_id(),
+                candidate: source,
+            })
+            .unwrap();
+        assert!(session.accept(export(10)).is_err());
+        session.accept(export(11)).unwrap();
     }
 
     #[test]

@@ -16,6 +16,115 @@ const ID_TRACKS: &[u8] = &[0x16, 0x54, 0xae, 0x6b];
 const ID_CLUSTER: &[u8] = &[0x1f, 0x43, 0xb6, 0x75];
 const ID_SIMPLE_BLOCK: &[u8] = &[0xa3];
 
+/// Unknown-sized clusters permit ordered blocks without buffering payloads.
+/// A new level-one Cluster closes the previous one, just as the unknown-sized
+/// Segment is terminated by EOF. Timing and codec validation remain explicit.
+pub(crate) fn write_streaming_matroska(
+    destination: &mut impl Write,
+    stream: &ReplayVideoStream,
+    source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+    audio: &ReplayAudioSnapshot,
+) -> Result<u64, MatroskaVideoError> {
+    let (origin, end) = source.window();
+    let audio_packets = audio
+        .packets
+        .iter()
+        .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < end)
+        .collect::<Vec<_>>();
+    let mut output = CountingWriter::new(destination);
+    write_ebml_header(&mut output)?;
+    output.write_all(ID_SEGMENT)?;
+    output.write_all(&[0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])?;
+    write_info(
+        &mut output,
+        end.checked_sub(origin)
+            .ok_or(MatroskaVideoError::TimestampOverflow)?,
+    )?;
+    if audio_packets.is_empty() {
+        write_tracks(&mut output, stream)?;
+    } else {
+        write_audio_video_tracks(&mut output, stream, audio)?;
+    }
+    let mut cluster = None;
+    let mut next_audio = 0;
+    let mut first = true;
+    while let Some(packet) = source.next_packet()? {
+        if first && !packet.is_keyframe() {
+            return Err(MatroskaVideoError::MissingInitialKeyframe);
+        }
+        first = false;
+        stream
+            .validate_packet(packet.bytes())
+            .map_err(|_| MatroskaVideoError::InvalidPacket)?;
+        while next_audio < audio_packets.len()
+            && audio_packets[next_audio].timestamp_ns < packet.timestamp_ns()
+        {
+            write_streaming_block(
+                &mut output,
+                MatroskaBlock::Audio(audio_packets[next_audio]),
+                origin,
+                &mut cluster,
+            )?;
+            next_audio += 1;
+        }
+        write_streaming_block(
+            &mut output,
+            MatroskaBlock::Video(&packet),
+            origin,
+            &mut cluster,
+        )?;
+    }
+    if first {
+        return Err(MatroskaVideoError::EmptyRing);
+    }
+    for packet in &audio_packets[next_audio..] {
+        source.check_cancel()?;
+        write_streaming_block(
+            &mut output,
+            MatroskaBlock::Audio(packet),
+            origin,
+            &mut cluster,
+        )?;
+    }
+    Ok(output.written)
+}
+
+fn write_streaming_block(
+    output: &mut impl Write,
+    block: MatroskaBlock<'_>,
+    origin: u64,
+    cluster: &mut Option<u64>,
+) -> Result<(), MatroskaVideoError> {
+    if let MatroskaBlock::Audio(packet) = block
+        && (packet.bytes.is_empty()
+            || packet.bytes.len() > 4096
+            || packet.duration_ns == 0
+            || packet
+                .timestamp_ns
+                .checked_add(packet.duration_ns)
+                .is_none())
+    {
+        return Err(MatroskaVideoError::InvalidPacket);
+    }
+    let timestamp = relative_milliseconds(block.timestamp_ns(), origin)?;
+    if cluster.is_none_or(|start| timestamp.saturating_sub(start) > MAX_CLUSTER_DURATION_MS) {
+        output.write_all(ID_CLUSTER)?;
+        output.write_all(&[0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])?;
+        write_unsigned(output, ID_TIMESTAMP, timestamp)?;
+        *cluster = Some(timestamp);
+    }
+    let relative = timestamp
+        .checked_sub(cluster.unwrap_or(timestamp))
+        .and_then(|value| i16::try_from(value).ok())
+        .ok_or(MatroskaVideoError::TimestampOverflow)?;
+    write_master_header(output, ID_SIMPLE_BLOCK, 4 + block.bytes().len() as u64)?;
+    output.write_all(&[block.track_byte()])?;
+    output.write_all(&relative.to_be_bytes())?;
+    output.write_all(&[block.flags()])?;
+    output.write_all(block.bytes())?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MatroskaVideoSummary {
     pub packets: u32,

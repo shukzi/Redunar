@@ -1,4 +1,9 @@
+import { canRetryShortcuts } from './shortcut-state.mjs';
+import { diagnosticStatus } from './diagnostic-status.mjs';
+import overlayPalettes from './overlay-palettes.json';
 import { mergeGameDrafts } from './game-drafts.mjs';
+import { startRuntime, latestRuntimeRefresh } from './runtime-polling.mjs';
+import { loadClipPreview } from './clip-library.mjs';
 import { replayStatusCopy } from './replay-menu-view.mjs';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -25,12 +30,7 @@ const pages = [['overview','Overview'],['library','Library'],['global','Global s
 let games = [], clips = [], sessions = [];
 let savedGameOverrides = new Map();
 const metricNames = ['FPS','Frame time','1% low','0.1% low','GPU','CPU','GPU temperature','CPU temperature'];
-const overlayPalettes = {
- Redunar:['#e8474f','#090909','#f2f0ed','#a1a1a8','#303036'], Glacier:['#5ec7e6','#071116','#f5fafc','#9eb8bf','#294047'],
- Ember:['#f2a64a','#120d08','#fff7f0','#c2ad94','#45382b'], Mint:['#73d6a1','#07110c','#f2fff7','#9cbaa8','#294233'],
- Mono:['#e8e8e8','#090909','#f7f7f7','#ababab','#383838'], Amethyst:['#b08cff','#0e0a14','#faf7ff','#b5a8c4','#3d334a'],
- Solar:['#f2d45c','#121006','#fffced','#c2b88f','#474229'], Rose:['#ff82ad','#140910','#fff7fa','#c4a3b0','#4a303b']
-};
+
 const presetMetrics = preset => preset==='Compact'?['FPS','Frame time','GPU','CPU','GPU temperature','CPU temperature']:preset==='Detailed'?[...metricNames]:preset==='FPS only'?['FPS']:[];
 const effectiveMetrics = (preset,custom=[]) => preset==='Custom'?[...custom]:presetMetrics(preset||'Compact');
 const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,branding:true,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null,storage:null};
@@ -253,11 +253,11 @@ function frameRateControl() {
  const selected=Number(draft.fps);
  const legacy=selected===30?[[30,'30 FPS']]:selected===120?[[120,'120 FPS']]:[];
  const options=[...legacy,[60,'60 FPS'],[240,'Variable FPS']].map(([value,label])=>`<option value="${value}" ${value===selected?'selected':''}>${label}</option>`).join('');
- return `<div class="frame-rate-control"><select aria-label="Recording mode" data-global="fps">${options}</select><p class="small-note">Variable FPS records accepted game presents with their timestamps, up to the encoder limit. Capture may drop frames under load.</p></div>`;
+ return `<div class="frame-rate-control"><select aria-label="Recording mode" data-global="fps">${options}</select><p class="small-note">Variable FPS records accepted game presents with their timestamps, up to the encoder limit. Capture may drop frames under load. Some games reduce FPS or mute audio when unfocused. Save with a shortcut to keep the game focused.</p></div>`;
 }
 function globalShortcuts() {
  const labels=['Open replay menu',...durations.map(d=>`Save last ${d<60?`${d} seconds`:`${d/60} minute${d===60?'':'s'}`}`)];
- return `<section class="panel shortcuts-panel"><div class="section-heading"><div><h2>Replay shortcuts</h2><p>Global shortcuts stay active while Redunar is running, including when the window is hidden.</p></div><div class="heading-actions">${shortcutBadge()}${button('Clear all shortcuts','clear-shortcuts')}</div></div><div class="info-note">Shortcuts are optional. Clear all to prevent keyboard activation; replays can still be saved from the app. The overlay shortcut opens the in-game Replay menu. Save shortcuts request a clip from the production replay runtime. Leave any assignment blank, including the menu shortcut. Press Escape in a field to clear it.</div><div class="shortcut-rows">${labels.map((label,i)=>field(label,'',`<input class="shortcut-input" aria-label="${label}" data-shortcut="${i}" value="${escape(draftShortcuts[i])}" spellcheck="false">`)).join('')}</div><p class="small-note">${escape(shortcutStatus?.message||shortcutStatus?.last_action||'Shortcut assignments are stored locally and monitored by Redunar while the app is running.')}</p></section>`;
+ return `<section class="panel shortcuts-panel"><div class="section-heading"><div><h2>Replay shortcuts</h2><p>Global shortcuts stay active while Redunar is running, including when the window is hidden.</p></div><div class="heading-actions">${shortcutBadge()}${button('Retry activation','retry-shortcuts',false,'hidden')}${button('Clear all shortcuts','clear-shortcuts')}</div></div><div class="info-note">Shortcuts are optional. Clear all to prevent keyboard activation; replays can still be saved from the app. The overlay shortcut opens the in-game Replay menu. Save shortcuts request a clip from the production replay runtime. Leave any assignment blank, including the menu shortcut. Press Escape in a field to clear it.</div><div class="shortcut-rows">${labels.map((label,i)=>field(label,'',`<input class="shortcut-input" aria-label="${label}" data-shortcut="${i}" value="${escape(draftShortcuts[i])}" spellcheck="false">`)).join('')}</div><p class="small-note" id="shortcut-feedback">${escape(shortcutStatus?.message||shortcutStatus?.last_action||'Shortcut assignments are stored locally and monitored by Redunar while the app is running.')}</p></section>`;
 }
 function historyPeer(selected) {
  return sessions.find((candidate,index)=>index!==selectedSession&&candidate.game===selected.game) || null;
@@ -373,7 +373,7 @@ function settings() {
  <section class="panel settings-preferences"><div class="settings-card-heading"><h2>Preferences</h2><p>Choose how Redunar runs on this device.</p></div>
   ${preferenceRow('Close to tray','Keep Redunar running when you close the window.','Use the tray menu to reopen or quit Redunar. The tray icon is removed immediately when this is off.','tray',preferences.tray===true)}
   ${preferenceRow('Beta access','Try early features included in this build.','Changes take effect after restarting Redunar.','beta-access',preferences.betaAccess===true)}
-  ${preferenceRow('Debug log','Record operational messages for support.','Logs can include game names and session details. Changes take effect after restarting Redunar.','diagnostic-log',preferences.diagnosticLog===true,preferences.diagnosticLogPath?`<button class="button settings-log-action" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:'')}
+  ${preferenceRow('Debug log','Record operational messages for support.',`Logs can include game names and session details. <span id="diagnostic-log-status">${escape(diagnosticStatus(preferences.diagnosticLogStatus,preferences.diagnosticLog))}</span>`,'diagnostic-log',preferences.diagnosticLog===true,preferences.diagnosticLogPath?`<button class="button settings-log-action" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:'')}
  </section>
  <section class="panel controls-panel updates-panel"><div class="updates-heading"><div><h2>Software updates</h2><p>Check for signed Redunar releases.</p></div><span class="pill">Version ${escape(version)}</span></div><div class="update-check-row"><span class="update-emblem">${icon('download')}</span><div><strong>Check for updates manually.</strong><p>Check for a verified package for this system.</p><small data-update-state>${escape(updateState)}</small></div><div class="update-check-actions">${updateAction}</div></div>${field('Check for updates automatically','Check for updates on app startup; installation always needs your action.',switchControl('automatic-updates','Check for updates automatically',preferences.automaticUpdates!==false,'preference',!native||!loaded.preferences||busy))}<div class="update-note">Updating asks for system authorization. Fully quit and reopen Redunar afterward to load the new version.</div></section>
 </div>`;
@@ -507,7 +507,7 @@ function acceptClips(records) {
  const previous=new Map(clips.map(item=>[item.id,item]));
  clips=mapClips(records).map(item=>{
   const cached=previous.get(item.id);
-  if(cached&&cached.bytes===item.bytes&&cached.modified_unix_ns===item.modified_unix_ns){item.thumbnail=cached.thumbnail;item.duration=cached.duration;item.metadata=cached.metadata;}
+  if(cached&&cached.bytes===item.bytes&&cached.modified_unix_ns===item.modified_unix_ns){item.thumbnail=cached.thumbnail;item.duration=cached.duration;item.metadata=cached.metadata;item.metadataDetailed=cached.metadataDetailed;}
   return item;
  });loaded.clips=true;
  if(!clip())selectedClip=clips[0]?.id??null;
@@ -529,14 +529,11 @@ async function loadClipThumbnails() {
   const rail=$('.clip-list'),bounds=rail?.getBoundingClientRect();
   const visible=Array.from(document.querySelectorAll('[data-clip]')).filter(card=>{const rect=card.getBoundingClientRect();return bounds&&rect.bottom>=bounds.top&&rect.top<=bounds.bottom;}).map(card=>card.dataset.clip);
   const prioritized=[selectedClip,...(route()==='overview'?clips.slice(0,3).map(item=>item.id):visible)].filter((id,index,array)=>id&&array.indexOf(id)===index);
-  const pending=prioritized.map(id=>clips.find(item=>item.id===id)).filter(item=>item&&item.thumbnail===null).slice(0,4);
+  const pending=prioritized.map(id=>clips.find(item=>item.id===id)).filter(item=>item&&(item.thumbnail===null||(route()==='replay'&&item.id===selectedClip&&!item.metadataDetailed))).slice(0,4);
   for(let offset=0;offset<pending.length;offset+=2){
    if(!['overview','replay'].includes(route()))break;
    await Promise.all(pending.slice(offset,offset+2).map(async item=>{
-    try{if(!item.metadata){item.metadata=await call('clip_metadata',{fileName:item.file_name});if(Number.isFinite(item.metadata.duration_seconds)&&item.metadata.duration_seconds>0)item.duration=item.metadata.duration_seconds;updateClipMetadata(item);}}catch{item.metadata={};}
-    try{item.thumbnail=thumbnailDataUri(await call('clip_thumbnail',{fileName:item.file_name}))||'';}
-    catch{item.thumbnail='';}
-    updateClipThumbnail(item);
+    await loadClipPreview({item,call,thumbnailDataUri,updateMetadata:updateClipMetadata,updateThumbnail:updateClipThumbnail,selected:current=>clips.includes(current)&&current.id===selectedClip&&route()==='replay'});
    }));
   }
  } finally {
@@ -755,6 +752,10 @@ function updateObservedElements() {
   badge.textContent=shortcutText(shortcutStatus?.state);
   badge.className=`pill ${shortcutClass(shortcutStatus?.state)}`;
  }
+ const retryShortcuts=$('[data-action="retry-shortcuts"]');
+ if(retryShortcuts){retryShortcuts.hidden=!canRetryShortcuts(shortcutStatus,shortcuts);retryShortcuts.disabled=!native||busy;}
+ const shortcutFeedback=$('#shortcut-feedback');
+ if(shortcutFeedback){const text=shortcutStatus?.message||shortcutStatus?.last_action||'Shortcut assignments are stored locally and monitored by Redunar while the app is running.';if(shortcutFeedback.textContent!==text)shortcutFeedback.textContent=text;}
  const tray=$('[data-preference="tray"]');
  if(tray){tray.checked=preferences.tray===true;tray.disabled=!native||!loaded.preferences||busy;}
  const automaticUpdates=$('[data-preference="automatic-updates"]');
@@ -821,7 +822,8 @@ function updateObservedElements() {
   if(plot.dataset.revision!==renderedRevision){plot.dataset.revision=renderedRevision;plot.innerHTML=chart(overviewMetric==='fps'?liveTimeline.values.map(value=>1000/value):liveTimeline.values,overviewMetric==='fps'?'FPS':'ms','recent frame-time timeline');}
  }
 }
-async function refreshRuntime() {
+const refreshRuntime=latestRuntimeRefresh(readRuntime);
+async function readRuntime() {
  if(!native)return;
  const slowRefresh=Date.now()-lastSlowRuntimeRefresh>=10000;
  if(slowRefresh)lastSlowRuntimeRefresh=Date.now();
@@ -831,6 +833,7 @@ async function refreshRuntime() {
  const oldHistory=lastLoadedHistoryRevision;
  const oldDisplay=JSON.stringify(displayCapability);
  hardware=results[0].status==='fulfilled'&&results[0].value.available?results[0].value:null;
+ preferences.diagnosticLogStatus=results[0].status==='fulfilled'?results[0].value.diagnostic_log_status:undefined;
  runtime=results[1].status==='fulfilled'?results[1].value:null;
  activeSession=results[2].status==='fulfilled'?visibleSession(results[2].value):null;
  modules=results[3].status==='fulfilled'?results[3].value:null;
@@ -843,6 +846,8 @@ async function refreshRuntime() {
  const connectionStatus=$('#connection-status');
  if(connectionStatus)connectionStatus.textContent=results[0].value?.read_only?'Another Redunar app is open · read-only':results.slice(0,4).every(r=>r.status==='rejected')?'Backend unavailable':'Production backend';
  updateObservedElements();
+ const logStatus=$('#diagnostic-log-status');
+ if(logStatus)logStatus.textContent=diagnosticStatus(preferences.diagnosticLogStatus,preferences.diagnosticLog);
  if(route()==='global'&&JSON.stringify(displayCapability)!==oldDisplay)render();
  if(activeSession?.history_revision!==undefined&&activeSession.history_revision!==oldHistory){
   const loadedHistory=await reloaders['reload-history']();
@@ -873,7 +878,7 @@ function pollDelay() {
  return ['overview','replay'].includes(route())?1000:2500;
 }
 async function poll() {
- if(!document.hidden)await refreshRuntime();
+ try { if(!document.hidden)await refreshRuntime(); } catch(error) { notify(message(error)); }
  setTimeout(poll,pollDelay()); // Schedule after completion; slow reads never build a queue.
 }
 async function perform(action) {
@@ -917,7 +922,7 @@ const reloaders={
  'reload-clips':async()=>{await readSection('clips','replay_clips',acceptClips);try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}},
  'reload-history':async()=>{const loadedHistory=await readSection('history','session_history',data=>{sessions=mapSessions(data);selectedSession=0;historyCursor=null;loaded.history=true;});if(loadedHistory&&activeSession)lastLoadedHistoryRevision=activeSession.history_revision;return loadedHistory;},
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
- 'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.betaAccess=data.beta_access===true;loaded.preferences=true;}),
+ 'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;preferences.betaAccess=data.beta_access===true;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
  'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot');delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
 };
@@ -992,6 +997,9 @@ document.addEventListener('click',event=>{
  const action=target.dataset.action;
  if(action==='clear-shortcuts'){draftShortcuts=Array(9).fill('');render();return;}
  if(!action)return;
+ if(action==='retry-shortcuts'){
+  perform(async()=>{try{shortcutStatus=await call('activate_shortcuts');notify('Shortcut activation requested.');}finally{shortcutStatus=await call('shortcut_status').catch(()=>shortcutStatus);updateObservedElements();}});return;
+ }
  if(action==='check-for-updates'){
   perform(async()=>{updateStatus=await call('check_for_updates',{refreshPending:true});render();notify(updateStatus.message);});return;
  }
@@ -1213,7 +1221,7 @@ window.addEventListener('hashchange',()=>{render();workspace.focus({preventScrol
 
 render();
     if(native){
-     Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())).then(async()=>{render();await refreshRuntime();await checkUpdatesOnStartup();render();poll();});
+ startRuntime({initialize:()=>Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,startPolling:poll,onError:error=>notify(message(error))});
 }else{
  const connectionStatus=$('#connection-status');
  if(connectionStatus)connectionStatus.textContent='Browser inspection · backend disconnected';

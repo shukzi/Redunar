@@ -138,6 +138,15 @@ fn read_artwork(game_id: &str, banner: bool) -> Result<Option<Vec<u8>>, String> 
     // Preserve both independently on the first artwork request. A game need
     // not be selected for its landscape banner to survive an uninstall.
     for kind in [false, true] {
+        if let Some(bytes) = store
+            .as_ref()
+            .and_then(|store| read_raster(&saved_path(store, app_id, kind)))
+        {
+            if kind == banner {
+                requested = Some(bytes);
+            }
+            continue;
+        }
         let source = discovery.as_ref().and_then(|discovery| {
             if kind {
                 discovery.local_banner(app_id)

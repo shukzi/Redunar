@@ -8,6 +8,10 @@
 #![allow(clippy::too_many_lines, clippy::used_underscore_binding)]
 
 mod conversion;
+mod device_identity;
+
+static ENCODER_TEARDOWN_INCOMPLETE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub use conversion::VulkanVideoH264Encoder;
 
@@ -329,6 +333,13 @@ impl VulkanVideoH264Request {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VulkanVideoH264Candidate {
+    pub api_version: u32,
+    /// Driver-defined numeric encoding; do not interpret as Vulkan semver.
+    pub driver_version: u32,
+    pub vendor_id: u32,
+    pub stable_selection: VulkanVideoStableSelection,
+    identity: device_identity::Identity,
+    /// Diagnostic probe order only; never used to select the opened device.
     pub physical_device_index: u8,
     pub queue_family_index: u32,
     pub compute_queue_family_index: u32,
@@ -353,6 +364,12 @@ pub struct VulkanVideoH264Candidate {
     pub std_header_name: String,
     pub std_header_spec_version: u32,
     pub dma_buf_import_requires_dedicated_allocation: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VulkanVideoStableSelection {
+    Probed,
+    UuidMatched,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -596,6 +613,9 @@ impl VulkanVideoH264Device {
         request: VulkanVideoH264Request,
         allow_nvidia_beta: bool,
     ) -> Result<Self, VulkanVideoDeviceError> {
+        if ENCODER_TEARDOWN_INCOMPLETE.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(VulkanVideoDeviceError::EncoderPoisoned);
+        }
         let probe = VulkanVideoH264Probe::local_with_nvidia_beta(request, allow_nvidia_beta);
         let candidate = probe
             .candidate
@@ -1309,7 +1329,6 @@ type BindBufferMemory =
     unsafe extern "system" fn(VkDevice, VkBuffer, VkDeviceMemory, u64) -> VkResult;
 type EnumeratePhysicalDevices =
     unsafe extern "system" fn(VkInstance, *mut u32, *mut VkPhysicalDevice) -> VkResult;
-type GetPhysicalDeviceProperties = unsafe extern "system" fn(VkPhysicalDevice, *mut c_void);
 type GetPhysicalDeviceFeatures2 =
     unsafe extern "system" fn(VkPhysicalDevice, *mut VkPhysicalDeviceFeatures2);
 type EnumerateDeviceExtensionProperties = unsafe extern "system" fn(
@@ -1401,8 +1420,10 @@ unsafe fn probe_local(
     let get_instance_proc_addr = load!("vkGetInstanceProcAddr", GetInstanceProcAddr);
     let destroy_instance = load!("vkDestroyInstance", DestroyInstance);
     let enumerate_physical_devices = load!("vkEnumeratePhysicalDevices", EnumeratePhysicalDevices);
-    let get_physical_device_properties =
-        load!("vkGetPhysicalDeviceProperties", GetPhysicalDeviceProperties);
+    let get_physical_device_properties = load!(
+        "vkGetPhysicalDeviceProperties2",
+        device_identity::GetProperties2
+    );
     let get_physical_device_features2 =
         load!("vkGetPhysicalDeviceFeatures2", GetPhysicalDeviceFeatures2);
     let enumerate_device_extensions = load!(
@@ -1485,15 +1506,20 @@ unsafe fn probe_local(
     let mut saw_supported_device = false;
     let mut last_blockers = Vec::new();
     for (device_index, physical_device) in devices.into_iter().enumerate() {
-        let (api_version, vendor_id) = unsafe {
-            physical_device_api_and_vendor(physical_device, get_physical_device_properties)
-        };
+        let identity =
+            unsafe { device_identity::query(physical_device, get_physical_device_properties) };
+        let api_version = identity.api_version;
+        let vendor_id = identity.vendor_id;
         if (allow_nvidia_beta && vendor_id != NVIDIA_VENDOR_ID)
             || (!allow_nvidia_beta && vendor_id != AMD_VENDOR_ID)
         {
             continue;
         }
         saw_supported_device = true;
+        if !identity.is_stable() {
+            last_blockers = vec![VulkanVideoProbeBlocker::NoSupportedPhysicalDevice];
+            continue;
+        }
         // Synchronization2 is core in Vulkan 1.3. Redunar intentionally uses
         // that core path rather than conditionally enabling the older KHR
         // extension, so a lower device API version is not a valid candidate.
@@ -1648,6 +1674,11 @@ unsafe fn probe_local(
                 };
                 return VulkanVideoH264Probe {
                     candidate: Some(VulkanVideoH264Candidate {
+                        api_version,
+                        driver_version: identity.driver_version,
+                        vendor_id,
+                        stable_selection: VulkanVideoStableSelection::Probed,
+                        identity,
                         physical_device_index: u8::try_from(device_index).unwrap_or(u8::MAX),
                         queue_family_index,
                         compute_queue_family_index,
@@ -1774,11 +1805,15 @@ unsafe fn open_device(
 
     let devices = unsafe { physical_devices(instance, enumerate_physical_devices) }
         .map_err(VulkanVideoDeviceError::PhysicalDeviceEnumerationFailed)?;
-    let physical_device = devices
-        .get(usize::from(candidate.physical_device_index))
-        .copied()
-        .filter(|device| !device.is_null())
-        .ok_or(VulkanVideoDeviceError::SelectedPhysicalDeviceUnavailable)?;
+    let get_properties = load!(
+        "vkGetPhysicalDeviceProperties2",
+        device_identity::GetProperties2
+    );
+    let physical_device =
+        unsafe { device_identity::select(&devices, &candidate.identity, get_properties) }
+            .ok_or(VulkanVideoDeviceError::SelectedPhysicalDeviceUnavailable)?;
+    let mut candidate = candidate;
+    candidate.stable_selection = VulkanVideoStableSelection::UuidMatched;
 
     let mut queue_families = vec![candidate.compute_queue_family_index];
     if candidate.queue_family_index != candidate.compute_queue_family_index {
@@ -2675,22 +2710,6 @@ unsafe fn physical_devices(
             .min(devices.len()),
     );
     Ok(devices)
-}
-
-unsafe fn physical_device_api_and_vendor(
-    device: VkPhysicalDevice,
-    get_properties: GetPhysicalDeviceProperties,
-) -> (u32, u32) {
-    // VkPhysicalDeviceProperties begins with apiVersion, driverVersion,
-    // vendorID, deviceID. The oversized aligned buffer avoids reproducing the
-    // large driver-limits tail while preserving the official ABI storage size.
-    let mut properties = [0_u64; 512];
-    // SAFETY: the aligned 4 KiB buffer exceeds VkPhysicalDeviceProperties.
-    unsafe { get_properties(device, properties.as_mut_ptr().cast()) };
-    let words = properties.as_ptr().cast::<u32>();
-    // SAFETY: apiVersion and vendorID are the first and third u32 values in
-    // the documented structure prefix.
-    unsafe { (*words, *words.add(2)) }
 }
 
 const fn synchronization2_feature_enabled(value: u32) -> bool {

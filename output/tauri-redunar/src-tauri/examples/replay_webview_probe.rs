@@ -45,6 +45,11 @@ impl Drop for Temporary {
 }
 fn main() {
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    let playback_seconds = std::env::var("REDUNAR_PROBE_PLAYBACK_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0)
+        .min(60);
     let directory =
         std::env::temp_dir().join(format!("redunar-native-media-probe-{}", std::process::id()));
     std::fs::DirBuilder::new()
@@ -118,10 +123,13 @@ fn main() {
             clip_metadata::clip_metadata,
             probe_report
         ])
-        .on_page_load(|window, payload| {
+        .on_page_load(move |window, payload| {
             if payload.event() != tauri::webview::PageLoadEvent::Finished {
                 return;
             }
+            window
+                .eval(format!("window.probePlaybackSeconds={playback_seconds};"))
+                .unwrap();
             window
                 .eval(include_str!("../../tests/replay-native-probe.js"))
                 .unwrap();
@@ -165,10 +173,27 @@ fn main() {
         final_state["frames"], "8",
         "Native filmstrip did not finish"
     );
-    assert_eq!(
-        final_state["position"], 0,
-        "Filmstrip changed the player position"
-    );
+    if playback_seconds == 0 {
+        assert_eq!(
+            final_state["position"], 0,
+            "Filmstrip changed the player position"
+        );
+    } else {
+        assert_eq!(
+            final_state["playback"]["started"], true,
+            "Playback did not start"
+        );
+        assert_eq!(
+            final_state["playback"]["stalls"], 0,
+            "Playback clock stalled"
+        );
+        assert!(
+            final_state["playback"]["maximumPosition"]
+                .as_f64()
+                .is_some_and(|value| value > 1.0),
+            "Playback never advanced"
+        );
+    }
     assert!(
         !states
             .iter()

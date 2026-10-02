@@ -8,6 +8,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 #[derive(Clone, Copy)]
 pub(crate) struct InstanceDispatch {
+    pub(crate) api_version: u32,
     // Raw dispatchable handles are not `Send`; retain the address and restore
     // the typed handle only at the Vulkan call boundary.
     pub(crate) instance_address: usize,
@@ -24,6 +25,10 @@ pub(crate) struct DeviceDispatch {
     pub(crate) create_swapchain: Option<PfnCreateSwapchainKhr>,
     pub(crate) destroy_swapchain: Option<PfnDestroySwapchainKhr>,
     pub(crate) queue_present: Option<PfnQueuePresentKhr>,
+    pub(crate) acquire_next_image: Option<crate::ffi::PfnAcquireNextImageKhr>,
+    pub(crate) acquire_next_image2: Option<crate::ffi::PfnAcquireNextImage2Khr>,
+    pub(crate) queue_wait_idle: Option<crate::ffi::PfnQueueWaitIdle>,
+    pub(crate) device_wait_idle: Option<crate::ffi::PfnDeviceWaitIdle>,
 }
 
 static INSTANCES: LazyLock<Mutex<BTreeMap<usize, InstanceDispatch>>> =

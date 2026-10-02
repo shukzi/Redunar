@@ -5,12 +5,12 @@
 //! and Redunar's daemon; reopening `/proc/<pid>/fd` does not work for DMA-BUFs.
 
 use nix::sys::socket::{
-    ControlMessage, ControlMessageOwned, MsgFlags, SockaddrLike, UnixAddr, recvmsg, sendmsg,
+    ControlMessage, ControlMessageOwned, MsgFlags, SockaddrLike, UnixAddr, recvmsg, sendmsg, sendto,
 };
 use std::io::{self, IoSlice, IoSliceMut};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixDatagram;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct ReceivedDatagram {
     pub length: usize,
@@ -38,6 +38,29 @@ pub fn send_datagram_fd(
         &control,
         MsgFlags::empty(),
         None,
+    )
+    .map_err(io::Error::from)
+}
+
+/// Send one addressed datagram without waiting for a recipient's queue.
+///
+/// `MSG_DONTWAIT` applies only to this send. Changing `O_NONBLOCK` on a clone would
+/// also alter the original capture receiver's shared file description.
+///
+/// # Errors
+///
+/// Returns an OS error for an invalid endpoint, failed send, or a full queue.
+pub fn send_datagram_to_nonblocking(
+    socket: &UnixDatagram,
+    payload: &[u8],
+    target: &Path,
+) -> io::Result<usize> {
+    let address = UnixAddr::new(target).map_err(io::Error::from)?;
+    sendto(
+        socket.as_raw_fd(),
+        payload,
+        &address,
+        MsgFlags::MSG_DONTWAIT,
     )
     .map_err(io::Error::from)
 }

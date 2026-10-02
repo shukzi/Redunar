@@ -150,8 +150,9 @@ impl ReplayFrameSource for KmsReplaySource {
         Ok(())
     }
 
-    fn drain_and_release(&self) {
+    fn drain_and_release(&self) -> Result<(), ReplayRuntimeError> {
         self.stop_active();
+        Ok(())
     }
 
     fn wake(&self) {
@@ -289,7 +290,7 @@ pub(crate) fn run_live_diagnostic(
     if let Some(backend) = backend.as_mut() {
         let _ = backend.shutdown();
     }
-    source.drain_and_release();
+    let _ = source.drain_and_release();
     result
 }
 

@@ -221,9 +221,37 @@ unsafe fn create_slot(
         query_pool: 0,
         active: true,
     };
+    let h264_profile = VkVideoEncodeH264ProfileInfoKhr {
+        s_type: VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR,
+        p_next: ptr::null(),
+        std_profile_idc: STD_VIDEO_H264_PROFILE_IDC_HIGH,
+    };
+    let usage = VkVideoEncodeUsageInfoKhr {
+        s_type: VK_STRUCTURE_TYPE_VIDEO_ENCODE_USAGE_INFO_KHR,
+        p_next: (&raw const h264_profile).cast(),
+        video_usage_hints: VK_VIDEO_ENCODE_USAGE_RECORDING_BIT_KHR,
+        video_content_hints: VK_VIDEO_ENCODE_CONTENT_RENDERED_BIT_KHR,
+        tuning_mode: VK_VIDEO_ENCODE_TUNING_MODE_DEFAULT_KHR,
+    };
+    let profile = VkVideoProfileInfoKhr {
+        s_type: VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR,
+        p_next: (&raw const usage).cast(),
+        video_codec_operation: VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR,
+        chroma_subsampling: VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR,
+        luma_bit_depth: VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR,
+        chroma_bit_depth: VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR,
+    };
+    // VUID-VkBufferCreateInfo-usage-04814: the bitstream destination must
+    // declare the same profile as the session and feedback query.
+    let profiles = VkVideoProfileListInfoKhr {
+        s_type: VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR,
+        p_next: ptr::null(),
+        profile_count: 1,
+        profiles: &raw const profile,
+    };
     let buffer_info = VkBufferCreateInfo {
         s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        p_next: ptr::null(),
+        p_next: (&raw const profiles).cast(),
         flags: 0,
         size,
         usage: VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR,
@@ -294,26 +322,6 @@ unsafe fn create_slot(
         return Err(VulkanVideoDeviceError::BitstreamMapFailed(result));
     }
     build.mapped_address = mapped.addr();
-    let h264_profile = VkVideoEncodeH264ProfileInfoKhr {
-        s_type: VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR,
-        p_next: ptr::null(),
-        std_profile_idc: STD_VIDEO_H264_PROFILE_IDC_HIGH,
-    };
-    let usage = VkVideoEncodeUsageInfoKhr {
-        s_type: VK_STRUCTURE_TYPE_VIDEO_ENCODE_USAGE_INFO_KHR,
-        p_next: (&raw const h264_profile).cast(),
-        video_usage_hints: VK_VIDEO_ENCODE_USAGE_RECORDING_BIT_KHR,
-        video_content_hints: VK_VIDEO_ENCODE_CONTENT_RENDERED_BIT_KHR,
-        tuning_mode: VK_VIDEO_ENCODE_TUNING_MODE_DEFAULT_KHR,
-    };
-    let profile = VkVideoProfileInfoKhr {
-        s_type: VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR,
-        p_next: (&raw const usage).cast(),
-        video_codec_operation: VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR,
-        chroma_subsampling: VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR,
-        luma_bit_depth: VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR,
-        chroma_bit_depth: VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR,
-    };
     let feedback_info = VkQueryPoolVideoEncodeFeedbackCreateInfoKhr {
         s_type: VK_STRUCTURE_TYPE_QUERY_POOL_VIDEO_ENCODE_FEEDBACK_CREATE_INFO_KHR,
         p_next: (&raw const profile).cast(),
@@ -417,3 +425,6 @@ fn align_up(value: u64, alignment: u64) -> Option<u64> {
         .checked_add(alignment.checked_sub(1)?)
         .map(|value| value / alignment * alignment)
 }
+
+#[cfg(test)]
+mod tests;

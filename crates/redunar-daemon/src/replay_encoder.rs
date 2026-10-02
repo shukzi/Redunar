@@ -343,6 +343,9 @@ pub enum HardwareEncoderApi {
 pub enum HardwareEncoderProbeBlocker {
     NoSupportedRenderNode,
     RenderNodeNotAccessible,
+    /// NVIDIA beta is withheld until the game's GPU can be matched on a
+    /// machine with multiple render nodes. Other candidates remain usable.
+    NvidiaDeviceAttributionAmbiguous,
     EncodeProfileNotVerified,
     DmaBufImportNotVerified,
     SustainedFramePacingNotVerified,
@@ -408,6 +411,19 @@ impl HardwareEncoderProbe {
         &self.blockers
     }
 
+    /// Discovery may retain other devices for diagnostics, but ambiguous
+    /// NVIDIA game attribution must never authorize any recording backend.
+    #[must_use]
+    pub fn validation_allowed(&self) -> bool {
+        !self
+            .blockers
+            .contains(&HardwareEncoderProbeBlocker::NvidiaDeviceAttributionAmbiguous)
+            && self
+                .candidates
+                .iter()
+                .any(HardwareEncoderDeviceCandidate::is_accessible)
+    }
+
     /// A filesystem probe alone can never satisfy the production gate.
     #[must_use]
     pub const fn production_ready(&self) -> bool {
@@ -424,27 +440,15 @@ impl HardwareEncoderProbe {
         allow_nvidia_beta: bool,
     ) -> Self {
         let mut candidates = Vec::new();
+        let mut nvidia_attribution_ambiguous = false;
         if let Ok(entries) = fs::read_dir(device_root) {
             let nodes: Vec<_> = entries
                 .flatten()
                 .filter(|entry| entry.file_name().to_str().is_some_and(is_render_node_name))
                 .take(MAX_RENDER_NODES + 1)
                 .collect();
-            let single_gpu = nodes.len() == 1;
-            let has_nvidia = nodes.iter().any(|entry| {
-                fs::read_link(sysfs_root.join(entry.file_name()).join("device/driver"))
-                    .ok()
-                    .and_then(|path| path.file_name().map(|name| name == "nvidia"))
-                    .unwrap_or(false)
-            });
-            // A hybrid NVIDIA system cannot safely associate the exported
-            // game frame with an encoder until device identity is carried.
-            if allow_nvidia_beta && has_nvidia && !single_gpu {
-                return Self {
-                    candidates,
-                    blockers: vec![HardwareEncoderProbeBlocker::NoSupportedRenderNode],
-                };
-            }
+            let (single_gpu, has_nvidia) = render_topology(sysfs_root, &nodes);
+            nvidia_attribution_ambiguous = allow_nvidia_beta && has_nvidia && !single_gpu;
             for entry in nodes.into_iter().take(MAX_RENDER_NODES) {
                 let name = entry.file_name();
                 let Some(name) = name.to_str() else { continue };
@@ -456,6 +460,10 @@ impl HardwareEncoderProbe {
                 else {
                     continue;
                 };
+                // A hybrid NVIDIA system cannot safely associate the game
+                // export with NVIDIA until device identity is carried. Keep
+                // unrelated AMD candidates available, including when the
+                // other render node cannot be opened by this process.
                 if driver != "amdgpu" && !(allow_nvidia_beta && single_gpu && driver == "nvidia") {
                     continue;
                 }
@@ -474,6 +482,9 @@ impl HardwareEncoderProbe {
         }
         candidates.sort_by(|left, right| left.render_node.cmp(&right.render_node));
         let mut blockers = Vec::new();
+        if nvidia_attribution_ambiguous {
+            blockers.push(HardwareEncoderProbeBlocker::NvidiaDeviceAttributionAmbiguous);
+        }
         if candidates.is_empty() {
             blockers.push(HardwareEncoderProbeBlocker::NoSupportedRenderNode);
         } else if candidates.iter().all(|candidate| !candidate.accessible) {
@@ -490,6 +501,49 @@ impl HardwareEncoderProbe {
             blockers,
         }
     }
+}
+
+fn render_topology(sysfs_root: &Path, nodes: &[fs::DirEntry]) -> (bool, bool) {
+    let mut names: std::collections::BTreeSet<_> =
+        nodes.iter().map(fs::DirEntry::file_name).collect();
+    let mut complete = false;
+    if let Ok(entries) = fs::read_dir(sysfs_root) {
+        complete = true;
+        for entry in entries
+            .filter(|entry| {
+                entry.as_ref().map_or(true, |entry| {
+                    entry.file_name().to_str().is_some_and(is_render_node_name)
+                })
+            })
+            .take(MAX_RENDER_NODES + 1)
+        {
+            match entry {
+                Ok(entry) => {
+                    names.insert(entry.file_name());
+                }
+                Err(_) => complete = false,
+            }
+        }
+    }
+    // Sysfs render nodes count even if their /dev node is missing or cannot
+    // be opened. Display-only cards and connector entries never count.
+    let has_nvidia = names.iter().any(|name| {
+        let device = sysfs_root.join(name).join("device");
+        // Vendor identity retains the gate through a missing driver link.
+        fs::read_to_string(device.join("vendor"))
+            .ok()
+            .is_some_and(|vendor| {
+                vendor
+                    .trim()
+                    .trim_start_matches("0x")
+                    .eq_ignore_ascii_case("10de")
+            })
+            || fs::read_link(device.join("driver"))
+                .ok()
+                .and_then(|path| path.file_name().map(|name| name == "nvidia"))
+                .unwrap_or(false)
+    });
+    (complete && names.len() == 1, has_nvidia)
 }
 
 /// The only encoder backend contract accepted by Replay.
@@ -1029,6 +1083,148 @@ mod tests {
         let probe = HardwareEncoderProbe::from_roots(&device_root, &sysfs_root);
         assert_eq!(probe.candidates().len(), 1);
         fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    struct ProbeFixture(PathBuf);
+
+    impl ProbeFixture {
+        fn new() -> Self {
+            let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+            Self(std::env::temp_dir().join(format!(
+                "redunar-encoder-nvidia-{}-{id}",
+                std::process::id()
+            )))
+        }
+
+        fn node(&self, name: &str, driver: &str, accessible: bool) {
+            let device_root = self.0.join("dev/dri");
+            let device = self.0.join("sys/class/drm").join(name).join("device");
+            fs::create_dir_all(&device_root).expect("device fixture");
+            fs::create_dir_all(&device).expect("sysfs fixture");
+            if accessible {
+                fs::write(device_root.join(name), []).expect("accessible fixture node");
+            } else {
+                // A directory cannot be opened read/write, even when a test
+                // runner has elevated privileges. No real device is opened.
+                fs::create_dir(device_root.join(name)).expect("inaccessible fixture node");
+            }
+            symlink(
+                format!("/sys/bus/pci/drivers/{driver}"),
+                device.join("driver"),
+            )
+            .expect("driver fixture");
+        }
+
+        fn probe(&self, beta: bool) -> HardwareEncoderProbe {
+            HardwareEncoderProbe::from_roots_with_nvidia_beta(
+                &self.0.join("dev/dri"),
+                &self.0.join("sys/class/drm"),
+                beta,
+            )
+        }
+    }
+
+    impl Drop for ProbeFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("remove encoder fixture");
+        }
+    }
+
+    #[test]
+    fn nvidia_render_node_requires_beta_and_never_claims_production_ready() {
+        let fixture = ProbeFixture::new();
+        fixture.node("renderD128", "nvidia", true);
+        assert!(fixture.probe(false).candidates().is_empty());
+        let probe = fixture.probe(true);
+        assert_eq!(probe.candidates().len(), 1);
+        assert_eq!(probe.candidates()[0].driver(), "nvidia");
+        assert!(probe.candidates()[0].is_accessible());
+        assert!(!probe.production_ready());
+        assert!(
+            probe
+                .blockers()
+                .contains(&HardwareEncoderProbeBlocker::EncodeProfileNotVerified)
+        );
+    }
+
+    #[test]
+    fn nvidia_render_probe_ignores_display_only_cards() {
+        let fixture = ProbeFixture::new();
+        fixture.node("renderD128", "nvidia", true);
+        fixture.node("card0", "simpledrm", true);
+        fixture.node("card1", "nvidia", true);
+        assert_eq!(fixture.probe(true).candidates().len(), 1);
+    }
+
+    #[test]
+    fn hybrid_nvidia_probe_preserves_amd_candidates_with_beta_on_and_off() {
+        let fixture = ProbeFixture::new();
+        fixture.node("renderD128", "amdgpu", true);
+        fixture.node("renderD129", "nvidia", true);
+        for beta in [false, true] {
+            let probe = fixture.probe(beta);
+            assert_eq!(probe.candidates().len(), 1);
+            assert_eq!(probe.candidates()[0].driver(), "amdgpu");
+            assert!(probe.candidates()[0].is_accessible());
+            assert_eq!(probe.validation_allowed(), !beta);
+            assert_eq!(
+                probe
+                    .blockers()
+                    .contains(&HardwareEncoderProbeBlocker::NvidiaDeviceAttributionAmbiguous),
+                beta
+            );
+        }
+    }
+
+    #[test]
+    fn nvidia_hybrid_and_multi_nvidia_nodes_are_withheld_even_when_inaccessible() {
+        for driver in ["i915", "nvidia", "unknown"] {
+            let fixture = ProbeFixture::new();
+            fixture.node("renderD128", "nvidia", true);
+            fixture.node("renderD129", driver, false);
+            let probe = fixture.probe(true);
+            assert!(probe.candidates().is_empty());
+            assert!(
+                probe
+                    .blockers()
+                    .contains(&HardwareEncoderProbeBlocker::NoSupportedRenderNode)
+            );
+            assert!(
+                probe
+                    .blockers()
+                    .contains(&HardwareEncoderProbeBlocker::NvidiaDeviceAttributionAmbiguous)
+            );
+        }
+    }
+
+    #[test]
+    fn inaccessible_nvidia_node_reports_access_blocker_without_becoming_ready() {
+        let fixture = ProbeFixture::new();
+        fixture.node("renderD128", "nvidia", false);
+        let probe = fixture.probe(true);
+        assert_eq!(probe.candidates().len(), 1);
+        assert!(!probe.candidates()[0].is_accessible());
+        assert!(
+            probe
+                .blockers()
+                .contains(&HardwareEncoderProbeBlocker::RenderNodeNotAccessible)
+        );
+        assert!(!probe.production_ready());
+    }
+
+    #[test]
+    fn sysfs_render_gpu_without_a_device_node_still_withholds_nvidia_attribution() {
+        let fixture = ProbeFixture::new();
+        fixture.node("renderD128", "nvidia", true);
+        fixture.node("renderD129", "i915", true);
+        fs::remove_file(fixture.0.join("dev/dri/renderD129")).expect("missing device node");
+        let probe = fixture.probe(true);
+        assert!(probe.candidates().is_empty());
+        assert!(
+            probe
+                .blockers()
+                .contains(&HardwareEncoderProbeBlocker::NvidiaDeviceAttributionAmbiguous)
+        );
     }
 
     #[test]

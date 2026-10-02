@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 const DEFAULT_FRAME_COUNT: &str = "360";
 const CHILD_TIMEOUT: Duration = Duration::from_secs(20);
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
+const NVIDIA_BETA_ENV: &str = "REDUNAR_CAPTURE_PROBE_NVIDIA_BETA";
 
 #[expect(
     clippy::too_many_lines,
@@ -53,11 +54,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .ok()
         .as_deref()
         == Some("1");
-    let service = if production_replay_requested {
-        RedunarService::for_isolated_replay_probe(&probe_state.directory)
-    } else {
-        RedunarService::with_state_directory(&probe_state.directory)
-    };
+    let nvidia_beta = parse_nvidia_beta(env::var_os(NVIDIA_BETA_ENV).as_deref())?;
+    let service = probe_service(
+        &probe_state.directory,
+        production_replay_requested,
+        nvidia_beta,
+    )?;
     let arguments = default_arguments(&executable)?;
     let steam_bridge = env::var("REDUNAR_CAPTURE_PROBE_STEAM_BRIDGE")
         .ok()
@@ -194,6 +196,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("overlay_requested={overlay_enabled}");
     println!("replay_candidate_requested={replay_candidate_requested}");
     println!("replay_encode_requested={replay_encode_requested}");
+    println!("nvidia_beta_requested={nvidia_beta}");
     println!("hold_replay_releases={hold_replay_releases}");
     println!("steam_bridge_requested={steam_bridge}");
     let start_process = process_sample()?;
@@ -213,6 +216,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &probe_state.directory,
             settings,
             child_timeout()?,
+            nvidia_beta,
         )?;
         (status, Some(clip))
     } else {
@@ -253,6 +257,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(io::Error::other("Vulkan target exposed no eligible replay source").into());
     }
     Ok(())
+}
+
+fn parse_nvidia_beta(value: Option<&std::ffi::OsStr>) -> io::Result<bool> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "0" => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "REDUNAR_CAPTURE_PROBE_NVIDIA_BETA must be 0 or 1",
+        )),
+    }
+}
+
+fn probe_service(
+    state: &Path,
+    production: bool,
+    nvidia_beta: bool,
+) -> Result<RedunarService, Box<dyn Error>> {
+    // The production service snapshots Beta access at construction. Persist
+    // the explicit probe choice in private state before that constructor; a
+    // later preference write would require a restart just like the real app.
+    RedunarService::with_state_directory(state).set_beta_access_enabled(nvidia_beta)?;
+    Ok(if production {
+        RedunarService::for_isolated_replay_probe(state)
+    } else {
+        RedunarService::with_state_directory(state)
+    })
 }
 
 fn run_replay_backpressure_validation(
@@ -583,6 +615,7 @@ fn run_replay_encode_validation(
     state_directory: &Path,
     settings: ReplaySettings,
     timeout: Duration,
+    nvidia_beta: bool,
 ) -> Result<(std::process::ExitStatus, StoredReplayClip), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     let mut pipeline = None;
@@ -592,7 +625,12 @@ fn run_replay_encode_validation(
     let status = loop {
         while let Some((sequence, frame)) = session.take_replay_validation_export()? {
             if pipeline.is_none() {
-                pipeline = Some(validation_pipeline(state_directory, settings, &frame)?);
+                pipeline = Some(validation_pipeline(
+                    state_directory,
+                    settings,
+                    &frame,
+                    nvidia_beta,
+                )?);
             }
             let recorder = pipeline
                 .as_mut()
@@ -600,7 +638,7 @@ fn run_replay_encode_validation(
             if recorder.stream().width() != frame.width
                 || recorder.stream().height() != frame.height
             {
-                let replacement = validation_backend(settings, &frame)?;
+                let replacement = validation_backend(settings, &frame, nvidia_beta)?;
                 recorder.reset(Box::new(replacement))?;
                 release_completed_validation_exports(session, recorder)?;
             }
@@ -662,8 +700,9 @@ fn validation_pipeline(
     state_directory: &Path,
     settings: ReplaySettings,
     frame: &DmaBufReplayFrame,
+    nvidia_beta: bool,
 ) -> Result<ReplayHardwarePipeline, Box<dyn Error>> {
-    let backend = validation_backend(settings, frame)?;
+    let backend = validation_backend(settings, frame, nvidia_beta)?;
     let store = ReplayClipStore::open(
         state_directory.join("encoded-replay"),
         ReplayBudget::from_settings(settings),
@@ -678,7 +717,16 @@ fn validation_pipeline(
 fn validation_backend(
     settings: ReplaySettings,
     frame: &DmaBufReplayFrame,
+    nvidia_beta: bool,
 ) -> Result<VulkanVideoH264Backend, Box<dyn Error>> {
+    if nvidia_beta
+        && !redunar_daemon::HardwareEncoderProbe::local_with_nvidia_beta(true).validation_allowed()
+    {
+        return Err(io::Error::other(
+            "NVIDIA Replay requires one accessible, unambiguous render device",
+        )
+        .into());
+    }
     let variable_rate = settings.frame_rate == ReplayFrameRate::Variable;
     let request = VulkanVideoH264Request {
         width: frame.width,
@@ -695,7 +743,7 @@ fn validation_backend(
         variable_rate,
         target_megabits_per_second: settings.quality.target_megabits_per_second(),
     };
-    let encoder = VulkanVideoH264Device::open(request)?
+    let encoder = VulkanVideoH264Device::open_with_nvidia_beta(request, nvidia_beta)?
         .create_session()?
         .create_parameters()?
         .create_production_encoder()?;
@@ -1023,11 +1071,46 @@ fn default_arguments(executable: &Path) -> Result<Vec<OsString>, Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
-    use super::ProbeState;
+    use super::{ProbeState, parse_nvidia_beta, probe_service};
+    use std::ffi::OsStr;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn nvidia_probe_opt_in_requires_explicit_boolean_configuration() {
+        assert!(!parse_nvidia_beta(None).expect("default off"));
+        assert!(!parse_nvidia_beta(Some(OsStr::new("0"))).expect("explicit off"));
+        assert!(parse_nvidia_beta(Some(OsStr::new("1"))).expect("explicit on"));
+        for value in ["", "true", "on", "2", " 1"] {
+            assert!(parse_nvidia_beta(Some(OsStr::new(value))).is_err());
+        }
+    }
+
+    #[test]
+    fn probe_service_persists_opt_in_before_both_service_constructors() {
+        let root = std::env::temp_dir().join(format!(
+            "redunar-capture-probe-beta-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+        ));
+        for production in [false, true] {
+            for beta in [false, true, false] {
+                let service =
+                    probe_service(&root, production, beta).expect("configure isolated probe");
+                assert_eq!(
+                    service.app_preferences().expect("preferences").beta_access,
+                    beta
+                );
+                // This public Debug field is the startup snapshot, independent
+                // of later writes, and requires no hardware probe to inspect.
+                assert!(format!("{service:?}").contains(&format!("beta_access_at_start: {beta}")));
+                drop(service);
+            }
+        }
+        fs::remove_dir_all(root).expect("remove fixture preferences");
+    }
 
     #[test]
     fn probe_state_removes_nested_runtime_outputs() {

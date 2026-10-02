@@ -374,6 +374,42 @@ impl ReplayClipStore {
         })
     }
 
+    pub(crate) fn save_streaming(
+        &self,
+        stream: &ReplayVideoStream,
+        source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+        audio: &ReplayAudioSnapshot,
+        output_format: ReplayOutputFormat,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
+        self.save_generated(output_format, false, |temporary| {
+            let mut bounded = BoundedClipWriter::new(
+                temporary,
+                self.maximum_clip_bytes.min(self.storage_limit_bytes),
+            );
+            match output_format {
+                ReplayOutputFormat::Matroska => crate::replay_matroska::write_streaming_matroska(
+                    &mut bounded,
+                    stream,
+                    source,
+                    audio,
+                )
+                .map_err(|error| {
+                    ReplayStoreError::owned(format!(
+                        "could not finalize streamed Matroska replay: {error}"
+                    ))
+                }),
+                ReplayOutputFormat::Mp4 => {
+                    crate::replay_mp4::write_streaming_mp4(&mut bounded, stream, source, audio)
+                        .map_err(|error| {
+                            ReplayStoreError::owned(format!(
+                                "could not finalize streamed MP4 replay: {error}"
+                            ))
+                        })
+                }
+            }
+        })
+    }
+
     /// List regular Redunar-owned clips, newest first.
     ///
     /// The ownership marker and fixed directory-entry bound are revalidated
@@ -551,12 +587,26 @@ impl ReplayClipStore {
         preserve_existing: bool,
         write_clip: impl FnOnce(&mut File) -> Result<u64, ReplayStoreError>,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
-        let _operation = store_operation();
-        validate_store(&self.directory)?;
-        let mut owned = scan_owned_clips(&self.directory)?;
-        let (temporary_path, mut temporary) = create_temporary(&self.directory)?;
+        let (temporary_path, mut temporary) = {
+            let _operation = store_operation();
+            validate_store(&self.directory)?;
+            create_temporary(&self.directory)?
+        };
+        // Muxing can take seconds for long clips. Do not hold the inventory/
+        // deletion lock while writing a private, unpublished temporary file.
         let bytes = match write_clip(&mut temporary) {
             Ok(bytes) => bytes,
+            Err(error) => {
+                drop(temporary);
+                let _ = fs::remove_file(&temporary_path);
+                return Err(error);
+            }
+        };
+        let _operation = store_operation();
+        let mut owned = match validate_store(&self.directory)
+            .and_then(|()| scan_owned_clips(&self.directory))
+        {
+            Ok(clips) => clips,
             Err(error) => {
                 drop(temporary);
                 let _ = fs::remove_file(&temporary_path);
@@ -604,7 +654,8 @@ impl ReplayClipStore {
             };
         sync_directory(&self.directory).map_err(|error| {
             ReplayStoreError::owned(format!(
-                "replay clip was committed at {} but its directory could not be flushed: {error}",
+                "replay clip committed but directory flush failed: kind={:?} errno={:?} detail={error}; clip={}",
+                error.kind(), error.raw_os_error(),
                 destination.display()
             ))
         })?;
@@ -627,7 +678,7 @@ impl ReplayClipStore {
             )
             .map_err(|error| {
                 ReplayStoreError::owned(format!(
-                    "replay clip was saved at {} but quota cleanup failed: {error}",
+                    "replay clip saved but quota cleanup failed: {error}; clip={}",
                     destination.display()
                 ))
             })?
@@ -985,7 +1036,8 @@ fn commit_temporary(
             Ok(()) => {
                 fs::remove_file(temporary).map_err(|error| {
                     ReplayStoreError::owned(format!(
-                        "replay clip was committed at {} but its temporary link could not be removed: {error}",
+                        "replay clip committed but temporary link removal failed: kind={:?} errno={:?} detail={error}; clip={}",
+                        error.kind(), error.raw_os_error(),
                         path.display()
                     ))
                 })?;
@@ -1093,7 +1145,11 @@ fn sync_directory(directory: &Path) -> io::Result<()> {
 }
 
 fn io_error(context: &str, error: &io::Error) -> ReplayStoreError {
-    ReplayStoreError::owned(format!("{context}: {error}"))
+    ReplayStoreError::owned(format!(
+        "{context}: kind={:?} errno={:?} detail={error}",
+        error.kind(),
+        error.raw_os_error()
+    ))
 }
 
 #[cfg(test)]

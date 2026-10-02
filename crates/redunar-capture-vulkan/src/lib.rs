@@ -11,23 +11,24 @@ mod ffi;
 mod overlay;
 mod producer;
 mod replay_copy;
+mod replay_memory;
 mod replay_transfer;
 pub mod replay_video;
 
 use crate::dispatch::{DeviceDispatch, InstanceDispatch};
 use crate::ffi::{
     BaseInStructure, LayerDeviceCreateInfo, LayerInstanceCreateInfo, NEGOTIATE_LAYER_INTERFACE,
-    NegotiateLayerInterface, PfnCreateDevice, PfnCreateInstance, PfnDestroyDevice,
-    PfnDestroyInstance, PfnGetDeviceProcAddr, PfnGetDeviceQueue, PfnGetDeviceQueue2,
-    PfnGetInstanceProcAddr, PfnGetPhysicalDeviceMemoryProperties,
-    PfnGetPhysicalDeviceQueueFamilyProperties, PfnQueuePresentKhr, PfnVoidFunction,
-    VK_ERROR_EXTENSION_NOT_PRESENT, VK_ERROR_INITIALIZATION_FAILED, VK_LAYER_LINK_INFO,
-    VK_QUEUE_GRAPHICS_BIT, VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
-    VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO, VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO,
-    VK_SUCCESS, VkAllocationCallbacks, VkDevice, VkDeviceCreateInfo, VkDeviceQueueInfo2,
-    VkInstance, VkInstanceCreateInfo, VkPhysicalDevice, VkPhysicalDeviceMemoryProperties,
-    VkPresentInfoKhr, VkQueue, VkQueueFamilyProperties, VkResult, VkSwapchainCreateInfoKhr,
-    VkSwapchainKhr,
+    NegotiateLayerInterface, PfnAcquireNextImage2Khr, PfnAcquireNextImageKhr, PfnCreateDevice,
+    PfnCreateInstance, PfnDestroyDevice, PfnDestroyInstance, PfnGetDeviceProcAddr,
+    PfnGetDeviceQueue, PfnGetDeviceQueue2, PfnGetInstanceProcAddr,
+    PfnGetPhysicalDeviceMemoryProperties, PfnGetPhysicalDeviceQueueFamilyProperties,
+    PfnQueuePresentKhr, PfnVoidFunction, VK_ERROR_EXTENSION_NOT_PRESENT,
+    VK_ERROR_INITIALIZATION_FAILED, VK_LAYER_LINK_INFO, VK_QUEUE_GRAPHICS_BIT,
+    VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2, VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO,
+    VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO, VK_SUCCESS, VkAllocationCallbacks, VkDevice,
+    VkDeviceCreateInfo, VkDeviceQueueInfo2, VkInstance, VkInstanceCreateInfo, VkPhysicalDevice,
+    VkPhysicalDeviceMemoryProperties, VkPresentInfoKhr, VkQueue, VkQueueFamilyProperties, VkResult,
+    VkSwapchainCreateInfoKhr, VkSwapchainKhr,
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::mem;
@@ -53,6 +54,12 @@ const GET_INSTANCE_PROC_ADDR: &[u8] = b"vkGetInstanceProcAddr\0";
 const GET_DEVICE_PROC_ADDR: &[u8] = b"vkGetDeviceProcAddr\0";
 const NEGOTIATE_INTERFACE: &[u8] = b"vkNegotiateLoaderLayerInterfaceVersion\0";
 const MAX_DEVICE_EXTENSIONS: usize = 1_024;
+const VULKAN_API_VERSION_1_1: u32 = (1 << 22) | (1 << 12);
+const FOREIGN_QUEUE_EXTENSION: &[u8] = c"VK_EXT_queue_family_foreign".to_bytes_with_nul();
+const QUEUE_WAIT_IDLE: &[u8] = c"vkQueueWaitIdle".to_bytes_with_nul();
+const DEVICE_WAIT_IDLE: &[u8] = c"vkDeviceWaitIdle".to_bytes_with_nul();
+const ACQUIRE_NEXT_IMAGE: &[u8] = c"vkAcquireNextImageKHR".to_bytes_with_nul();
+const ACQUIRE_NEXT_IMAGE_2: &[u8] = c"vkAcquireNextImage2KHR".to_bytes_with_nul();
 
 #[repr(C)]
 struct VkExtensionProperties {
@@ -190,6 +197,13 @@ unsafe extern "system" fn create_instance(
             dispatch::insert_instance(
                 key,
                 InstanceDispatch {
+                    api_version: unsafe {
+                        (*create_info)
+                            .p_application_info
+                            .cast::<ffi::VkApplicationInfo>()
+                            .as_ref()
+                    }
+                    .map_or(1 << 22, |info| info.api_version.max(1 << 22)),
                     instance_address: created.addr(),
                     next_get_instance_proc_addr: next_gipa,
                     destroy_instance: destroy,
@@ -214,6 +228,10 @@ unsafe extern "system" fn destroy_instance(
 }
 
 #[unsafe(export_name = "vkCreateDevice")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one transactional device creation scope preserves loader and child ownership"
+)]
 unsafe extern "system" fn create_device(
     physical_device: VkPhysicalDevice,
     create_info: *const VkDeviceCreateInfo,
@@ -298,8 +316,6 @@ unsafe extern "system" fn create_device(
             // created device and are used only while that device is live.
             let overlay_functions =
                 unsafe { overlay::DeviceFunctions::load(next_device_proc, created) };
-            let replay_functions =
-                unsafe { replay_copy::DeviceFunctions::load(next_device_proc, created) };
             let memory_properties = unsafe { physical_device_memory_properties(physical_device) };
             dispatch::insert_device(
                 key,
@@ -311,23 +327,124 @@ unsafe extern "system" fn create_device(
                     create_swapchain,
                     destroy_swapchain,
                     queue_present,
+                    acquire_next_image: unsafe {
+                        load_acquire_next_image(next_device_proc, created)
+                    },
+                    acquire_next_image2: unsafe {
+                        load_acquire_next_image2(next_device_proc, created)
+                    },
+                    queue_wait_idle: unsafe { load_queue_idle(next_device_proc, created) },
+                    device_wait_idle: unsafe { load_device_idle(next_device_proc, created) },
                 },
             );
             producer::device_created();
             overlay::device_created(key, created, overlay_functions, graphics_queue_families);
-            let external_memory_supported =
-                unsafe { device_external_memory(forwarded_create_info) };
+            let export_support = unsafe { device_external_memory(forwarded_create_info) }
+                .then(|| unsafe { producer_export_support(physical_device, next_instance_proc) })
+                .flatten();
             replay_copy::device_created(
                 key,
                 created,
-                replay_functions,
+                unsafe { replay_copy::DeviceFunctions::load(next_device_proc, created) },
                 &memory_properties,
                 graphics_queue_families,
-                external_memory_supported,
+                export_support,
             );
         }
     }
     result
+}
+
+unsafe fn load_queue_idle(
+    next: PfnGetDeviceProcAddr,
+    device: VkDevice,
+) -> Option<ffi::PfnQueueWaitIdle> {
+    unsafe { next(device, QUEUE_WAIT_IDLE.as_ptr().cast()) }.map(|raw| unsafe {
+        mem::transmute::<unsafe extern "system" fn(), ffi::PfnQueueWaitIdle>(raw)
+    })
+}
+
+unsafe fn load_acquire_next_image(
+    next: PfnGetDeviceProcAddr,
+    device: VkDevice,
+) -> Option<PfnAcquireNextImageKhr> {
+    unsafe { next(device, ACQUIRE_NEXT_IMAGE.as_ptr().cast()) }.map(|raw| unsafe {
+        mem::transmute::<unsafe extern "system" fn(), PfnAcquireNextImageKhr>(raw)
+    })
+}
+
+unsafe fn load_acquire_next_image2(
+    next: PfnGetDeviceProcAddr,
+    device: VkDevice,
+) -> Option<PfnAcquireNextImage2Khr> {
+    unsafe { next(device, ACQUIRE_NEXT_IMAGE_2.as_ptr().cast()) }.map(|raw| unsafe {
+        mem::transmute::<unsafe extern "system" fn(), PfnAcquireNextImage2Khr>(raw)
+    })
+}
+unsafe fn load_device_idle(
+    next: PfnGetDeviceProcAddr,
+    device: VkDevice,
+) -> Option<ffi::PfnDeviceWaitIdle> {
+    unsafe { next(device, DEVICE_WAIT_IDLE.as_ptr().cast()) }.map(|raw| unsafe {
+        mem::transmute::<unsafe extern "system" fn(), ffi::PfnDeviceWaitIdle>(raw)
+    })
+}
+
+unsafe fn producer_export_support(
+    physical_device: VkPhysicalDevice,
+    next: PfnGetInstanceProcAddr,
+) -> Option<bool> {
+    if !unsafe { producer_export_core_ready(physical_device, next) } {
+        return None;
+    }
+    let raw = unsafe {
+        next(
+            physical_device_instance(physical_device)?,
+            c"vkGetPhysicalDeviceExternalBufferProperties".as_ptr(),
+        )
+    }?;
+    unsafe {
+        replay_memory::export_support(
+            physical_device,
+            mem::transmute::<unsafe extern "system" fn(), replay_memory::GetExternalBufferProperties>(
+                raw,
+            ),
+        )
+    }
+}
+
+unsafe fn producer_export_core_ready(
+    physical_device: VkPhysicalDevice,
+    next: PfnGetInstanceProcAddr,
+) -> bool {
+    let Some(key) = (unsafe { dispatch_key(physical_device.cast()) }) else {
+        return false;
+    };
+    let Some(instance) = dispatch::instance(key) else {
+        return false;
+    };
+    // These allocation and ownership paths use Vulkan 1.1 core commands.
+    // Preserve the game's exact API request and fail capture closed on 1.0.
+    if instance.api_version < VULKAN_API_VERSION_1_1 {
+        return false;
+    }
+    let Some(raw) = (unsafe {
+        next(
+            instance.instance_address as VkInstance,
+            c"vkGetPhysicalDeviceProperties".as_ptr(),
+        )
+    }) else {
+        return false;
+    };
+    let get = unsafe {
+        mem::transmute::<
+            unsafe extern "system" fn(),
+            unsafe extern "system" fn(VkPhysicalDevice, *mut c_void),
+        >(raw)
+    };
+    let mut properties = [0_u64; 512];
+    unsafe { get(physical_device, properties.as_mut_ptr().cast()) };
+    unsafe { *properties.as_ptr().cast::<u32>() >= VULKAN_API_VERSION_1_1 }
 }
 
 unsafe fn replay_device_extensions(
@@ -336,7 +453,9 @@ unsafe fn replay_device_extensions(
     next_instance_proc: PfnGetInstanceProcAddr,
     export_requested: bool,
 ) -> Option<Vec<*const c_char>> {
-    if !export_requested {
+    if !export_requested
+        || !unsafe { producer_export_core_ready(physical_device, next_instance_proc) }
+    {
         return None;
     }
     let info = unsafe { create_info.as_ref() }?;
@@ -356,7 +475,8 @@ unsafe fn replay_device_extensions(
     let fd_enabled = extension_pointer_list_contains(current, b"VK_KHR_external_memory_fd");
     let dma_buf_enabled =
         extension_pointer_list_contains(current, b"VK_EXT_external_memory_dma_buf");
-    if fd_enabled && dma_buf_enabled {
+    let foreign_enabled = extension_pointer_list_contains(current, b"VK_EXT_queue_family_foreign");
+    if fd_enabled && dma_buf_enabled && foreign_enabled {
         return None;
     }
 
@@ -382,6 +502,10 @@ unsafe fn replay_device_extensions(
             && !supported
                 .iter()
                 .any(|name| name == b"VK_EXT_external_memory_dma_buf"))
+        || (!foreign_enabled
+            && !supported
+                .iter()
+                .any(|name| name == b"VK_EXT_queue_family_foreign"))
     {
         eprintln!(
             "Redunar Replay validation: DMA-BUF export extensions are unsupported by the game GPU"
@@ -395,6 +519,9 @@ unsafe fn replay_device_extensions(
     }
     if !dma_buf_enabled {
         extensions.push(EXTERNAL_MEMORY_DMA_BUF_EXTENSION.as_ptr().cast());
+    }
+    if !foreign_enabled {
+        extensions.push(FOREIGN_QUEUE_EXTENSION.as_ptr().cast());
     }
     eprintln!("Redunar Replay validation: enabled Vulkan DMA-BUF export extensions");
     Some(extensions)
@@ -483,7 +610,7 @@ unsafe fn device_external_memory(create_info: *const VkDeviceCreateInfo) -> bool
         fd |= value.to_bytes() == b"VK_KHR_external_memory_fd";
         dma_buf |= value.to_bytes() == b"VK_EXT_external_memory_dma_buf";
     }
-    fd && dma_buf
+    fd && dma_buf && extension_pointer_list_contains(names, b"VK_EXT_queue_family_foreign")
 }
 
 #[unsafe(export_name = "vkDestroyDevice")]
@@ -601,8 +728,13 @@ unsafe extern "system" fn create_swapchain(
             unsafe { replay_transfer::assessment_from_create_info(successful_info) }
         {
             match assessment {
-                Ok(candidate) => producer::record_replay_source_candidate(candidate),
-                Err(reason) => producer::record_replay_source_rejected(reason),
+                Ok(candidate) if !replay_copy::capture_requested() => {
+                    producer::record_replay_source_candidate(candidate);
+                }
+                Err(reason) if !replay_copy::capture_requested() => {
+                    producer::record_replay_source_rejected(reason);
+                }
+                Ok(_) | Err(_) => {}
             }
         }
     }
@@ -693,20 +825,102 @@ unsafe extern "system" fn queue_present(
     {
         replay_copy::presentation_failed(semaphore);
     }
-    if presentation_succeeded(result) {
-        // SAFETY: the application externally synchronizes `queue` for this
-        // complete vkQueuePresentKHR call, including this post-forward hook.
-        unsafe { replay_copy::presentation_finished(queue) };
-        if let Some(now_ns) = producer::monotonic_ns() {
-            producer::record_present_at(now_ns);
-            overlay::presentation_finished(now_ns);
-        }
+    if presentation_succeeded(result)
+        && let Some(now_ns) = producer::monotonic_ns()
+    {
+        producer::record_present_at(now_ns);
+        overlay::presentation_finished(now_ns);
     }
     result
 }
 
 const fn presentation_succeeded(result: VkResult) -> bool {
     result >= VK_SUCCESS
+}
+
+#[unsafe(export_name = "vkAcquireNextImageKHR")]
+unsafe extern "system" fn acquire_next_image(
+    device: VkDevice,
+    swapchain: VkSwapchainKhr,
+    timeout: u64,
+    semaphore: ffi::VkSemaphore,
+    fence: ffi::VkFence,
+    image_index: *mut u32,
+) -> VkResult {
+    let Some(key) = (unsafe { dispatch_key(device.cast()) }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let Some(next) = dispatch::device(key).and_then(|dispatch| dispatch.acquire_next_image) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let result = unsafe { next(device, swapchain, timeout, semaphore, fence, image_index) };
+    if acquisition_succeeded(result) && !image_index.is_null() {
+        replay_copy::image_acquired(key, swapchain, unsafe { *image_index }, fence);
+    }
+    result
+}
+
+#[unsafe(export_name = "vkAcquireNextImage2KHR")]
+unsafe extern "system" fn acquire_next_image2(
+    device: VkDevice,
+    info: *const ffi::VkAcquireNextImageInfoKhr,
+    image_index: *mut u32,
+) -> VkResult {
+    let Some(key) = (unsafe { dispatch_key(device.cast()) }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let Some(next) = dispatch::device(key).and_then(|dispatch| dispatch.acquire_next_image2) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let result = unsafe { next(device, info, image_index) };
+    if acquisition_succeeded(result)
+        && !image_index.is_null()
+        && !info.is_null()
+        && unsafe { (*info).s_type } == ffi::VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR
+    {
+        replay_copy::image_acquired(
+            key,
+            unsafe { (*info).swapchain },
+            unsafe { *image_index },
+            unsafe { (*info).fence },
+        );
+    }
+    result
+}
+
+const fn acquisition_succeeded(result: VkResult) -> bool {
+    result == VK_SUCCESS || result == 1_000_001_003
+}
+
+#[unsafe(export_name = "vkQueueWaitIdle")]
+unsafe extern "system" fn queue_wait_idle(queue: VkQueue) -> VkResult {
+    let Some(next) = (unsafe { dispatch_key(queue.cast()) })
+        .and_then(dispatch::device)
+        .and_then(|dispatch| dispatch.queue_wait_idle)
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let result = unsafe { next(queue) };
+    if result == VK_SUCCESS {
+        // This is an application-requested wait, never an injected wait.
+        unsafe { replay_copy::queue_idle(queue) };
+    }
+    result
+}
+
+#[unsafe(export_name = "vkDeviceWaitIdle")]
+unsafe extern "system" fn device_wait_idle(device: VkDevice) -> VkResult {
+    let Some(key) = (unsafe { dispatch_key(device.cast()) }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let Some(next) = dispatch::device(key).and_then(|dispatch| dispatch.device_wait_idle) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let result = unsafe { next(device) };
+    if result == VK_SUCCESS {
+        unsafe { replay_copy::device_idle(key) };
+    }
+    result
 }
 
 fn instance_intercept(name: &[u8]) -> PfnVoidFunction {
@@ -733,6 +947,22 @@ fn device_intercept(name: &[u8]) -> PfnVoidFunction {
         value if value == CREATE_SWAPCHAIN => Some(to_void_create_swapchain(create_swapchain)),
         value if value == DESTROY_SWAPCHAIN => Some(to_void_destroy_swapchain(destroy_swapchain)),
         value if value == QUEUE_PRESENT => Some(to_void_queue_present(queue_present)),
+        value if value == ACQUIRE_NEXT_IMAGE => Some(unsafe {
+            mem::transmute::<PfnAcquireNextImageKhr, unsafe extern "system" fn()>(
+                acquire_next_image,
+            )
+        }),
+        value if value == ACQUIRE_NEXT_IMAGE_2 => Some(unsafe {
+            mem::transmute::<PfnAcquireNextImage2Khr, unsafe extern "system" fn()>(
+                acquire_next_image2,
+            )
+        }),
+        value if value == QUEUE_WAIT_IDLE => Some(unsafe {
+            mem::transmute::<ffi::PfnQueueWaitIdle, unsafe extern "system" fn()>(queue_wait_idle)
+        }),
+        value if value == DEVICE_WAIT_IDLE => Some(unsafe {
+            mem::transmute::<ffi::PfnDeviceWaitIdle, unsafe extern "system" fn()>(device_wait_idle)
+        }),
         value if value == GET_DEVICE_PROC_ADDR => Some(to_void_gdpa(get_device_proc_addr)),
         _ => None,
     }
@@ -1046,5 +1276,17 @@ mod tests {
         assert!(presentation_succeeded(VK_SUCCESS));
         assert!(presentation_succeeded(1_000_001_003));
         assert!(!presentation_succeeded(VK_ERROR_INITIALIZATION_FAILED));
+    }
+
+    #[test]
+    fn acquisition_tracking_accepts_only_success_or_suboptimal_and_exposes_both_hooks() {
+        assert!(acquisition_succeeded(VK_SUCCESS));
+        assert!(acquisition_succeeded(1_000_001_003));
+        assert!(!acquisition_succeeded(1)); // NOT_READY has no valid image index.
+        assert!(!acquisition_succeeded(2)); // TIMEOUT has no completion proof.
+        assert!(!acquisition_succeeded(-1_000_001_004)); // OUT_OF_DATE.
+        assert!(device_intercept(ACQUIRE_NEXT_IMAGE).is_some());
+        assert!(device_intercept(ACQUIRE_NEXT_IMAGE_2).is_some());
+        assert_eq!(mem::size_of::<ffi::VkAcquireNextImageInfoKhr>(), 56);
     }
 }

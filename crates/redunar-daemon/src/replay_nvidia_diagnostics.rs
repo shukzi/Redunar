@@ -1,8 +1,6 @@
-//! Privacy-minimal NVIDIA beta encoder startup failures only.
+//! Privacy-minimal NVIDIA beta encoder startup events.
 use redunar_capture_vulkan::replay_video::{VulkanVideoDeviceError, VulkanVideoProbeBlocker};
 use std::fmt::Write;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 pub(super) enum Stage {
@@ -24,31 +22,6 @@ impl Stage {
     }
 }
 
-#[derive(Default)]
-struct Budget {
-    emitted: u8,
-    last: Option<Instant>,
-}
-impl Budget {
-    fn admit(&mut self, selected: bool, now: Instant) -> bool {
-        if !selected
-            || self.emitted >= 32
-            || self
-                .last
-                .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(5))
-        {
-            return false;
-        }
-        self.emitted += 1;
-        self.last = Some(now);
-        true
-    }
-}
-static BUDGET: Mutex<Budget> = Mutex::new(Budget {
-    emitted: 0,
-    last: None,
-});
-
 pub(super) fn startup_result<T>(
     selected: bool,
     stage: Stage,
@@ -59,8 +32,9 @@ pub(super) fn startup_result<T>(
         if !selected {
             return error.to_string();
         }
-        let (reason, result) = device_reason(&error);
-        emit(selected, stage, reason, result);
+        for message in failure_lines(stage, &error) {
+            crate::diagnostic_log::log(&message);
+        }
         "Replay hardware encoder startup failed".to_owned()
     })
 }
@@ -68,13 +42,9 @@ pub(super) fn backend_failed(selected: bool) {
     emit(selected, Stage::Backend, "backend_validation_failed", None);
 }
 fn emit(selected: bool, stage: Stage, reason: &'static str, result: Option<i32>) {
-    let Ok(mut budget) = BUDGET.try_lock() else {
-        return;
-    };
-    if !budget.admit(selected, Instant::now()) {
+    if !selected {
         return;
     }
-    drop(budget);
     // This sink is a no-op until the saved logging opt-in starts it. Never use
     // log_op!: that would also expose diagnostics on unconditional stderr.
     crate::diagnostic_log::log(&line(stage, reason, result));
@@ -86,7 +56,42 @@ fn line(stage: Stage, reason: &'static str, result: Option<i32>) -> String {
     }
     text
 }
-// Exhaustive matches deliberately discard all string and non-result payloads.
+fn failure_lines(stage: Stage, error: &VulkanVideoDeviceError) -> Vec<String> {
+    if let VulkanVideoDeviceError::Probe(blockers) = error
+        && !blockers.is_empty()
+    {
+        return blockers
+            .iter()
+            .take(16)
+            .map(|blocker| {
+                let (reason, result) = probe_reason(blocker);
+                let mut message = line(stage, reason, result);
+                if let VulkanVideoProbeBlocker::MissingDeviceExtension(extension) = blocker {
+                    // Only specification identifiers we request may cross this
+                    // boundary, never arbitrary driver strings or device names.
+                    let safe = match *extension {
+                        "VK_KHR_video_queue"
+                        | "VK_KHR_video_encode_queue"
+                        | "VK_KHR_video_encode_h264"
+                        | "VK_KHR_external_memory_fd"
+                        | "VK_EXT_external_memory_dma_buf"
+                        | "VK_EXT_image_drm_format_modifier"
+                        | "VK_EXT_queue_family_foreign" => *extension,
+                        _ => "unclassified",
+                    };
+                    let _ = write!(message, " extension={safe}");
+                }
+                message
+            })
+            .collect();
+    }
+    let (reason, result) = device_reason(error);
+    vec![line(stage, reason, result)]
+}
+pub(super) fn startup_ready(selected: bool, stage: Stage) {
+    emit(selected, stage, "ready", None);
+}
+// Exhaustive matches discard arbitrary strings and non-result payloads.
 // New upstream variants require an explicit privacy-reviewed classification.
 fn device_reason(error: &VulkanVideoDeviceError) -> (&'static str, Option<i32>) {
     use VulkanVideoDeviceError as E;
@@ -225,5 +230,44 @@ fn probe_reason(error: &VulkanVideoProbeBlocker) -> (&'static str, Option<i32>) 
         E::SeparateReferenceImagesUnsupported => ("separate_reference_images_unsupported", None),
         E::SliceUnsupported => ("slice_unsupported", None),
         E::TemporalLayerUnsupported => ("temporal_layer_unsupported", None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn reports_distinct_blockers_and_only_allowlisted_extension_names() {
+        let error = VulkanVideoDeviceError::Probe(vec![
+            VulkanVideoProbeBlocker::MissingDeviceExtension("VK_KHR_video_encode_h264"),
+            VulkanVideoProbeBlocker::MissingDeviceExtension("/private/driver-text"),
+            VulkanVideoProbeBlocker::NoComputeQueue,
+        ]);
+        let lines = failure_lines(Stage::Device, &error);
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("extension=VK_KHR_video_encode_h264"));
+        assert!(lines[1].contains("extension=unclassified"));
+        assert!(!lines.join(" ").contains("/private"));
+        assert!(lines[2].contains("no_compute_queue"));
+    }
+    #[test]
+    fn empty_probe_and_numeric_driver_error_are_actionable() {
+        assert!(
+            failure_lines(Stage::Device, &VulkanVideoDeviceError::Probe(vec![]))[0]
+                .contains("probe_failed")
+        );
+        assert!(
+            failure_lines(
+                Stage::Encoder,
+                &VulkanVideoDeviceError::QueueSubmissionFailed(-4)
+            )[0]
+            .contains("vk_result=-4")
+        );
+    }
+    #[test]
+    fn candidate_failure_output_has_a_fixed_bound() {
+        let error =
+            VulkanVideoDeviceError::Probe(vec![VulkanVideoProbeBlocker::NoComputeQueue; 64]);
+        assert_eq!(failure_lines(Stage::Device, &error).len(), 16);
     }
 }

@@ -228,7 +228,7 @@ fn replay_unavailable_copy(
 }
 
 #[tauri::command]
-pub fn save_replay(duration_seconds: u16) -> Result<(), String> {
+pub async fn save_replay(duration_seconds: u16) -> Result<(), String> {
     crate::backend::ensure_write_access()?;
     use redunar_core::ReplayDuration;
     let duration = match duration_seconds {
@@ -242,9 +242,13 @@ pub fn save_replay(duration_seconds: u16) -> Result<(), String> {
         900 => ReplayDuration::Seconds900,
         _ => return Err(format!("Unsupported replay duration: {duration_seconds}s")),
     };
-    crate::backend::service()
-        .save_replay(duration)
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::backend::service()
+            .save_replay(duration)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Replay save preparation stopped".to_owned())?
 }
 
 #[tauri::command]
@@ -322,6 +326,7 @@ pub struct AppPreferencesDto {
     diagnostic_log: bool,
     beta_access: bool,
     diagnostic_log_path: Option<String>,
+    diagnostic_log_status: &'static str,
 }
 
 impl From<redunar_daemon::AppPreferences> for AppPreferencesDto {
@@ -335,6 +340,7 @@ impl From<redunar_daemon::AppPreferences> for AppPreferencesDto {
             diagnostic_log: value.diagnostic_log,
             beta_access: value.beta_access,
             diagnostic_log_path: None,
+            diagnostic_log_status: redunar_daemon::diagnostic_log::status().code(),
         }
     }
 }
@@ -462,7 +468,7 @@ pub fn open_diagnostic_log_folder() -> Result<(), String> {
     let Some(parent) = path.parent() else {
         return Err("The diagnostic log has no folder yet".to_string());
     };
-    if !parent.is_dir() {
+    if !path.is_file() || !parent.is_dir() {
         return Err(
             "No diagnostic log exists yet. Enable logging and restart Redunar first.".to_string(),
         );

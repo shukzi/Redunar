@@ -25,18 +25,25 @@ mod replay_control;
 mod replay_diagnostics;
 mod replay_encoder;
 mod replay_h264;
+mod replay_inventory_cache;
+mod replay_logging;
 mod replay_matroska;
 mod replay_menu;
 mod replay_mp4;
 mod replay_nvidia_diagnostics;
+mod replay_packet_source;
 mod replay_pipeline;
 mod replay_preferences;
 mod replay_ring;
 mod replay_runtime;
 mod replay_spool;
+mod replay_spool_reader;
 mod replay_store;
+#[cfg(test)]
+mod replay_streaming_tests;
 mod replay_vulkan_video;
 mod session_history;
+mod session_ownership;
 pub use crate::session_history::{SessionRecord, SessionTelemetrySample};
 
 /// Current wall-clock timestamp used for local history records.
@@ -124,6 +131,7 @@ pub struct RedunarService {
     replay_control_path: Option<PathBuf>,
     allow_validation_candidate: bool,
     beta_access_at_start: bool,
+    read_only: bool,
     runtime: Arc<ServiceRuntime>,
 }
 
@@ -140,8 +148,11 @@ pub struct ReplayDisplayCapability {
 
 #[derive(Default)]
 struct ServiceRuntime {
+    inventory: std::sync::Mutex<replay_inventory_cache::InventoryCache>,
     game_session: OnceLock<ProductionGameSessionCoordinator>,
     replay_control: OnceLock<replay_control::ReplayControlServer>,
+    // Drop after the coordinator and listener, including all service clones.
+    _ownership: Option<session_ownership::SessionLease>,
 }
 
 impl fmt::Debug for RedunarService {
@@ -157,6 +168,7 @@ impl fmt::Debug for RedunarService {
                 &self.allow_validation_candidate,
             )
             .field("beta_access_at_start", &self.beta_access_at_start)
+            .field("read_only", &self.read_only)
             .field(
                 "game_session_initialized",
                 &self.runtime.game_session.get().is_some(),
@@ -177,6 +189,7 @@ impl Default for RedunarService {
             replay_control_path: replay_control::replay_control_socket_path(),
             allow_validation_candidate: true,
             beta_access_at_start,
+            read_only: false,
             runtime: Arc::new(ServiceRuntime::default()),
         }
     }
@@ -200,6 +213,7 @@ impl RedunarService {
             // readiness from whatever GPU happens to be installed on the host.
             allow_validation_candidate: false,
             beta_access_at_start,
+            read_only: false,
             runtime: Arc::new(ServiceRuntime::default()),
         }
     }
@@ -217,9 +231,31 @@ impl RedunarService {
     }
 
     /// Construct the service used by the Tauri shell.
+    /// # Errors
+    /// Fails closed when process ownership cannot be safely established.
+    pub fn for_tauri() -> std::io::Result<Self> {
+        let lease = session_ownership::SessionLease::acquire(&default_state_directory())?;
+        let mut service = Self::default();
+        // Older installed builds do not take this lock. Retain their live
+        // socket as an additional compatibility guard, never as acquisition.
+        let legacy_owner = service
+            .replay_control_path
+            .as_ref()
+            .is_some_and(|path| std::os::unix::net::UnixStream::connect(path).is_ok());
+        service.read_only = lease.is_none() || legacy_owner;
+        if service.read_only {
+            service.replay_control_path = None;
+        }
+        service.runtime = Arc::new(ServiceRuntime {
+            _ownership: lease,
+            ..ServiceRuntime::default()
+        });
+        Ok(service)
+    }
+
     #[must_use]
-    pub fn for_tauri() -> Self {
-        Self::default()
+    pub const fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// A second Tauri process may show a read-only window while another app
@@ -228,6 +264,7 @@ impl RedunarService {
     pub fn for_tauri_read_only() -> Self {
         Self {
             replay_control_path: None,
+            read_only: true,
             ..Self::default()
         }
     }
@@ -307,10 +344,32 @@ impl RedunarService {
     /// Start the bounded diagnostic log tee when the saved preference enables
     /// it. Silent on failure: diagnostics must never block startup.
     pub fn start_diagnostic_log_if_enabled(&self) {
+        if self.read_only {
+            return;
+        }
         if let Ok(preferences) = app_preferences::load(&self.state_directory)
             && preferences.diagnostic_log
         {
             diagnostic_log::start(&self.state_directory);
+            diagnostic_log::log(&format!(
+                "app event=start beta_active={} debug_active={} architecture={}",
+                self.beta_access_at_start,
+                diagnostic_log::enabled(),
+                std::env::consts::ARCH,
+            ));
+            if self.allow_validation_candidate && diagnostic_log::enabled() {
+                let probe = self.replay_hardware_encoder_probe();
+                diagnostic_log::log(&format!(
+                    "Replay event=render_candidates count={} accessible={} blockers={:?}",
+                    probe.candidates().len(),
+                    probe
+                        .candidates()
+                        .iter()
+                        .filter(|candidate| candidate.is_accessible())
+                        .count(),
+                    probe.blockers(),
+                ));
+            }
         }
     }
 
@@ -682,15 +741,38 @@ impl RedunarService {
             .replay;
         let budget = ReplayBudget::from_settings(settings);
         let directory = self.replay_save_directory()?;
-        let status = ReplayClipStore::inspect(&directory, budget)
-            .map_err(|error| ReplayStorageAccessError::inventory(&error))?;
-        if !status.initialized {
+        if std::fs::symlink_metadata(&directory)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
             return Ok(Vec::new());
         }
-        let clips = ReplayClipStore::open_existing(directory, budget)
-            .and_then(|store| store.inventory())
+        // Validate the private store on every request, even a cache hit.
+        let store = ReplayClipStore::open_existing(&directory, budget)
             .map_err(|error| ReplayStorageAccessError::inventory(&error))?;
-        Ok(self.attach_clip_games(clips))
+        let stamp = replay_inventory_cache::InventoryStamp::read(&directory, &self.state_directory);
+        if let Some(clips) = self
+            .runtime
+            .inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&stamp)
+        {
+            return Ok(clips);
+        }
+        let clips = self.attach_clip_games(
+            store
+                .inventory()
+                .map_err(|error| ReplayStorageAccessError::inventory(&error))?,
+        );
+        if stamp == replay_inventory_cache::InventoryStamp::read(&directory, &self.state_directory)
+        {
+            self.runtime
+                .inventory
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .put(stamp, clips.clone());
+        }
+        Ok(clips)
     }
 
     /// Join each clip with the game that recorded it. The persisted ledger
@@ -1044,9 +1126,7 @@ impl RedunarService {
                 CaptureRuntimeStatus::Available
             )
             && HardwareEncoderProbe::local_with_nvidia_beta(self.beta_access_at_start)
-                .candidates()
-                .iter()
-                .any(HardwareEncoderDeviceCandidate::is_accessible)
+                .validation_allowed()
     }
 
     /// Load the bounded local, launcher-agnostic game catalog.
@@ -1444,12 +1524,31 @@ fn vulkan_replay_backend_with_nvidia_beta(
             allow_nvidia_beta,
         ),
     )?;
+    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Device);
+    if diagnostic_log::enabled() {
+        let candidate = device.candidate();
+        diagnostic_log::log(&format!(
+            "Replay event=device_selected vendor_id={:04x} vulkan_api_raw={} driver_version_raw={} identity=matched",
+            candidate.vendor_id, candidate.api_version, candidate.driver_version,
+        ));
+    }
+    diagnostic_log::log(&format!(
+        "Replay event=encoder_request width={} height={} fps_limit={} variable={} bitrate_mbps={} source_fourcc={}",
+        request.width,
+        request.height,
+        request.frames_per_second,
+        request.variable_rate,
+        request.target_megabits_per_second,
+        frame.drm_fourcc,
+    ));
     let session = startup_result(allow_nvidia_beta, Stage::Session, device.create_session())?;
+    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Session);
     let parameters = startup_result(
         allow_nvidia_beta,
         Stage::Parameters,
         session.create_parameters(),
     )?;
+    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Parameters);
     let encoder = startup_result(
         allow_nvidia_beta,
         Stage::Encoder,
@@ -1462,6 +1561,7 @@ fn vulkan_replay_backend_with_nvidia_beta(
             parameters.create_production_encoder()
         },
     )?;
+    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Encoder);
     VulkanVideoH264Backend::new(encoder)
         .map(|backend| Box::new(backend) as Box<dyn HardwareEncoderBackend>)
         .map_err(|error| {

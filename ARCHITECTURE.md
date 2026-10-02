@@ -25,6 +25,13 @@ the webview never writes hardware, accepts arbitrary playback paths, or decides
 that capture succeeded. A second app cannot take over an occupied live replay
 coordinator. Hidden webviews must not stop native supervision or shortcuts.
 
+Before cleanup or mutable startup, the Tauri service acquires an exclusive
+kernel lock on `backend-owner-v1.lock` in its state directory. All service clones
+retain the lease until their coordinator/listener resources are dropped. The lock
+file is never unlinked; process exit releases it. Contention creates a read-only
+secondary, and acquisition errors fail closed. A live legacy Replay socket also
+withholds writes for compatibility with older builds that do not take the lock.
+
 | Component | Responsibility |
 | --- | --- |
 | `redunar-core` | Typed identities, profiles, measurements, capabilities, and compatibility models |
@@ -186,6 +193,20 @@ provider. Native Steam activation carries both private capture libraries through
 the same bounded one-shot wrapper protocol; the OpenGL library is copied into
 the session directory already shared with the Steam Linux runtime. Flatpak
 Steam remains a separate unsupported sandbox boundary by owner decision.
+
+The capture receiver validates export ordering per selected/provisional process
+and translates each accepted wire sequence into a session-unique internal token.
+`capture_session/replay_release.rs` retains the original reply endpoint and wire
+sequence until safe completion. Helper-to-game handoff cannot reuse another
+process's token or redirect its pending acknowledgements. Readiness follows the
+confirmed producer's accepted source, including a smaller replacement surface.
+Vulkan keeps its wire counter across device recreation. Each Vulkan/OpenGL
+producer startup binds a fresh private reply endpoint without unlinking an
+existing one. Device replacement, library reload, and PID reuse cannot redirect
+an old buffer acknowledgement to a new incarnation. Backend prefixes also keep
+two APIs in the same process separate; endpoint names stay bounded to 23 bytes.
+Session preparation reserves the complete reply path within Linux's 107-byte
+pathname socket limit before creating runtime files or arming capture.
 The launch profile sends either a fixed rate or a distinct `variable` token to
 the same private game capture path. Fixed capture retains deadline-based
 timestamps; Variable mode stamps accepted presents with their monotonic game
@@ -200,6 +221,10 @@ bounded frame data and timeline observations through `session_history.rs`.
 This is not an unlimited per-frame archive; older records may lack hardware data.
 
 The UI plots retained timestamps without smoothing or synthetic endpoints.
+History keeps the existing v1 format and filename. Readers cap the file at
+64 MiB and retain at most the newest 64 records; writes use unique private
+temporary files, atomic replacement, and directory synchronization. Escaping
+decodes the existing writer once so literal backslashes survive a round trip.
 [History calculations](output/tauri-redunar/HISTORY-CALCULATIONS.md) owns axis,
 selection, missing-data, and reconstruction rules. Do not equate a latest
 frame interval with the reciprocal of an average FPS window.
@@ -245,6 +270,17 @@ dispatch continues while the main webview is hidden; an empty binding set is
 valid.
 
 ## Persistence and compatibility
+
+The shared service starts the opt-in logger; one bounded writer owns its private
+files, rotation, and runtime health. Tauri reads that health independently of
+the saved restart-required preference and shuts the logger down after session,
+media, shortcut, and monitor cleanup. Startup executable fingerprinting runs
+once off the UI thread. Replay diagnostic aggregation lives in
+`crates/redunar-daemon/src/replay_logging.rs`; NVIDIA capability events remain
+allowlisted in `replay_nvidia_diagnostics.rs`. The UI never chooses a log path
+or uploads diagnostics. [PERFORMANCE.md](PERFORMANCE.md#desktop-media-and-history)
+owns the queue/file budgets; [REPLAY.md](REPLAY.md#capture-and-encoding) owns
+recording diagnostics and [DESIGN.md](DESIGN.md) owns the settings behavior.
 
 Local state normally lives below `$XDG_STATE_HOME/redunar` (otherwise
 `~/.local/state/redunar`). Catalog and preference loaders validate versions,

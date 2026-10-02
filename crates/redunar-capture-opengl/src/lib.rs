@@ -23,7 +23,7 @@ use std::env;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem;
 use std::os::fd::FromRawFd;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1293,12 +1293,6 @@ impl Producer {
         let Some(reply_path) = reply_path else {
             return;
         };
-        if let Ok(metadata) = std::fs::symlink_metadata(&reply_path)
-            && (!metadata.file_type().is_socket() || std::fs::remove_file(&reply_path).is_err())
-        {
-            launch_diag!(PRODUCER_SOCKET_FAILED, "producer-socket-setup-failed");
-            return;
-        }
         let Ok(socket) = UnixDatagram::bind(&reply_path) else {
             launch_diag!(PRODUCER_SOCKET_FAILED, "producer-socket-setup-failed");
             return;
@@ -1430,11 +1424,10 @@ impl Producer {
 }
 
 fn process_reply_path(base: &Path, process_id: u32) -> Option<std::path::PathBuf> {
-    let parent = base.parent()?;
-    if !base.is_absolute() || process_id == 0 {
+    if process_id == 0 {
         return None;
     }
-    Some(parent.join(format!("r-{process_id}.sock")))
+    redunar_capture::unique_replay_reply_path(base, CaptureApi::OpenGl).ok()
 }
 
 unsafe extern "C" fn finish_producer() {
@@ -1481,13 +1474,20 @@ mod tests {
     #[test]
     fn every_opengl_process_gets_a_private_reply_socket() {
         let base = Path::new("/run/user/1000/redunar/session/capture-reply.sock");
-        assert_eq!(
-            process_reply_path(base, 101),
-            Some(Path::new("/run/user/1000/redunar/session/r-101.sock").to_path_buf())
-        );
-        assert_eq!(
-            process_reply_path(base, 202),
-            Some(Path::new("/run/user/1000/redunar/session/r-202.sock").to_path_buf())
+        let first = process_reply_path(base, 101).unwrap();
+        let recreated = process_reply_path(base, 101).unwrap();
+        let second = process_reply_path(base, 202).unwrap();
+        assert_eq!(first.parent(), base.parent());
+        assert_ne!(first, recreated);
+        assert_ne!(first, second);
+        assert_eq!(first.file_name().unwrap().len(), 23);
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("g-")
         );
         assert!(process_reply_path(base, 0).is_none());
         assert!(process_reply_path(Path::new("capture-reply.sock"), 101).is_none());

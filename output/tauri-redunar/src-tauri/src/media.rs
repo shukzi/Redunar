@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -87,7 +87,11 @@ pub(crate) fn open_inventory_clip(file_name: &str) -> Result<OpenedClip, String>
         file_name,
     )?;
     let before = std::fs::symlink_metadata(&path).map_err(|_| "The clip is unavailable")?;
-    let file = File::open(&path).map_err(|_| "The selected clip could not be opened")?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+        .map_err(|_| "The selected clip could not be opened")?;
     let opened = file
         .metadata()
         .map_err(|_| "Clip metadata is unavailable")?;

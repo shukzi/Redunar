@@ -30,6 +30,8 @@ pub struct VulkanVideoH264Backend {
     encoder: Option<VulkanVideoH264Encoder>,
     stream: ReplayVideoStream,
     failed: bool,
+    shutdown_error: Option<ReplayEncoderError>,
+    output_logged: bool,
     pending_inputs: VecDeque<(u64, u64)>,
 }
 
@@ -56,6 +58,8 @@ impl VulkanVideoH264Backend {
             encoder: Some(encoder),
             stream,
             failed: false,
+            shutdown_error: None,
+            output_logged: false,
             pending_inputs: VecDeque::with_capacity(MAX_HARDWARE_INPUTS_IN_FLIGHT),
         })
     }
@@ -77,9 +81,8 @@ impl VulkanVideoH264Backend {
         error: &VulkanVideoDeviceError,
     ) -> ReplayEncoderError {
         self.failed = true;
-        // Dropping the sole encoder owner waits for its private logical device
-        // and releases imported DMA-BUFs. No fallback backend is selected.
-        drop(self.encoder.take());
+        // Keep the native owner until fallible shutdown proves that all GPU
+        // reads ended. A submission error alone cannot release producer inputs.
         ReplayEncoderError::BackendFailed(format!("Vulkan Video {operation} failed: {error:?}"))
     }
 }
@@ -104,7 +107,6 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
             Ok(frame) => frame,
             Err(error) => {
                 self.failed = true;
-                drop(self.encoder.take());
                 return Err(error);
             }
         };
@@ -112,11 +114,14 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
             Ok(access_units) => access_units,
             Err(error) => return Err(self.fail("frame submission", &error)),
         };
+        if !self.output_logged && !access_units.is_empty() {
+            crate::diagnostic_log::log("Replay event=first_encoded_frame");
+            self.output_logged = true;
+        }
         let completed_inputs = match self.resolve_completed_inputs(&access_units) {
             Ok(completed) => completed,
             Err(error) => {
                 self.failed = true;
-                drop(self.encoder.take());
                 return Err(error);
             }
         };
@@ -124,7 +129,6 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
             .push_back((timestamp_ns, input_sequence));
         if self.pending_inputs.len() > MAX_HARDWARE_INPUTS_IN_FLIGHT {
             self.failed = true;
-            drop(self.encoder.take());
             return Err(ReplayEncoderError::InvalidInputCompletion);
         }
         match encoded_batch(access_units)
@@ -133,7 +137,6 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
             Ok(output) => Ok(output),
             Err(error) => {
                 self.failed = true;
-                drop(self.encoder.take());
                 Err(error)
             }
         }
@@ -148,12 +151,10 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
             Ok(completed) if self.pending_inputs.is_empty() => completed,
             Ok(_) => {
                 self.failed = true;
-                drop(self.encoder.take());
                 return Err(ReplayEncoderError::InvalidInputCompletion);
             }
             Err(error) => {
                 self.failed = true;
-                drop(self.encoder.take());
                 return Err(error);
             }
         };
@@ -163,35 +164,42 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
             Ok(output) => Ok(output),
             Err(error) => {
                 self.failed = true;
-                drop(self.encoder.take());
                 Err(error)
             }
         }
     }
 
     fn shutdown(&mut self) -> Result<(), ReplayEncoderError> {
-        if self.encoder.is_none() {
+        if let Some(error) = self.shutdown_error.as_ref() {
+            return Err(error.clone());
+        }
+        let Some(mut encoder) = self.encoder.take() else {
             return Ok(());
+        };
+        // Failed submissions may leave conversion work pending. Shutdown must
+        // still run even if packet collection fails; Drop cannot attest safety.
+        let drain_result = if self.failed {
+            Ok(())
+        } else {
+            encoder
+                .drain()
+                .map_err(|error| {
+                    ReplayEncoderError::BackendFailed(format!(
+                        "Vulkan Video shutdown drain failed: {error:?}"
+                    ))
+                })
+                .and_then(encoded_batch)
+                .map(|_| ())
+        };
+        let teardown_result = encoder.shutdown().map_err(|error| {
+            ReplayEncoderError::BackendFailed(format!("Vulkan Video teardown failed: {error:?}"))
+        });
+        let result = teardown_result.and(drain_result);
+        if let Err(error) = result.as_ref() {
+            self.failed = true;
+            self.shutdown_error = Some(error.clone());
         }
-        let drain_result = self
-            .encoder
-            .as_mut()
-            .expect("checked Vulkan Video encoder owner")
-            .drain()
-            .map_err(|error| {
-                ReplayEncoderError::BackendFailed(format!(
-                    "Vulkan Video shutdown drain failed: {error:?}"
-                ))
-            })
-            .and_then(encoded_batch);
-        drop(self.encoder.take());
-        match drain_result {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                self.failed = true;
-                Err(error)
-            }
-        }
+        result
     }
 }
 

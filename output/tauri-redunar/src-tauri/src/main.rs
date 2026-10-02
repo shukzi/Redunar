@@ -4,6 +4,7 @@ mod backend;
 mod catalog;
 mod clip_export;
 mod clip_metadata;
+mod diagnostic_startup;
 mod hotkeys;
 mod installation;
 mod launch_plan;
@@ -163,6 +164,10 @@ mod tests {
 }
 
 fn main() {
+    if let Err(message) = backend::initialize() {
+        eprintln!("{message}");
+        return;
+    }
     #[cfg(target_os = "linux")]
     configure_webkit_renderer();
     // GTK 3 otherwise advertises the executable name ("redunar-tauri") as
@@ -174,6 +179,8 @@ fn main() {
     // Opt-in diagnostic logging starts before the first startup message so a
     // shared report includes the whole session from process start.
     backend::service().start_diagnostic_log_if_enabled();
+    redunar_daemon::diagnostic_log::log(concat!("app version=", env!("CARGO_PKG_VERSION")));
+    diagnostic_startup::start();
     // A previous instance that crashed or was killed cannot run its own
     // cleanup: private capture-session sockets and multi-hundred-megabyte
     // playback copies stay behind. Sweep them once, but only while no other
@@ -183,7 +190,9 @@ fn main() {
         let removed = backend::service().sweep_stale_capture_sessions();
         playback::sweep_stale_playback_copies();
         if removed > 0 {
-            eprintln!("Redunar startup: removed {removed} stale capture session directories");
+            redunar_daemon::log_op!(
+                "Redunar startup: removed {removed} stale capture session directories"
+            );
         }
     }
     // Load the saved replay configuration once, outside the polling path.
@@ -219,7 +228,7 @@ fn main() {
             // user's evdev permissions are unavailable, the rest of the app
             // remains usable and the UI reports the monitor as unavailable.
             if let Err(error) = app.state::<hotkeys::ShortcutMonitor>().activate() {
-                eprintln!("Redunar shortcuts unavailable: {error}");
+                redunar_daemon::log_op!("Redunar shortcuts unavailable: {error}");
             }
             Ok(())
         })
@@ -330,6 +339,8 @@ fn main() {
             if let Ok(mut monitor) = app.state::<backend::Monitor>().0.lock() {
                 monitor.shutdown();
             }
+            redunar_daemon::diagnostic_log::log("app event=shutdown_complete");
+            redunar_daemon::diagnostic_log::shutdown();
         }
     });
 }

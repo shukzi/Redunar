@@ -4,7 +4,7 @@ use redunar_capture::{
     ReplaySourceCandidate, ReplaySourceRejection, encode_frame_batch, encode_message,
 };
 use std::env;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -76,7 +76,9 @@ pub(crate) fn device_destroyed() {
         LAST_PRESENT_NS.store(0, Ordering::Relaxed);
         NEXT_SEQUENCE.store(0, Ordering::Relaxed);
         NEXT_REPLAY_COPY_SEQUENCE.store(0, Ordering::Relaxed);
-        crate::replay_copy::reset_export_sequence();
+        // Export leases outlive this device and reply-socket incarnation in
+        // the daemon. Keep their wire identifiers unique for the process so a
+        // delayed old ACK cannot release a new device's equal-numbered buffer.
     }
 }
 
@@ -124,8 +126,8 @@ pub(crate) fn poll_replay_releases() {
     }
 }
 
-pub(crate) fn record_replay_source_candidate(candidate: ReplaySourceCandidate) {
-    record_replay_source_assessment(Ok(candidate));
+pub(crate) fn record_replay_source_candidate(candidate: ReplaySourceCandidate) -> bool {
+    record_replay_source_assessment(Ok(candidate))
 }
 
 pub(crate) fn record_overlay_active() {
@@ -153,18 +155,18 @@ fn record_overlay_status(status: OverlayRuntimeStatus) {
     }
 }
 
-pub(crate) fn record_replay_source_rejected(reason: ReplaySourceRejection) {
-    record_replay_source_assessment(Err(reason));
+pub(crate) fn record_replay_source_rejected(reason: ReplaySourceRejection) -> bool {
+    record_replay_source_assessment(Err(reason))
 }
 
 fn record_replay_source_assessment(
     assessment: Result<ReplaySourceCandidate, ReplaySourceRejection>,
-) {
+) -> bool {
     let Ok(producer) = PRODUCER.try_lock() else {
-        return;
+        return false;
     };
     let (Some(socket), Some(session_id)) = (&producer.socket, producer.session_id) else {
-        return;
+        return false;
     };
     let message = match assessment {
         Ok(candidate) => CaptureMessage::ReplaySourceCandidate {
@@ -174,9 +176,7 @@ fn record_replay_source_assessment(
         Err(reason) => CaptureMessage::ReplaySourceRejected { session_id, reason },
     };
     let mut buffer = [0; MAX_MESSAGE_BYTES];
-    if let Ok(length) = encode_message(&message, &mut buffer) {
-        let _ = socket.send(&buffer[..length]);
-    }
+    encode_message(&message, &mut buffer).is_ok_and(|length| socket.send(&buffer[..length]).is_ok())
 }
 
 pub(crate) fn record_replay_frame_copied(
@@ -223,12 +223,12 @@ pub(crate) fn record_replay_frame_exported(
     modifier: u64,
     timestamp_ns: u64,
     duration_ns: u64,
-) {
+) -> bool {
     let Ok(producer) = PRODUCER.try_lock() else {
-        return;
+        return false;
     };
     let (Some(socket), Some(session_id)) = (&producer.socket, producer.session_id) else {
-        return;
+        return false;
     };
     let message = CaptureMessage::ReplayFrameExported {
         session_id,
@@ -245,8 +245,10 @@ pub(crate) fn record_replay_frame_exported(
     if let Ok(length) = encode_message(&message, &mut buffer)
         && let Ok(descriptor) = i32::try_from(fd_number)
     {
-        let _ = crate::fd_transport::send_datagram_fd(socket, &buffer[..length], descriptor);
+        return crate::fd_transport::send_datagram_fd(socket, &buffer[..length], descriptor)
+            .is_ok();
     }
+    false
 }
 
 impl Producer {
@@ -282,11 +284,6 @@ impl Producer {
         let Some(reply_path) = reply_path else {
             return;
         };
-        if let Ok(metadata) = std::fs::symlink_metadata(&reply_path)
-            && (!metadata.file_type().is_socket() || std::fs::remove_file(&reply_path).is_err())
-        {
-            return;
-        }
         let Ok(socket) = UnixDatagram::bind(&reply_path) else {
             return;
         };
@@ -413,11 +410,10 @@ impl Producer {
 }
 
 fn process_reply_path(base: &Path, process_id: u32) -> Option<std::path::PathBuf> {
-    let parent = base.parent()?;
-    if !base.is_absolute() || process_id == 0 {
+    if process_id == 0 {
         return None;
     }
-    Some(parent.join(format!("r-{process_id}.sock")))
+    redunar_capture::unique_replay_reply_path(base, CaptureApi::Vulkan).ok()
 }
 
 pub(crate) fn monotonic_ns() -> Option<u64> {
@@ -454,13 +450,20 @@ mod tests {
     #[test]
     fn every_process_gets_a_distinct_reply_socket_in_the_private_session() {
         let base = Path::new("/run/user/1000/redunar/session/capture-reply.sock");
-        assert_eq!(
-            process_reply_path(base, 101),
-            Some(Path::new("/run/user/1000/redunar/session/r-101.sock").to_path_buf())
-        );
-        assert_eq!(
-            process_reply_path(base, 202),
-            Some(Path::new("/run/user/1000/redunar/session/r-202.sock").to_path_buf())
+        let first = process_reply_path(base, 101).unwrap();
+        let recreated = process_reply_path(base, 101).unwrap();
+        let second = process_reply_path(base, 202).unwrap();
+        assert_eq!(first.parent(), base.parent());
+        assert_ne!(first, recreated);
+        assert_ne!(first, second);
+        assert_eq!(first.file_name().unwrap().len(), 23);
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("v-")
         );
         assert!(process_reply_path(base, 0).is_none());
         assert!(process_reply_path(Path::new("capture-reply.sock"), 101).is_none());

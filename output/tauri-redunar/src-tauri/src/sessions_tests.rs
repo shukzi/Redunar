@@ -28,7 +28,7 @@ impl Drop for TempRoot {
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "redunar-tauri-session-{}-{}",
+            "rd-tauri-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -558,7 +558,30 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
 
     // The runner isolates HOME/XDG_STATE_HOME so this test exercises the same
     // Tauri service constructor without touching the user's production state.
-    let service = RedunarService::for_tauri();
+    let fixture_state = std::env::var_os("REDUNAR_TAURI_TEST_STATE")
+        .map(PathBuf::from)
+        .expect("use the isolated Replay acceptance runner");
+    let xdg_state = PathBuf::from(std::env::var_os("XDG_STATE_HOME").expect("isolated state"));
+    assert_eq!(fixture_state, xdg_state.join("redunar"));
+    let beta = match std::env::var("REDUNAR_TAURI_BETA_ACCESS").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => panic!("runner must explicitly select Beta access"),
+    };
+    // Mirror enabling the saved switch and restarting: the production service
+    // must latch the value during construction, never via a bypass flag.
+    let preferences = RedunarService::with_state_directory(&fixture_state);
+    preferences.set_beta_access_enabled(beta).unwrap();
+    preferences.set_diagnostic_log_enabled(true).unwrap();
+    drop(preferences);
+    let service = RedunarService::for_tauri().expect("backend ownership");
+    service.start_diagnostic_log_if_enabled();
+    let output_format = match std::env::var("REDUNAR_TAURI_REPLAY_FORMAT").as_deref() {
+        Ok("mp4") => redunar_daemon::ReplayOutputFormat::Mp4,
+        Ok("mkv") | Err(_) => redunar_daemon::ReplayOutputFormat::Matroska,
+        _ => panic!("REDUNAR_TAURI_REPLAY_FORMAT must be mkv or mp4"),
+    };
+    service.set_replay_output_format(output_format).unwrap();
     assert!(
         service.replay_backend_readiness().validation_allowed(),
         "the local host must pass the Replay validation gate"
@@ -588,9 +611,9 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
         "--wsi".into(),
         "xcb".into(),
         "--width".into(),
-        "640".into(),
+        if beta { "1920" } else { "640" }.into(),
         "--height".into(),
-        "240".into(),
+        if beta { "1080" } else { "240" }.into(),
     ]
     .into_iter()
     .collect();
@@ -645,7 +668,23 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
                 .expect("save the validated rolling Replay buffer");
             save_requested = true;
         }
+        if save_requested && status.completed_save_revision > 0 {
+            // Only this generated scene belongs to the fixture. Finish it
+            // once the clip commits rather than depending on display cadence.
+            if let Some(active) = engine.active.as_mut() {
+                let _ = active.child.kill();
+                let _ = active.child.wait();
+            }
+            engine.tick(&MonitorSnapshot::default());
+        }
         std::thread::sleep(Duration::from_millis(20));
+    }
+    if engine.launch_locked() {
+        if let Some(active) = engine.active.as_mut() {
+            let _ = active.child.kill();
+            let _ = active.child.wait();
+        }
+        engine.tick(&MonitorSnapshot::default());
     }
     assert!(
         !engine.launch_locked(),
@@ -664,7 +703,40 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
         .expect("inspect the isolated Replay clip store");
     assert_eq!(clips.len(), 1, "one saved Replay clip should be indexed");
     assert!(clips[0].bytes > 0);
-    assert!(clips[0].file_name.ends_with(".mkv"));
+    let extension = match output_format {
+        redunar_daemon::ReplayOutputFormat::Matroska => ".mkv",
+        redunar_daemon::ReplayOutputFormat::Mp4 => ".mp4",
+    };
+    assert!(clips[0].file_name.ends_with(extension));
+    let clip_path = service
+        .replay_save_directory()
+        .unwrap()
+        .join(&clips[0].file_name);
+    // Decode the real saved output, with a finite subprocess deadline. Merely
+    // producing a non-empty container is not encoder acceptance.
+    let mut decoder = Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-xerror", "-i"])
+        .arg(clip_path)
+        .args(["-map", "0:v:0", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("ffmpeg for decoded output validation");
+    let decode_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = decoder.try_wait().unwrap() {
+            assert!(status.success(), "recorded video did not decode cleanly");
+            break;
+        }
+        if std::time::Instant::now() >= decode_deadline {
+            let _ = decoder.kill();
+            let _ = decoder.wait();
+            panic!("recorded video decode timed out");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    redunar_daemon::diagnostic_log::shutdown();
 }
 
 include!("sessions_overlay_tests.rs");

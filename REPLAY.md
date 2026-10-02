@@ -38,6 +38,13 @@ limits of 1080p or lower and actual encoder capability. Variable mode retains
 bounded extra producer buffers and ring/spool space so faster bursts do not
 shorten the requested history solely through the packet count cap.
 
+When a game reduces presentation rate or mutes its output while unfocused,
+Replay preserves those sparse frames and silence. The recorder cannot recover
+content the game did not produce. Use a save shortcut or the in-game menu to
+keep the game focused; background rendering/audio settings remain an explicit
+game/compositor choice. Fixed capture reanchors the first resumed frame after
+a missed interval instead of stamping it with an expired deadline.
+
 Global settings also owns replay folder, initial save duration, menu dismissal,
 and shortcuts. Changing the folder parent keeps existing files in their old
 location. No user-facing total storage quota exists; saves respect the filesystem
@@ -114,14 +121,26 @@ NVIDIA systems are withheld until Redunar can match the game's render GPU to the
 encoder. An eligible NVIDIA attempt selects only a NVIDIA Vulkan device; the
 ordinary AMD route remains separate. This is an unverified beta path, not an
 NVIDIA recording guarantee.
-When Debug log was enabled before launch, NVIDIA encoder-start failures add
-bounded `NVIDIA Replay` lines with an allowlisted stage and reason code and,
-where available, a numeric Vulkan result. These lines omit game names, paths,
-device names, PCI addresses, UUIDs, and process IDs. The general logger still
-prefixes each line with an absolute timestamp, and other lines may contain
-session details. Ask testers to share only the relevant `NVIDIA Replay` lines
-and remove their timestamp prefix if they prefer. Logs stay local until the
-owner explicitly shares them.
+When Debug log was enabled before launch, NVIDIA encoder startup reports
+allowlisted stages, readiness, bounded capability rejection reasons, exact known
+missing extension names, and numeric Vulkan results. Device UUIDs, PCI addresses,
+paths, and arbitrary driver strings are excluded. NVML readiness and optional
+sensor availability are logged on changes. App startup records the version,
+effective Beta setting, and a bounded asynchronous fingerprint of the running
+executable; failure to read the fingerprint is reported as unavailable.
+
+The local file includes wall-clock milliseconds and monotonic elapsed time.
+Recorder events cover first source/encoded/audio data, resize, recovery, save
+commit, and shutdown. Five-second aggregates report Variable FPS source intervals,
+fixed-cadence source timestamp gaps,
+submission latency/failures, in-flight work, spool drops/slowness, and audio
+packet gaps. Source gaps are observations, not claims about window focus;
+received-minus-encoded counts are not treated as a dropped-frame measurement.
+The general log may still include game names and session details. Legacy
+messages with path-like tokens have their remaining text suppressed; new
+hardware events use typed, non-identifying values. Logs stay local until the
+owner explicitly shares them. See [the first NVIDIA test](TESTING.md#nvidia-beta-first-hardware-test)
+and [logging bounds](PERFORMANCE.md#desktop-media-and-history).
 
 Backpressure drops replay work rather than waiting for an encoder on the game's
 presentation path. Resize starts a fresh codec epoch: completed old-generation
@@ -131,9 +150,44 @@ Context destruction closes producer ownership while transferred DMA-BUF
 duplicates remain valid in the daemon. Audio or recorder
 failure must not stall the game. Recording has no software-video fallback;
 FFmpeg's role in playback/export below is separate from live capture.
-Failed producer-release acknowledgements are retained for retry on later pump
-turns, including turns with no new frame. Audio operational messages report
+Producer-release sends are nonblocking. Failed safe acknowledgements are retained
+for retry on later pump turns, including turns with no new frame. Audio operational messages report
 only the allowlisted backend and transition, without output-device names.
+Exports are ordered within each selected/provisional process. The receiver
+assigns unique internal tokens and keeps the original process reply endpoint
+and wire sequence until encoder completion. A helper-to-game handoff therefore
+accepts lower or overlapping game sequence numbers without releasing unfinished
+helper inputs. Duplicate in-flight exports never trigger an early acknowledgement.
+Only increasing exports count toward producer confirmation, and readiness follows
+the accepted source even when its surface is smaller than the helper's.
+Accepted device-recreation handshakes reset confirmation and local ordering while
+preserving outstanding internal tokens. Vulkan's export counter does not reset
+when its last device is destroyed. Each Vulkan/OpenGL startup binds a fresh
+private reply endpoint, preserving old ACK ownership through library reload,
+PID reuse, and API changes. Copied-frame diagnostics follow only the
+confirmed process after handoff and reset their sequence watermark for that owner.
+An overlong runtime directory fails session preparation with a clear error before
+capture is armed; validation reserves the entire producer reply filename.
+At the shared reply-route cap, capture intake pauses before receiving another FD;
+capacity recovery resumes intake without losing a producer acknowledgement.
+Debug logs record pause/resume transitions without token or endpoint values.
+An active producer's source rejection clears the Replay candidate and recording
+epoch without ending metrics or the overlay. A new eligible announcement and
+export can re-arm after the bounded recovery delay. Rejection survives rapid
+replacement announcements; queued, unsubmitted exports are released separately
+from GPU inputs. Failed encoder teardown stays failed through repeated cleanup,
+withholds unfinished buffer acknowledgements, and blocks re-arming. Vulkan
+retains that failed encoder's native resources until process exit; restart
+Redunar before another attempt. Finite fence waits do not make a stuck driver
+call interruptible.
+Vulkan presentation waits have a separate lifetime from copy fences and DMA-BUF
+leases. Queue/device idle alone does not authorize destroying their semaphores.
+The producer retains two retired source generations plus one paused generation
+until the independent completion proofs exist or the game destroys its device.
+If old swapchain images are never reacquired with a signaled acquisition fence,
+repeated replacements can exhaust that budget and make Replay unavailable for
+the session. This conservative limit needs hardware evidence and future
+presentation-completion support before claiming unrestricted resize recovery.
 If the daemon exits, the game continues presenting; telemetry batches reset
 after failed sends and exported OpenGL slots remain bounded while release
 messages are unavailable. A restarted daemon starts a new capture session,
@@ -153,6 +207,14 @@ commit, no-overwrite behavior, and owned-file deletion prevent arbitrary access.
 An audio track is included only when its packets overlap the saved video window;
 out-of-window audio must not produce an empty audio track.
 Save success is reported only after native completion and inventory revision.
+MP4 frame durations extend to the next video presentation timestamp even when
+that frame starts a new keyframe, time-limited, or byte-limited fragment. Only
+the terminal sample uses its declared packet duration. This preserves the last
+available picture through a source pause without fabricating new frames.
+Save preparation queues an ordered spool snapshot; a full queue rejects the
+request for retry without stopping healthy recording. Assembly streams pinned
+segments into the private output, and shutdown cancels pending assembly. See
+PERFORMANCE for the snapshot deadline and payload bounds.
 Each committed clip name is queued beside the completed-save revision so the
 game-session coordinator can attribute the clip to the recording game. The
 attribution lands in the private bounded ledger
@@ -184,6 +246,8 @@ puts encoded audio into a separate bounded timeline, so hardware video
 encoding and the save-time encoder drain cannot stall audio ingestion. A save
 reads the audio snapshot after draining video output to include the clip tail.
 The audio timeline is cleared when the video epoch resets or Replay stops.
+Audio activity tracks successful packet ingestion time independently of retained
+packet count, so a full rolling buffer continues to report actual progress.
 Because the PCM helpers do not provide timestamps, capture advances in 20 ms
 steps while samples arrive steadily. Audio starts on the same monotonic clock
 as game-frame timestamps. If the PCM timeline drifts more than 250 ms from

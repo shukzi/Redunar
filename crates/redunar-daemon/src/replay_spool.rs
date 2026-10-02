@@ -1,6 +1,6 @@
 use crate::{
-    EncodedReplayPacket, ReplayBudget, ReplayClipStore, ReplayOutputFormat, ReplayRing,
-    ReplayVideoStream, StoredReplayClip,
+    EncodedReplayPacket, ReplayBudget, ReplayClipStore, ReplayOutputFormat, ReplayVideoStream,
+    StoredReplayClip,
 };
 use redunar_core::{ReplayDuration, ReplayFrameRate, ReplayQuality, ReplaySettings};
 use std::collections::VecDeque;
@@ -8,9 +8,9 @@ use std::error::Error;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -79,7 +79,8 @@ pub struct ReplaySpoolSnapshotPlan {
 
 #[derive(Debug)]
 pub struct ReplayAssemblyJob {
-    worker: JoinHandle<Result<StoredReplayClip, ReplaySpoolError>>,
+    worker: Option<JoinHandle<Result<StoredReplayClip, ReplaySpoolError>>>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl ReplayAssemblyJob {
@@ -89,10 +90,22 @@ impl ReplayAssemblyJob {
     /// # Errors
     ///
     /// Returns an assembly, validation, storage, or worker failure.
-    pub fn join(self) -> Result<StoredReplayClip, ReplaySpoolError> {
+    pub fn join(mut self) -> Result<StoredReplayClip, ReplaySpoolError> {
         self.worker
+            .take()
+            .ok_or_else(|| ReplaySpoolError::new("assembly worker already joined"))?
             .join()
             .map_err(|_| ReplaySpoolError::new("Replay clip assembler panicked"))?
+    }
+
+    pub(crate) fn cancellation(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancel)
+    }
+}
+
+impl Drop for ReplayAssemblyJob {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
     }
 }
 
@@ -175,7 +188,13 @@ impl Error for ReplaySpoolSubmitError {}
 
 enum SpoolCommand {
     Packet(EncodedReplayPacket),
+    #[cfg(test)]
     SealSnapshot(mpsc::Sender<Result<(), ReplaySpoolError>>),
+    PrepareSnapshot {
+        requested: ReplayDuration,
+        response: mpsc::Sender<Result<Vec<(ReplaySpoolSegment, File)>, ReplaySpoolError>>,
+        cancel: Arc<AtomicBool>,
+    },
     ResetEpoch,
     Shutdown,
 }
@@ -215,6 +234,8 @@ struct SpoolIndex {
 }
 
 struct SharedStats {
+    // Published only after filesystem work; readers never take the disk index lock.
+    index_snapshot: Mutex<ReplaySpoolStats>,
     phase: AtomicU8,
     queued_packets: AtomicU32,
     dropped_queue_full: AtomicU64,
@@ -262,6 +283,7 @@ impl ReplaySegmentSpool {
         enforce_limits(&directory, &mut index, limits)?;
         let index = Arc::new(Mutex::new(index));
         let shared = Arc::new(SharedStats {
+            index_snapshot: Mutex::new(index_stats(&lock_index(&index))),
             phase: AtomicU8::new(ReplaySpoolPhase::Running.code()),
             queued_packets: AtomicU32::new(0),
             dropped_queue_full: AtomicU64::new(0),
@@ -347,50 +369,20 @@ impl ReplaySegmentSpool {
                 "requested Replay interval exceeds retained history",
             ));
         }
-        let index = lock_index(&self.index);
-        let newest = index
-            .segments
-            .back()
-            .ok_or_else(|| ReplaySpoolError::new("no complete Replay segment is available"))?;
-        let cutoff = newest
-            .end_timestamp_ns
-            .saturating_sub(u64::from(requested.seconds()) * NANOSECONDS_PER_SECOND);
-        let mut segments = index
-            .segments
-            .iter()
-            .rev()
-            .take_while(|segment| segment.end_timestamp_ns > cutoff)
-            .cloned()
-            .collect::<Vec<_>>();
-        segments.reverse();
-        let available_duration_ns = segments.first().map_or(0, |first| {
-            newest
-                .end_timestamp_ns
-                .saturating_sub(first.start_timestamp_ns)
-        });
-        if available_duration_ns < MIN_SAVABLE_HISTORY_NS {
-            return Err(ReplaySpoolError::insufficient_history());
-        }
-        Ok(ReplaySpoolSnapshotPlan {
-            segments,
-            requested_duration: requested,
-            available_duration_ns,
-            generation: index.generation,
-        })
+        plan_snapshot(&lock_index(&self.index), requested)
     }
 
     /// Start assembling one keyframe-safe suffix without pausing recording.
     ///
-    /// The selected segment files are opened before the worker starts. Their
-    /// file descriptors remain valid if rolling retention unlinks the original
-    /// names, which makes the save an immutable snapshot without copying
-    /// encoded payloads on the caller thread. Segment contents are parsed with
-    /// fixed record and payload bounds before being muxed into the clip store.
+    /// The spool worker seals and pins the selected files at the ordered
+    /// command boundary, before processing further packets or retention. Their
+    /// descriptors remain valid after unlink. The assembler waits separately
+    /// and streams validated packets without copying payloads on the caller.
     ///
     /// # Errors
     ///
-    /// Returns an error when no complete history exists, an exact selected
-    /// segment was replaced, or the bounded assembler worker cannot start.
+    /// Returns an error when the request queue is full or the assembler cannot
+    /// start. Snapshot and assembly failures are returned by the job's join.
     pub fn save_async(
         &self,
         requested: ReplayDuration,
@@ -426,34 +418,66 @@ impl ReplaySegmentSpool {
         output_format: ReplayOutputFormat,
         audio: crate::ReplayAudioSnapshot,
     ) -> Result<ReplayAssemblyJob, ReplaySpoolError> {
-        if requested.seconds() > RETAINED_DURATION.seconds() {
-            return Err(ReplaySpoolError::new(
-                "requested Replay interval exceeds retained history",
-            ));
+        let cancel = Arc::new(AtomicBool::new(false));
+        if requested.seconds() > RETAINED_DURATION.seconds()
+            || self.phase() != ReplaySpoolPhase::Running
+        {
+            return Err(ReplaySpoolError::new("Replay snapshot is unavailable"));
         }
-        self.seal_active_tail()?;
-        let plan = self.snapshot_plan(requested)?;
-        let mut opened = Vec::with_capacity(plan.segments.len());
-        for segment in &plan.segments {
-            let file = open_snapshot_segment(segment)?;
-            opened.push((segment.clone(), file));
-        }
+        let (response, receiver) = mpsc::channel();
+        self.sender
+            .try_send(SpoolCommand::PrepareSnapshot {
+                requested,
+                response,
+                cancel: Arc::clone(&cancel),
+            })
+            .map_err(|_| ReplaySpoolError::new("Replay spool is busy; retry saving"))?;
         settings.duration = requested;
+        let job_cancel = Arc::clone(&cancel);
         let worker = thread::Builder::new()
             .name("redunar-replay-assembler".to_owned())
             .spawn(move || {
-                assemble_snapshot(opened, settings, &stream, &store, output_format, &audio)
+                let started = Instant::now();
+                let opened = loop {
+                    if cancel.load(Ordering::Acquire) || started.elapsed() >= Duration::from_secs(5)
+                    {
+                        cancel.store(true, Ordering::Release);
+                        return Err(ReplaySpoolError::new(
+                            "Replay snapshot cancelled or timed out",
+                        ));
+                    }
+                    match receiver.recv_timeout(Duration::from_millis(25)) {
+                        Ok(result) => break result?,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            return Err(ReplaySpoolError::new(
+                                "Replay spool stopped during snapshot",
+                            ));
+                        }
+                    }
+                };
+                assemble_snapshot(
+                    opened,
+                    settings,
+                    &stream,
+                    &store,
+                    output_format,
+                    &audio,
+                    cancel,
+                )
             })
-            .map_err(|error| {
-                ReplaySpoolError::new(format!("could not start Replay clip assembler: {error}"))
-            })?;
-        Ok(ReplayAssemblyJob { worker })
+            .map_err(|_| ReplaySpoolError::new("could not start Replay clip assembler"))?;
+        Ok(ReplayAssemblyJob {
+            worker: Some(worker),
+            cancel: job_cancel,
+        })
     }
 
     /// Commit the currently writable segment after every packet already
     /// accepted by the bounded queue. This control-path wait does not perform
     /// file I/O on the encoder thread; it only establishes an ordered boundary
     /// so a save includes frames immediately preceding the request.
+    #[cfg(test)]
     fn seal_active_tail(&self) -> Result<(), ReplaySpoolError> {
         if self.phase() != ReplaySpoolPhase::Running {
             return Err(ReplaySpoolError::new("Replay spool is not running"));
@@ -474,9 +498,13 @@ impl ReplaySegmentSpool {
 
     #[must_use]
     pub fn stats(&self) -> ReplaySpoolStats {
-        let index = lock_index(&self.index);
+        let index = *self
+            .shared
+            .index_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         ReplaySpoolStats {
-            active_segments: u32::try_from(index.segments.len()).unwrap_or(u32::MAX),
+            active_segments: index.active_segments,
             active_bytes: index.active_bytes,
             buffered_duration_ns: buffered_duration_ns(&self.shared),
             accepted_packets: self.shared.accepted_packets.load(Ordering::Relaxed),
@@ -525,6 +553,41 @@ impl ReplaySegmentSpool {
     }
 }
 
+fn plan_snapshot(
+    index: &SpoolIndex,
+    requested: ReplayDuration,
+) -> Result<ReplaySpoolSnapshotPlan, ReplaySpoolError> {
+    let newest = index
+        .segments
+        .back()
+        .ok_or_else(|| ReplaySpoolError::new("no complete Replay segment is available"))?;
+    let cutoff = newest
+        .end_timestamp_ns
+        .saturating_sub(u64::from(requested.seconds()) * NANOSECONDS_PER_SECOND);
+    let mut segments = index
+        .segments
+        .iter()
+        .rev()
+        .take_while(|segment| segment.end_timestamp_ns > cutoff)
+        .cloned()
+        .collect::<Vec<_>>();
+    segments.reverse();
+    let available_duration_ns = segments.first().map_or(0, |first| {
+        newest
+            .end_timestamp_ns
+            .saturating_sub(first.start_timestamp_ns)
+    });
+    if available_duration_ns < MIN_SAVABLE_HISTORY_NS {
+        return Err(ReplaySpoolError::insufficient_history());
+    }
+    Ok(ReplaySpoolSnapshotPlan {
+        segments,
+        requested_duration: requested,
+        available_duration_ns,
+        generation: index.generation,
+    })
+}
+
 fn open_snapshot_segment(segment: &ReplaySpoolSegment) -> Result<File, ReplaySpoolError> {
     let metadata = fs::symlink_metadata(&segment.path)
         .map_err(|error| io_error("could not inspect Replay snapshot segment", &error))?;
@@ -533,8 +596,24 @@ fn open_snapshot_segment(segment: &ReplaySpoolSegment) -> Result<File, ReplaySpo
             "Replay snapshot segment changed before assembly",
         ));
     }
-    File::open(&segment.path)
-        .map_err(|error| io_error("could not open Replay snapshot segment", &error))
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&segment.path)
+        .map_err(|error| io_error("could not open Replay snapshot segment", &error))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| io_error("could not inspect opened snapshot", &error))?;
+    if !opened.is_file()
+        || opened.ino() != metadata.ino()
+        || opened.dev() != metadata.dev()
+        || opened.len() != segment.bytes
+    {
+        return Err(ReplaySpoolError::new(
+            "Replay snapshot changed while opening",
+        ));
+    }
+    Ok(file)
 }
 
 fn assemble_snapshot(
@@ -544,16 +623,10 @@ fn assemble_snapshot(
     store: &ReplayClipStore,
     output_format: ReplayOutputFormat,
     audio: &crate::ReplayAudioSnapshot,
+    cancel: Arc<AtomicBool>,
 ) -> Result<StoredReplayClip, ReplaySpoolError> {
-    let mut ring = ReplayRing::new(settings);
-    for (segment, mut file) in segments {
-        read_segment_packets(&segment, &mut file, &mut ring)?;
-    }
-    if ring.stats().stored_packets == 0 {
-        return Err(ReplaySpoolError::new(
-            "Replay snapshot contains no decodable encoded packets",
-        ));
-    }
+    let mut packets = crate::replay_spool_reader::SpoolPackets::scan(segments, settings, cancel)
+        .map_err(|error| io_error("could not inspect Replay snapshot packets", &error))?;
     // Clip duration is selected at save time and can be longer than the
     // legacy duration retained in the recording profile. Re-open the owned
     // store with the requested interval's byte budget so long saves are not
@@ -573,74 +646,10 @@ fn assemble_snapshot(
             ))
         })?;
     requested_store
-        .save_with_audio_as(stream, &ring, audio, output_format)
+        .save_streaming(stream, &mut packets, audio, output_format)
         .map_err(|error| {
             ReplaySpoolError::new(format!("could not store assembled Replay: {error}"))
         })
-}
-
-fn read_segment_packets(
-    segment: &ReplaySpoolSegment,
-    file: &mut File,
-    ring: &mut ReplayRing,
-) -> Result<(), ReplaySpoolError> {
-    let mut magic = [0_u8; SEGMENT_MAGIC.len()];
-    file.read_exact(&mut magic)
-        .map_err(|error| io_error("could not read Replay snapshot header", &error))?;
-    if &magic != SEGMENT_MAGIC {
-        return Err(ReplaySpoolError::new(
-            "Replay snapshot segment header is invalid",
-        ));
-    }
-    let mut consumed = u64::try_from(SEGMENT_MAGIC.len()).unwrap_or(u64::MAX);
-    while consumed < segment.bytes {
-        let timestamp_ns = read_u64(file, "timestamp")?;
-        let duration_ns = read_u64(file, "duration")?;
-        let mut keyframe = [0_u8; 1];
-        file.read_exact(&mut keyframe)
-            .map_err(|error| io_error("could not read Replay snapshot keyframe flag", &error))?;
-        if keyframe[0] > 1 {
-            return Err(ReplaySpoolError::new(
-                "Replay snapshot keyframe flag is invalid",
-            ));
-        }
-        let mut length = [0_u8; 4];
-        file.read_exact(&mut length)
-            .map_err(|error| io_error("could not read Replay snapshot packet length", &error))?;
-        let length = u32::from_le_bytes(length);
-        let record_bytes = 8_u64 + 8 + 1 + 4 + u64::from(length);
-        consumed = consumed
-            .checked_add(record_bytes)
-            .ok_or_else(|| ReplaySpoolError::new("Replay snapshot size overflows"))?;
-        if length == 0 || length > 8 * 1024 * 1024 || consumed > segment.bytes {
-            return Err(ReplaySpoolError::new(
-                "Replay snapshot packet length is invalid",
-            ));
-        }
-        let mut bytes = vec![0_u8; usize::try_from(length).unwrap_or(usize::MAX)];
-        file.read_exact(&mut bytes)
-            .map_err(|error| io_error("could not read Replay snapshot packet", &error))?;
-        let packet = EncodedReplayPacket::new(timestamp_ns, duration_ns, keyframe[0] == 1, bytes)
-            .map_err(|error| {
-            ReplaySpoolError::new(format!("invalid Replay snapshot packet: {error}"))
-        })?;
-        ring.push(packet).map_err(|error| {
-            ReplaySpoolError::new(format!("invalid Replay snapshot order: {error}"))
-        })?;
-    }
-    if consumed != segment.bytes {
-        return Err(ReplaySpoolError::new(
-            "Replay snapshot segment is truncated",
-        ));
-    }
-    Ok(())
-}
-
-fn read_u64(file: &mut File, field: &str) -> Result<u64, ReplaySpoolError> {
-    let mut bytes = [0_u8; 8];
-    file.read_exact(&mut bytes)
-        .map_err(|error| io_error(&format!("could not read Replay snapshot {field}"), &error))?;
-    Ok(u64::from_le_bytes(bytes))
 }
 
 impl Drop for ReplaySegmentSpool {
@@ -740,6 +749,7 @@ fn run_worker(
                 }
                 reset_buffered_duration(shared);
             }
+            #[cfg(test)]
             SpoolCommand::SealSnapshot(response) => {
                 let result = current.take().map_or(Ok(()), |writer| {
                     commit_segment(directory, writer, limits, index)
@@ -753,13 +763,61 @@ fn run_worker(
                 }
                 let _ = response.send(result);
             }
+            SpoolCommand::PrepareSnapshot {
+                requested,
+                response,
+                cancel,
+            } => {
+                if cancel.load(Ordering::Acquire) {
+                    continue;
+                }
+                let result = pin_snapshot(&mut current, directory, limits, index, requested);
+                // Snapshot errors do not invalidate a healthy encoder. A failed
+                // commit already removes its own temporary output.
+                let _ = response.send(result);
+            }
             SpoolCommand::Shutdown => break,
         }
+        let published = index_stats(&lock_index(index));
+        *shared
+            .index_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = published;
     }
     if let Some(writer) = current.take() {
         let _ = fs::remove_file(writer.temporary_path);
     }
     shared.queued_packets.store(0, Ordering::Relaxed);
+}
+
+fn index_stats(index: &SpoolIndex) -> ReplaySpoolStats {
+    ReplaySpoolStats {
+        active_segments: u32::try_from(index.segments.len()).unwrap_or(u32::MAX),
+        active_bytes: index.active_bytes,
+        recovered_segments: index.recovered_segments,
+        dropped_awaiting_keyframe: index.dropped_awaiting_keyframe,
+        ..ReplaySpoolStats::default()
+    }
+}
+
+fn pin_snapshot(
+    current: &mut Option<SegmentWriter>,
+    directory: &Path,
+    limits: SpoolLimits,
+    index: &Arc<Mutex<SpoolIndex>>,
+    requested: ReplayDuration,
+) -> Result<Vec<(ReplaySpoolSegment, File)>, ReplaySpoolError> {
+    if let Some(writer) = current.take() {
+        commit_segment(directory, writer, limits, index)?;
+    }
+    let plan = plan_snapshot(&lock_index(index), requested)?;
+    plan.segments
+        .into_iter()
+        .map(|segment| {
+            let file = open_snapshot_segment(&segment)?;
+            Ok((segment, file))
+        })
+        .collect()
 }
 
 fn record_buffered_packet(shared: &SharedStats, packet: &EncodedReplayPacket) {
@@ -1127,7 +1185,11 @@ fn sync_directory(directory: &Path) -> Result<(), ReplaySpoolError> {
 }
 
 fn io_error(context: &str, error: &io::Error) -> ReplaySpoolError {
-    ReplaySpoolError::new(format!("{context}: {error}"))
+    ReplaySpoolError::new(format!(
+        "{context}: kind={:?} errno={:?} detail={error}",
+        error.kind(),
+        error.raw_os_error()
+    ))
 }
 
 #[cfg(test)]
@@ -1138,6 +1200,35 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn save_request_and_cancellation_do_not_wait_for_the_spool_index() {
+        let root = fixture();
+        let configured = settings(ReplayDuration::Seconds30);
+        let mut spool = ReplaySegmentSpool::open(root.join("spool"), configured).unwrap();
+        let store =
+            ReplayClipStore::open(root.join("clips"), ReplayBudget::from_settings(configured))
+                .unwrap();
+        let guard = lock_index(&spool.index);
+        let started = Instant::now();
+        assert_eq!(spool.stats().active_segments, 0);
+        let job = spool
+            .save_async(
+                ReplayDuration::Seconds15,
+                configured,
+                stream(),
+                store.clone(),
+            )
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(200));
+        job.cancellation().store(true, Ordering::Release);
+        assert!(job.join().is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(guard);
+        spool.shutdown();
+        assert!(store.inventory().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn fixture() -> PathBuf {
         let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
@@ -1550,14 +1641,16 @@ mod tests {
         let store =
             ReplayClipStore::open(root.join("clips"), ReplayBudget::from_settings(configured))
                 .expect("open store");
-        let Err(error) = spool.save_async(
-            ReplayDuration::Seconds15,
-            configured,
-            stream(),
-            store.clone(),
-        ) else {
-            panic!("sub-second history must not start a clip save");
-        };
+        let result = spool
+            .save_async(
+                ReplayDuration::Seconds15,
+                configured,
+                stream(),
+                store.clone(),
+            )
+            .expect("snapshot request accepted")
+            .join();
+        let error = result.expect_err("sub-second history must not commit a clip save");
 
         assert!(error.is_insufficient_history());
         assert!(error.to_string().contains("just started"));

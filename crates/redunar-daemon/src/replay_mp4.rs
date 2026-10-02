@@ -10,6 +10,101 @@ const TIMESCALE: u32 = 1_000_000;
 const TRACK_ID: u32 = 1;
 const AUDIO_TRACK_ID: u32 = 2;
 const MAX_FRAGMENT_DURATION_NS: u64 = 30_000_000_000;
+const MAX_STREAM_FRAGMENT_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) fn write_streaming_mp4(
+    destination: &mut impl Write,
+    stream: &ReplayVideoStream,
+    source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+    audio: &ReplayAudioSnapshot,
+) -> Result<u64, Mp4VideoError> {
+    if stream.codec() != ReplayVideoCodec::H264 {
+        return Err(Mp4VideoError::UnsupportedCodec);
+    }
+    let (origin, video_end) = source.window();
+    let audio_packets = audio
+        .packets
+        .iter()
+        .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < video_end)
+        .collect::<Vec<_>>();
+    if audio_packets.iter().any(|packet| {
+        packet.bytes.is_empty() || packet.bytes.len() > 4096 || packet.duration_ns == 0
+    }) {
+        return Err(Mp4VideoError::InvalidPacket);
+    }
+    let mut output = CountingWriter::new(destination);
+    output.write_all(&ftyp()?)?;
+    output.write_all(&if audio_packets.is_empty() {
+        moov(stream)?
+    } else {
+        moov_with_audio(stream, audio)?
+    })?;
+    let mut chunk: Vec<EncodedReplayPacket> = Vec::new();
+    let mut bytes = 0;
+    let mut fragments = 0_u32;
+    while let Some(packet) = source.next_packet()? {
+        if fragments == 0 && chunk.is_empty() && !packet.is_keyframe() {
+            return Err(Mp4VideoError::MissingInitialKeyframe);
+        }
+        stream
+            .validate_packet(packet.bytes())
+            .map_err(|_| Mp4VideoError::InvalidPacket)?;
+        if chunk.first().is_some_and(|first| {
+            packet.is_keyframe()
+                || packet.timestamp_ns().saturating_sub(first.timestamp_ns())
+                    >= MAX_FRAGMENT_DURATION_NS
+                || bytes + packet.bytes().len() > MAX_STREAM_FRAGMENT_BYTES
+        }) {
+            fragments += 1;
+            write_fragment(
+                &mut output,
+                fragments,
+                origin,
+                &chunk.iter().collect::<Vec<_>>(),
+                Some(packet.timestamp_ns()),
+            )?;
+            chunk.clear();
+            bytes = 0;
+        }
+        bytes += packet.bytes().len();
+        chunk.push(packet);
+    }
+    if !chunk.is_empty() {
+        fragments += 1;
+        write_fragment(
+            &mut output,
+            fragments,
+            origin,
+            &chunk.iter().collect::<Vec<_>>(),
+            None,
+        )?;
+    }
+    if fragments == 0 {
+        return Err(Mp4VideoError::EmptyRing);
+    }
+    // Preserve audio gaps rather than collapsing later sound into contiguous
+    // sample durations. Audio already has its independent fixed memory bound.
+    let mut start = 0;
+    while start < audio_packets.len() {
+        source.check_cancel()?;
+        let mut end = start + 1;
+        while end < audio_packets.len() && end - start < 1500 {
+            let previous = audio_packets[end - 1];
+            if audio_packets[end]
+                .timestamp_ns
+                .saturating_sub(previous.timestamp_ns.saturating_add(previous.duration_ns))
+                > 5_000_000
+            {
+                break;
+            }
+            end += 1;
+        }
+        fragments += 1;
+        write_audio_fragment(&mut output, fragments, origin, &audio_packets[start..end])?;
+        start = end;
+    }
+    Ok(output.written)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mp4VideoSummary {
@@ -108,6 +203,7 @@ pub fn write_video_only_mp4(
             fragments.saturating_add(1),
             origin,
             &packets[start..end],
+            packets.get(end).map(|packet| packet.timestamp_ns()),
         )?;
         fragments = fragments.saturating_add(1);
         start = end;
@@ -184,7 +280,13 @@ pub fn write_audio_video_mp4(
             end += 1;
         }
         fragments = fragments.saturating_add(1);
-        write_fragment(&mut output, fragments, origin, &packets[start..end])?;
+        write_fragment(
+            &mut output,
+            fragments,
+            origin,
+            &packets[start..end],
+            packets.get(end).map(|packet| packet.timestamp_ns()),
+        )?;
         start = end;
     }
     // Each fragment has fixed 20 ms sample durations. Start a new fragment
@@ -554,17 +656,12 @@ fn write_fragment(
     sequence: u32,
     origin_ns: u64,
     packets: &[&EncodedReplayPacket],
+    next_timestamp_ns: Option<u64>,
 ) -> Result<(), Mp4VideoError> {
-    let base_time = to_timescale(
-        packets[0]
-            .timestamp_ns()
-            .checked_sub(origin_ns)
-            .ok_or(Mp4VideoError::TimestampOverflow)?,
-    )?;
-    let provisional = moof(sequence, base_time, packets, 0)?;
+    let provisional = moof(sequence, origin_ns, packets, next_timestamp_ns, 0)?;
     let data_offset = i32::try_from(provisional.len().saturating_add(8))
         .map_err(|_| Mp4VideoError::ContainerTooLarge)?;
-    let moof = moof(sequence, base_time, packets, data_offset)?;
+    let moof = moof(sequence, origin_ns, packets, next_timestamp_ns, data_offset)?;
     output.write_all(&moof)?;
     let payload_bytes = packets
         .iter()
@@ -581,10 +678,17 @@ fn write_fragment(
 
 fn moof(
     sequence: u32,
-    base_time: u64,
+    origin_ns: u64,
     packets: &[&EncodedReplayPacket],
+    next_timestamp_ns: Option<u64>,
     data_offset: i32,
 ) -> Result<Vec<u8>, Mp4VideoError> {
+    let base_time = to_timescale(
+        packets[0]
+            .timestamp_ns()
+            .checked_sub(origin_ns)
+            .ok_or(Mp4VideoError::TimestampOverflow)?,
+    )?;
     let mut mfhd = full_box(0, 0);
     put_u32(&mut mfhd, sequence);
     let mut tfhd = full_box(0, 0x0002_0000);
@@ -598,13 +702,33 @@ fn moof(
     );
     trun.extend_from_slice(&data_offset.to_be_bytes());
     for (index, packet) in packets.iter().enumerate() {
-        let duration_ns = packets.get(index + 1).map_or(packet.duration_ns(), |next| {
-            next.timestamp_ns().saturating_sub(packet.timestamp_ns())
-        });
+        // The next fragment's first PTS is also the preceding frame's end.
+        // Rescale absolute clip-relative times before subtraction so fractional
+        // intervals do not lose a microsecond on every sample.
+        let end_ns = packets
+            .get(index + 1)
+            .map(|next| next.timestamp_ns())
+            .or(next_timestamp_ns)
+            .or_else(|| packet.timestamp_ns().checked_add(packet.duration_ns()))
+            .ok_or(Mp4VideoError::TimestampOverflow)?;
+        let start = to_timescale(
+            packet
+                .timestamp_ns()
+                .checked_sub(origin_ns)
+                .ok_or(Mp4VideoError::TimestampOverflow)?,
+        )?;
+        let end = to_timescale(
+            end_ns
+                .checked_sub(origin_ns)
+                .ok_or(Mp4VideoError::TimestampOverflow)?,
+        )?;
+        let duration = end
+            .checked_sub(start)
+            .filter(|duration| *duration > 0)
+            .ok_or(Mp4VideoError::TimestampOverflow)?;
         put_u32(
             &mut trun,
-            u32::try_from(to_timescale(duration_ns)?)
-                .map_err(|_| Mp4VideoError::TimestampOverflow)?,
+            u32::try_from(duration).map_err(|_| Mp4VideoError::TimestampOverflow)?,
         );
         put_u32(
             &mut trun,
@@ -719,6 +843,111 @@ mod tests {
     use redunar_core::ReplaySettings;
     use std::fs;
     use std::process::Command;
+
+    fn sample_durations(bytes: &[u8]) -> Vec<u32> {
+        let start = bytes.windows(4).position(|bytes| bytes == b"trun").unwrap();
+        let count = u32::from_be_bytes(bytes[start + 8..start + 12].try_into().unwrap());
+        (0..count as usize)
+            .map(|index| {
+                u32::from_be_bytes(
+                    bytes[start + 16 + 12 * index..start + 20 + 12 * index]
+                        .try_into()
+                        .unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fragment_boundary_holds_the_frame_until_the_next_presentation() {
+        let packet =
+            EncodedReplayPacket::new(7_000_000_000, 6_000_000, true, vec![0, 0, 0, 2, 0x65, 0x88])
+                .unwrap();
+        let bytes = moof(1, 7_000_000_000, &[&packet], Some(8_000_000_333), 0).unwrap();
+        assert_eq!(sample_durations(&bytes), vec![1_000_000]);
+        let final_fragment = moof(1, 7_000_000_000, &[&packet], None, 0).unwrap();
+        assert_eq!(sample_durations(&final_fragment), vec![6_000]);
+    }
+
+    #[test]
+    fn fractional_intervals_do_not_accumulate_rounding_error() {
+        let packets = (0..3)
+            .map(|index| {
+                EncodedReplayPacket::new(
+                    7_000_000_000 + index * 16_666_667,
+                    16_666_667,
+                    true,
+                    vec![0, 0, 0, 2, 0x65, 0x88],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let bytes = moof(
+            1,
+            7_000_000_000,
+            &packets.iter().collect::<Vec<_>>(),
+            Some(7_050_000_001),
+            0,
+        )
+        .unwrap();
+        assert_eq!(sample_durations(&bytes), vec![16_666, 16_667, 16_667]);
+    }
+
+    #[test]
+    fn streaming_fragment_payload_is_bounded_without_a_keyframe() {
+        use crate::replay_packet_source::ReplayPacketSource;
+        struct Source(u64);
+        impl ReplayPacketSource for Source {
+            fn window(&self) -> (u64, u64) {
+                (0, 3_006_000_000)
+            }
+            fn next_packet(&mut self) -> io::Result<Option<EncodedReplayPacket>> {
+                if self.0 == 4 {
+                    return Ok(None);
+                }
+                let mut bytes = vec![0; 6 * 1024 * 1024];
+                let length = u32::try_from(bytes.len() - 4).unwrap();
+                bytes[..4].copy_from_slice(&length.to_be_bytes());
+                bytes[4] = if self.0 == 0 { 0x65 } else { 0x41 };
+                let packet =
+                    EncodedReplayPacket::new(self.0 * 1_000_000_000, 6_000_000, self.0 == 0, bytes)
+                        .unwrap();
+                self.0 += 1;
+                Ok(Some(packet))
+            }
+        }
+        #[derive(Default)]
+        struct Output {
+            fragments: usize,
+            durations: Vec<u32>,
+        }
+        impl Write for Output {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if bytes.get(4..8) == Some(b"moof".as_slice()) {
+                    self.fragments += 1;
+                    self.durations.extend(sample_durations(bytes));
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = Output::default();
+        let audio = ReplayAudioSnapshot {
+            stream: redunar_capture_audio::OpusStreamDescription::default(),
+            packets: vec![],
+        };
+        write_streaming_mp4(&mut output, &stream(), &mut Source(0), &audio).unwrap();
+        assert_eq!(
+            output.fragments, 4,
+            "four 6 MiB packets cannot share an 8 MiB fragment"
+        );
+        assert_eq!(
+            output.durations,
+            vec![1_000_000, 1_000_000, 1_000_000, 6_000]
+        );
+    }
 
     fn stream() -> ReplayVideoStream {
         ReplayVideoStream::new(

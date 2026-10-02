@@ -34,11 +34,13 @@ pub(crate) const VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO: i32 = 1_0
 pub(crate) const VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO: i32 = 1_000_072_002;
 pub(crate) const VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR: i32 = 1_000_074_002;
 pub(crate) const VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER: i32 = 45;
+pub(crate) const VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER: i32 = 44;
 pub(crate) const VK_STRUCTURE_TYPE_MEMORY_BARRIER: i32 = 46;
 pub(crate) const VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO: i32 = 43;
 pub(crate) const VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2: i32 = 1_000_145_003;
 pub(crate) const VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR: i32 = 1_000_001_000;
 pub(crate) const VK_STRUCTURE_TYPE_PRESENT_INFO_KHR: i32 = 1_000_001_001;
+pub(crate) const VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR: i32 = 1_000_060_010;
 
 pub(crate) const VK_QUEUE_GRAPHICS_BIT: u32 = 0x0000_0001;
 pub(crate) const VK_IMAGE_USAGE_TRANSFER_SRC_BIT: u32 = 0x0000_0001;
@@ -48,6 +50,7 @@ pub(crate) const VK_IMAGE_ASPECT_COLOR_BIT: u32 = 0x0000_0001;
 pub(crate) const VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT: u32 = 0x0000_0400;
 pub(crate) const VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT: u32 = 0x0000_2000;
 pub(crate) const VK_PIPELINE_STAGE_TRANSFER_BIT: u32 = 0x0000_1000;
+pub(crate) const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT: u32 = 0x1;
 pub(crate) const VK_ACCESS_TRANSFER_READ_BIT: u32 = 0x0000_0800;
 pub(crate) const VK_ACCESS_TRANSFER_WRITE_BIT: u32 = 0x0000_1000;
 pub(crate) const VK_ACCESS_HOST_READ_BIT: u32 = 0x0000_2000;
@@ -64,6 +67,7 @@ pub(crate) const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT: u32 = 0x0000_0004;
 pub(crate) const VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT: u32 = 0x0000_0200;
 pub(crate) const VK_SHARING_MODE_EXCLUSIVE: i32 = 0;
 pub(crate) const VK_QUEUE_FAMILY_IGNORED: u32 = u32::MAX;
+pub(crate) const VK_QUEUE_FAMILY_FOREIGN_EXT: u32 = u32::MAX - 2;
 
 pub(crate) const VK_FORMAT_UNDEFINED: i32 = 0;
 pub(crate) const VK_FORMAT_R8G8B8A8_UNORM: i32 = 37;
@@ -175,6 +179,17 @@ pub(crate) struct VkInstanceCreateInfo {
 }
 
 #[repr(C)]
+pub(crate) struct VkApplicationInfo {
+    pub(crate) s_type: i32,
+    pub(crate) p_next: *const c_void,
+    pub(crate) application_name: *const c_char,
+    pub(crate) application_version: u32,
+    pub(crate) engine_name: *const c_char,
+    pub(crate) engine_version: u32,
+    pub(crate) api_version: u32,
+}
+
+#[repr(C)]
 pub(crate) struct VkDeviceQueueCreateInfo {
     pub(crate) s_type: i32,
     pub(crate) p_next: *const c_void,
@@ -280,6 +295,17 @@ pub(crate) struct VkPresentInfoKhr {
     pub(crate) swapchains: *const VkSwapchainKhr,
     pub(crate) image_indices: *const u32,
     pub(crate) results: *mut VkResult,
+}
+
+#[repr(C)]
+pub(crate) struct VkAcquireNextImageInfoKhr {
+    pub(crate) s_type: i32,
+    pub(crate) p_next: *const c_void,
+    pub(crate) swapchain: VkSwapchainKhr,
+    pub(crate) timeout: u64,
+    pub(crate) semaphore: VkSemaphore,
+    pub(crate) fence: VkFence,
+    pub(crate) device_mask: u32,
 }
 
 #[repr(C)]
@@ -778,7 +804,18 @@ pub(crate) type PfnDestroyDevice =
     unsafe extern "system" fn(VkDevice, *const VkAllocationCallbacks);
 pub(crate) type PfnQueuePresentKhr =
     unsafe extern "system" fn(VkQueue, *const VkPresentInfoKhr) -> VkResult;
+pub(crate) type PfnAcquireNextImageKhr = unsafe extern "system" fn(
+    VkDevice,
+    VkSwapchainKhr,
+    u64,
+    VkSemaphore,
+    VkFence,
+    *mut u32,
+) -> VkResult;
+pub(crate) type PfnAcquireNextImage2Khr =
+    unsafe extern "system" fn(VkDevice, *const VkAcquireNextImageInfoKhr, *mut u32) -> VkResult;
 pub(crate) type PfnQueueWaitIdle = unsafe extern "system" fn(VkQueue) -> VkResult;
+pub(crate) type PfnDeviceWaitIdle = unsafe extern "system" fn(VkDevice) -> VkResult;
 pub(crate) type PfnGetPhysicalDeviceQueueFamilyProperties =
     unsafe extern "system" fn(VkPhysicalDevice, *mut u32, *mut VkQueueFamilyProperties);
 pub(crate) type PfnGetPhysicalDeviceMemoryProperties =

@@ -16,6 +16,7 @@ const VK_FENCE_CREATE_SIGNALED_BIT: u32 = 0x1;
 const VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO: i32 = 42;
 const VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET: i32 = 35;
 const VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2: i32 = 1_000_314_002;
+const VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2: i32 = 1_000_314_001;
 const VK_STRUCTURE_TYPE_DEPENDENCY_INFO: i32 = 1_000_314_003;
 const VK_STRUCTURE_TYPE_SUBMIT_INFO_2: i32 = 1_000_314_004;
 const VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO: i32 = 1_000_314_005;
@@ -56,6 +57,7 @@ const VK_PIPELINE_STAGE_2_TRANSFER_BIT: u64 = 0x1000;
 const VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT: u64 = 0x1_0000;
 const VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR: u64 = 0x0800_0000;
 const VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT: u64 = 0x4_0000_0000;
+const VK_ACCESS_2_SHADER_STORAGE_READ_BIT: u64 = 0x2_0000_0000;
 const VK_ACCESS_2_SHADER_SAMPLED_READ_BIT: u64 = 0x1_0000_0000;
 const VK_ACCESS_2_TRANSFER_READ_BIT: u64 = 0x800;
 const VK_ACCESS_2_TRANSFER_WRITE_BIT: u64 = 0x1000;
@@ -63,14 +65,13 @@ const VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR: u64 = 0x20_0000_0000;
 const VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR: u64 = 0x40_0000_0000;
 const VK_DEPENDENCY_BY_REGION_BIT: u32 = 0x1;
 const VK_QUEUE_FAMILY_IGNORED: u32 = u32::MAX;
-const VK_QUEUE_FAMILY_FOREIGN_EXT: u32 = u32::MAX - 1;
+const VK_QUEUE_FAMILY_FOREIGN_EXT: u32 = u32::MAX - 2;
 const VK_VIDEO_CODING_CONTROL_RESET_BIT_KHR: u32 = 0x1;
 const VK_VIDEO_CODING_CONTROL_ENCODE_RATE_CONTROL_BIT_KHR: u32 = 0x2;
 const VK_VIDEO_CODING_CONTROL_ENCODE_QUALITY_LEVEL_BIT_KHR: u32 = 0x4;
 const VK_VIDEO_ENCODE_RATE_CONTROL_MODE_CBR_BIT_KHR: i32 = 0x2;
 const VK_VIDEO_ENCODE_H264_RATE_CONTROL_REGULAR_GOP_BIT_KHR: u32 = 0x2;
 const VK_QUERY_RESULT_64_BIT: u32 = 0x1;
-const VK_QUERY_RESULT_WAIT_BIT: u32 = 0x2;
 const STD_VIDEO_H264_PICTURE_TYPE_P: i32 = 0;
 const STD_VIDEO_H264_PICTURE_TYPE_IDR: i32 = 5;
 const STD_VIDEO_H264_SLICE_TYPE_P: i32 = 0;
@@ -134,6 +135,21 @@ struct VkDependencyInfo {
     buffer_memory_barriers: *const c_void,
     image_memory_barrier_count: u32,
     image_memory_barriers: *const VkImageMemoryBarrier2,
+}
+
+#[repr(C)]
+struct VkBufferMemoryBarrier2 {
+    s_type: i32,
+    p_next: *const c_void,
+    src_stage_mask: u64,
+    src_access_mask: u64,
+    dst_stage_mask: u64,
+    dst_access_mask: u64,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+    buffer: VkBuffer,
+    offset: u64,
+    size: u64,
 }
 
 #[repr(C)]
@@ -469,7 +485,6 @@ type CreateFence = unsafe extern "system" fn(
     *mut VkFence,
 ) -> VkResult;
 type DestroyFence = unsafe extern "system" fn(VkDevice, VkFence, *const VkAllocationCallbacks);
-type DeviceWaitIdle = unsafe extern "system" fn(VkDevice) -> VkResult;
 type WaitForFences = unsafe extern "system" fn(VkDevice, u32, *const VkFence, u32, u64) -> VkResult;
 type ResetFences = unsafe extern "system" fn(VkDevice, u32, *const VkFence) -> VkResult;
 type ResetCommandBuffer = unsafe extern "system" fn(VkCommandBuffer, u32) -> VkResult;
@@ -524,7 +539,6 @@ struct Functions {
     destroy_command_pool: DestroyCommandPool,
     destroy_semaphore: DestroySemaphore,
     destroy_fence: DestroyFence,
-    device_wait_idle: DeviceWaitIdle,
     wait_for_fences: WaitForFences,
     reset_fences: ResetFences,
     reset_command_buffer: ResetCommandBuffer,
@@ -558,6 +572,9 @@ pub(super) struct ExecutionResources {
     pub(super) encode_commands: Vec<usize>,
     pub(super) conversion_complete: Vec<VkSemaphore>,
     pub(super) slot_complete: Vec<VkFence>,
+    compute_complete: Vec<VkFence>,
+    compute_submitted: Vec<bool>,
+    encode_submitted: Vec<bool>,
     active: bool,
 }
 
@@ -586,7 +603,6 @@ impl ExecutionResources {
         let destroy_semaphore = load!("vkDestroySemaphore", DestroySemaphore);
         let create_fence = load!("vkCreateFence", CreateFence);
         let destroy_fence = load!("vkDestroyFence", DestroyFence);
-        let device_wait_idle = load!("vkDeviceWaitIdle", DeviceWaitIdle);
         let wait_for_fences = load!("vkWaitForFences", WaitForFences);
         let reset_fences = load!("vkResetFences", ResetFences);
         let reset_command_buffer = load!("vkResetCommandBuffer", ResetCommandBuffer);
@@ -616,7 +632,6 @@ impl ExecutionResources {
             destroy_command_pool,
             destroy_semaphore,
             destroy_fence,
-            device_wait_idle,
             wait_for_fences,
             reset_fences,
             reset_command_buffer,
@@ -649,6 +664,9 @@ impl ExecutionResources {
             encode_commands: Vec::new(),
             conversion_complete: Vec::new(),
             slot_complete: Vec::new(),
+            compute_complete: Vec::new(),
+            compute_submitted: vec![false; slot_count],
+            encode_submitted: vec![false; slot_count],
             active: true,
         };
         resources.compute_pool = unsafe {
@@ -714,19 +732,61 @@ impl ExecutionResources {
                 return Err(VulkanVideoDeviceError::FenceCreationFailed(result));
             }
             resources.slot_complete.push(fence);
+            let mut compute_fence = 0;
+            let result = unsafe {
+                create_fence(
+                    device,
+                    &raw const fence_info,
+                    ptr::null(),
+                    &raw mut compute_fence,
+                )
+            };
+            if result != VK_SUCCESS || compute_fence == 0 {
+                return Err(VulkanVideoDeviceError::FenceCreationFailed(result));
+            }
+            resources.compute_complete.push(compute_fence);
         }
         Ok(resources)
     }
 
-    pub(super) unsafe fn shutdown(&mut self) {
-        if !self.active {
-            return;
+    fn submitted_fences(&self) -> Vec<VkFence> {
+        self.compute_complete
+            .iter()
+            .zip(&self.compute_submitted)
+            .chain(self.slot_complete.iter().zip(&self.encode_submitted))
+            .filter_map(|(fence, submitted)| submitted.then_some(*fence))
+            .collect()
+    }
+
+    fn wait_submitted(&self, timeout_ns: u64) -> Result<(), VulkanVideoDeviceError> {
+        let fences = self.submitted_fences();
+        if fences.is_empty() {
+            return Ok(());
         }
-        let device = self.device_address as VkDevice;
-        // The daemon owns this logical device exclusively, so device idle does
-        // not stall the game process or another application's Vulkan work.
-        let _ = unsafe { (self.functions.device_wait_idle)(device) };
+        let result = unsafe {
+            (self.functions.wait_for_fences)(
+                self.device_address as VkDevice,
+                u32::try_from(fences.len()).unwrap_or(0),
+                fences.as_ptr(),
+                1,
+                timeout_ns,
+            )
+        };
+        if result != VK_SUCCESS {
+            return Err(VulkanVideoDeviceError::DeviceWaitFailed(result));
+        }
+        Ok(())
+    }
+
+    pub(super) unsafe fn shutdown(&mut self) -> Result<(), VulkanVideoDeviceError> {
+        if !self.active {
+            return Ok(());
+        }
+        // One finite wait covers both queues. In particular, conversion can
+        // remain pending when the following encode submission fails.
+        self.wait_submitted(SLOT_WAIT_TIMEOUT_NS)?;
         self.destroy_owned();
+        Ok(())
     }
 
     fn destroy_owned(&mut self) {
@@ -736,6 +796,9 @@ impl ExecutionResources {
         let device = self.device_address as VkDevice;
         // SAFETY: every handle belongs to this live device.
         unsafe {
+            for fence in self.compute_complete.drain(..) {
+                (self.functions.destroy_fence)(device, fence, ptr::null());
+            }
             for fence in self.slot_complete.drain(..) {
                 (self.functions.destroy_fence)(device, fence, ptr::null());
             }
@@ -777,7 +840,7 @@ pub(super) fn encode_frame(
     }
     let slot_index = encoder.next_slot;
     let mut completed = Vec::new();
-    match collect_slot(encoder, slot_index) {
+    match collect_slot(encoder, slot_index, SLOT_WAIT_TIMEOUT_NS) {
         Ok(Some(access_unit)) => completed.push(access_unit),
         Ok(None) => {}
         Err(error) => {
@@ -845,10 +908,15 @@ pub(super) fn drain(
     if encoder.poisoned {
         return Err(VulkanVideoDeviceError::EncoderPoisoned);
     }
+    // Keep drain to one two-second budget, rather than one timeout per slot.
+    if let Err(error) = encoder.execution.wait_submitted(SLOT_WAIT_TIMEOUT_NS) {
+        encoder.poisoned = true;
+        return Err(error);
+    }
     let mut completed = Vec::new();
     for slot_index in 0..encoder.slots.len() {
         if encoder.pending[slot_index].is_some() {
-            match collect_slot(encoder, slot_index) {
+            match collect_slot(encoder, slot_index, 0) {
                 Ok(Some(access_unit)) => completed.push(access_unit),
                 Ok(None) => {}
                 Err(error) => {
@@ -865,22 +933,25 @@ pub(super) fn drain(
 fn collect_slot(
     encoder: &mut VulkanVideoH264Encoder,
     slot_index: usize,
+    timeout_ns: u64,
 ) -> Result<Option<VulkanVideoEncodedAccessUnit>, VulkanVideoDeviceError> {
     let device = encoder.parameters.session.device.device_address as VkDevice;
-    let fence = encoder.execution.slot_complete[slot_index];
-    // SAFETY: this fence belongs to the selected slot and remains live.
+    if encoder.pending[slot_index].is_none() {
+        return Ok(None);
+    }
+    let fences = [
+        encoder.execution.compute_complete[slot_index],
+        encoder.execution.slot_complete[slot_index],
+    ];
+    // Completion of both fences is required before either can be reset.
     let result = unsafe {
-        (encoder.execution.functions.wait_for_fences)(
-            device,
-            1,
-            &raw const fence,
-            1,
-            SLOT_WAIT_TIMEOUT_NS,
-        )
+        (encoder.execution.functions.wait_for_fences)(device, 2, fences.as_ptr(), 1, timeout_ns)
     };
     if result != VK_SUCCESS {
         return Err(VulkanVideoDeviceError::FenceWaitFailed(result));
     }
+    encoder.execution.compute_submitted[slot_index] = false;
+    encoder.execution.encode_submitted[slot_index] = false;
     let Some(pending) = encoder.pending[slot_index].take() else {
         return Ok(None);
     };
@@ -896,7 +967,7 @@ fn collect_slot(
             mem::size_of::<u64>(),
             (&raw mut bytes_written).cast(),
             mem::size_of::<u64>() as u64,
-            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT,
+            VK_QUERY_RESULT_64_BIT,
         )
     };
     if result != VK_SUCCESS {
@@ -1031,6 +1102,20 @@ fn record_conversion(
         );
     }
     begin_command(encoder.execution.functions, command)?;
+    if let VulkanVideoImportedResource::Buffer { buffer, .. } = &imported.resource {
+        buffer_ownership(
+            encoder.execution.functions,
+            command,
+            *buffer,
+            encoder
+                .parameters
+                .session
+                .device
+                .candidate
+                .compute_queue_family_index,
+            true,
+        );
+    }
     let initialized = encoder.initialized_slots[slot_index];
     let mut initial_barriers = Vec::with_capacity(4);
     if let VulkanVideoImportedResource::DrmImage { image, .. } = &imported.resource {
@@ -1142,6 +1227,20 @@ fn record_conversion(
         );
     }
     let mut copy_barriers = Vec::with_capacity(3);
+    if let VulkanVideoImportedResource::Buffer { buffer, .. } = &imported.resource {
+        buffer_ownership(
+            encoder.execution.functions,
+            command,
+            *buffer,
+            encoder
+                .parameters
+                .session
+                .device
+                .candidate
+                .compute_queue_family_index,
+            false,
+        );
+    }
     if let VulkanVideoImportedResource::DrmImage { image, .. } = &imported.resource {
         let compute_family = encoder
             .parameters
@@ -1389,24 +1488,21 @@ fn record_encode(
         virtual_buffer_size_ms: 1_000,
         initial_virtual_buffer_size_ms: 500,
     };
-    let begin_info = VkVideoBeginCodingInfoKhr {
-        s_type: VK_STRUCTURE_TYPE_VIDEO_BEGIN_CODING_INFO_KHR,
-        // Every encode scope must declare the rate-control state that will be
-        // effective when it executes. This declaration does not change state.
-        p_next: (&raw const rate).cast(),
-        flags: 0,
-        video_session: encoder.parameters.session.session,
-        video_session_parameters: encoder.parameters.parameters,
-        reference_slot_count: u32::from(has_reference),
-        reference_slots: if has_reference {
-            &raw const previous_slot
-        } else {
-            ptr::null()
-        },
-    };
-    // SAFETY: all referenced session, rate-control, and DPB resources remain
-    // live through command recording and execution.
-    unsafe { (encoder.execution.functions.cmd_begin_video_coding)(command, &raw const begin_info) };
+    let current_picture = video_picture_resource(
+        slot.dpb.view,
+        slot.dpb_layer,
+        encoder.request().width,
+        encoder.request().height,
+    );
+    begin_coding_scope(
+        encoder.execution.functions.cmd_begin_video_coding,
+        command,
+        encoder.parameters.session.session,
+        encoder.parameters.parameters,
+        &rate,
+        &current_picture,
+        has_reference.then_some(&previous_slot),
+    );
     if let Some(control_flags) = initial_rate_control_flags(encoder.frame_index) {
         let quality_level = VkVideoEncodeQualityLevelInfoKhr {
             s_type: VK_STRUCTURE_TYPE_VIDEO_ENCODE_QUALITY_LEVEL_INFO_KHR,
@@ -1503,12 +1599,6 @@ fn record_encode(
         std_picture_info: &raw const std_picture,
         generate_prefix_nalu: 0,
     };
-    let current_picture = video_picture_resource(
-        slot.dpb.view,
-        slot.dpb_layer,
-        encoder.request().width,
-        encoder.request().height,
-    );
     let current_std_reference = StdVideoEncodeH264ReferenceInfo {
         flags: 0,
         primary_pic_type: if keyframe {
@@ -1571,72 +1661,139 @@ fn record_encode(
     end_command(encoder.execution.functions, command)
 }
 
+fn begin_coding_scope(
+    begin: CmdBeginVideoCoding,
+    command: VkCommandBuffer,
+    session: u64,
+    parameters: u64,
+    rate: &VkVideoEncodeRateControlInfoKhr,
+    current: &VkVideoPictureResourceInfoKhr,
+    previous: Option<&VkVideoReferenceSlotInfoKhr>,
+) {
+    // VUID 08215 requires the reconstructed picture to be bound for every
+    // encode, including IDR, independently of the active DPB reference list.
+    let mut resources = [
+        VkVideoReferenceSlotInfoKhr {
+            s_type: VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR,
+            p_next: ptr::null(),
+            slot_index: -1,
+            picture_resource: ptr::from_ref(current),
+        },
+        VkVideoReferenceSlotInfoKhr {
+            s_type: VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR,
+            p_next: ptr::null(),
+            slot_index: -1,
+            picture_resource: ptr::null(),
+        },
+    ];
+    if let Some(reference) = previous {
+        resources[1] = VkVideoReferenceSlotInfoKhr {
+            s_type: reference.s_type,
+            p_next: reference.p_next,
+            slot_index: reference.slot_index,
+            picture_resource: reference.picture_resource,
+        };
+    }
+    let info = VkVideoBeginCodingInfoKhr {
+        s_type: VK_STRUCTURE_TYPE_VIDEO_BEGIN_CODING_INFO_KHR,
+        p_next: ptr::from_ref(rate).cast(),
+        flags: 0,
+        video_session: session,
+        video_session_parameters: parameters,
+        reference_slot_count: 1 + u32::from(previous.is_some()),
+        reference_slots: resources.as_ptr(),
+    };
+    unsafe { begin(command, &raw const info) };
+}
+
 fn submit_slot(
-    encoder: &VulkanVideoH264Encoder,
+    encoder: &mut VulkanVideoH264Encoder,
     slot_index: usize,
 ) -> Result<(), VulkanVideoDeviceError> {
-    let device = encoder.parameters.session.device.device_address as VkDevice;
-    let fence = encoder.execution.slot_complete[slot_index];
-    // All fallible import and command recording completed while the slot fence
-    // remained signaled. Reset it only at the submission boundary.
-    let result = unsafe { (encoder.execution.functions.reset_fences)(device, 1, &raw const fence) };
-    if result != VK_SUCCESS {
-        return Err(VulkanVideoDeviceError::FenceResetFailed(result));
+    encoder.execution.submit_pair(
+        encoder.parameters.session.device.compute_queue_address as VkQueue,
+        encoder.parameters.session.device.encode_queue_address as VkQueue,
+        slot_index,
+    )
+}
+
+impl ExecutionResources {
+    fn submit_pair(
+        &mut self,
+        compute_queue: VkQueue,
+        encode_queue: VkQueue,
+        slot_index: usize,
+    ) -> Result<(), VulkanVideoDeviceError> {
+        let device = self.device_address as VkDevice;
+        let fences = [
+            self.compute_complete[slot_index],
+            self.slot_complete[slot_index],
+        ];
+        // All fallible import and command recording completed while the slot fence
+        // remained signaled. Reset it only at the submission boundary.
+        let result = unsafe { (self.functions.reset_fences)(device, 2, fences.as_ptr()) };
+        if result != VK_SUCCESS {
+            return Err(VulkanVideoDeviceError::FenceResetFailed(result));
+        }
+        let compute_command = self.compute_commands[slot_index] as VkCommandBuffer;
+        let encode_command = self.encode_commands[slot_index] as VkCommandBuffer;
+        let semaphore = self.conversion_complete[slot_index];
+        let command_info = command_submit_info(compute_command);
+        let signal_info = semaphore_submit_info(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        let compute_submit = VkSubmitInfo2 {
+            s_type: VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            p_next: ptr::null(),
+            flags: 0,
+            wait_semaphore_info_count: 0,
+            wait_semaphore_infos: ptr::null(),
+            command_buffer_info_count: 1,
+            command_buffer_infos: &raw const command_info,
+            signal_semaphore_info_count: 1,
+            signal_semaphore_infos: &raw const signal_info,
+        };
+        // Retain resources even when a submission returns an error: pending state
+        // is not proven idle by an unsuccessful call.
+        self.compute_submitted[slot_index] = true;
+        // SAFETY: the compute command is executable and the semaphore is idle.
+        let result = unsafe {
+            (self.functions.queue_submit2)(
+                compute_queue,
+                1,
+                &raw const compute_submit,
+                self.compute_complete[slot_index],
+            )
+        };
+        if result != VK_SUCCESS {
+            return Err(VulkanVideoDeviceError::QueueSubmissionFailed(result));
+        }
+        let wait_info = semaphore_submit_info(semaphore, VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR);
+        let encode_command_info = command_submit_info(encode_command);
+        let encode_submit = VkSubmitInfo2 {
+            s_type: VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            p_next: ptr::null(),
+            flags: 0,
+            wait_semaphore_info_count: 1,
+            wait_semaphore_infos: &raw const wait_info,
+            command_buffer_info_count: 1,
+            command_buffer_infos: &raw const encode_command_info,
+            signal_semaphore_info_count: 0,
+            signal_semaphore_infos: ptr::null(),
+        };
+        self.encode_submitted[slot_index] = true;
+        // SAFETY: the encode command waits for conversion and signals the slot fence.
+        let result = unsafe {
+            (self.functions.queue_submit2)(
+                encode_queue,
+                1,
+                &raw const encode_submit,
+                self.slot_complete[slot_index],
+            )
+        };
+        if result != VK_SUCCESS {
+            return Err(VulkanVideoDeviceError::QueueSubmissionFailed(result));
+        }
+        Ok(())
     }
-    let compute_command = encoder.execution.compute_commands[slot_index] as VkCommandBuffer;
-    let encode_command = encoder.execution.encode_commands[slot_index] as VkCommandBuffer;
-    let semaphore = encoder.execution.conversion_complete[slot_index];
-    let command_info = command_submit_info(compute_command);
-    let signal_info = semaphore_submit_info(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    let compute_submit = VkSubmitInfo2 {
-        s_type: VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        p_next: ptr::null(),
-        flags: 0,
-        wait_semaphore_info_count: 0,
-        wait_semaphore_infos: ptr::null(),
-        command_buffer_info_count: 1,
-        command_buffer_infos: &raw const command_info,
-        signal_semaphore_info_count: 1,
-        signal_semaphore_infos: &raw const signal_info,
-    };
-    // SAFETY: the compute command is executable and the semaphore is idle.
-    let result = unsafe {
-        (encoder.execution.functions.queue_submit2)(
-            encoder.parameters.session.device.compute_queue_address as VkQueue,
-            1,
-            &raw const compute_submit,
-            0,
-        )
-    };
-    if result != VK_SUCCESS {
-        return Err(VulkanVideoDeviceError::QueueSubmissionFailed(result));
-    }
-    let wait_info = semaphore_submit_info(semaphore, VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR);
-    let encode_command_info = command_submit_info(encode_command);
-    let encode_submit = VkSubmitInfo2 {
-        s_type: VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        p_next: ptr::null(),
-        flags: 0,
-        wait_semaphore_info_count: 1,
-        wait_semaphore_infos: &raw const wait_info,
-        command_buffer_info_count: 1,
-        command_buffer_infos: &raw const encode_command_info,
-        signal_semaphore_info_count: 0,
-        signal_semaphore_infos: ptr::null(),
-    };
-    // SAFETY: the encode command waits for conversion and signals the slot fence.
-    let result = unsafe {
-        (encoder.execution.functions.queue_submit2)(
-            encoder.parameters.session.device.encode_queue_address as VkQueue,
-            1,
-            &raw const encode_submit,
-            encoder.execution.slot_complete[slot_index],
-        )
-    };
-    if result != VK_SUCCESS {
-        return Err(VulkanVideoDeviceError::QueueSubmissionFailed(result));
-    }
-    Ok(())
 }
 
 fn begin_command(
@@ -1655,6 +1812,68 @@ fn begin_command(
         return Err(VulkanVideoDeviceError::CommandBufferBeginFailed(result));
     }
     Ok(())
+}
+
+fn buffer_ownership(
+    functions: Functions,
+    command: VkCommandBuffer,
+    buffer: VkBuffer,
+    family: u32,
+    acquire: bool,
+) {
+    // GL/GBM input and separate Vulkan instances both cross the FOREIGN
+    // boundary. A host-observed producer fence precedes the acquire; producer
+    // reuse follows the daemon ACK, which is sent only after our release and
+    // both completion fences. DMA-BUF lifetime alone is not cache visibility.
+    let barrier = VkBufferMemoryBarrier2 {
+        s_type: VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+        p_next: ptr::null(),
+        src_stage_mask: if acquire {
+            0
+        } else {
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+        },
+        src_access_mask: if acquire {
+            0
+        } else {
+            VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+        },
+        dst_stage_mask: if acquire {
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+        } else {
+            0
+        },
+        dst_access_mask: if acquire {
+            VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+        } else {
+            0
+        },
+        src_queue_family_index: if acquire {
+            VK_QUEUE_FAMILY_FOREIGN_EXT
+        } else {
+            family
+        },
+        dst_queue_family_index: if acquire {
+            family
+        } else {
+            VK_QUEUE_FAMILY_FOREIGN_EXT
+        },
+        buffer,
+        offset: 0,
+        size: u64::MAX,
+    };
+    let dependency = VkDependencyInfo {
+        s_type: VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        p_next: ptr::null(),
+        dependency_flags: 0,
+        memory_barrier_count: 0,
+        memory_barriers: ptr::null(),
+        buffer_memory_barrier_count: 1,
+        buffer_memory_barriers: (&raw const barrier).cast(),
+        image_memory_barrier_count: 0,
+        image_memory_barriers: ptr::null(),
+    };
+    unsafe { (functions.cmd_pipeline_barrier2)(command, &raw const dependency) };
 }
 
 fn end_command(
@@ -1890,3 +2109,6 @@ unsafe fn allocate_commands(
     }
     Ok(commands.into_iter().map(VkCommandBuffer::addr).collect())
 }
+
+#[cfg(test)]
+mod tests;

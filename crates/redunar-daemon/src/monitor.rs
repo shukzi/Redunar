@@ -140,7 +140,15 @@ impl MonitorHandle {
             config,
             Box::new(move || {
                 LinuxTelemetrySampler::with_nvidia_beta("/proc", "/sys", allow_nvidia_beta)
-                    .map(|sampler| Box::new(sampler) as Box<dyn TelemetrySource>)
+                    .map(|sampler| {
+                        if crate::diagnostic_log::enabled() {
+                            crate::diagnostic_log::log(&format!(
+                                "NVIDIA monitor event=start {:?}",
+                                sampler.nvidia_diagnostics()
+                            ));
+                        }
+                        Box::new(sampler) as Box<dyn TelemetrySource>
+                    })
                     .map_err(|error| error.to_string())
             }),
             Box::<LinuxGameProcessDetector>::default(),
@@ -303,11 +311,29 @@ impl WorkerState {
 
 trait TelemetrySource: Send {
     fn sample(&mut self) -> SystemSnapshot;
+    fn shutdown(&mut self) {}
 }
 
 impl TelemetrySource for LinuxTelemetrySampler {
     fn sample(&mut self) -> SystemSnapshot {
-        Self::sample(self)
+        let before = crate::diagnostic_log::enabled().then(|| self.nvidia_diagnostics().clone());
+        let snapshot = Self::sample(self);
+        if before
+            .as_ref()
+            .is_some_and(|before| before != self.nvidia_diagnostics())
+        {
+            crate::diagnostic_log::log(&format!(
+                "NVIDIA monitor event=change {:?}",
+                self.nvidia_diagnostics()
+            ));
+        }
+        snapshot
+    }
+    fn shutdown(&mut self) {
+        let diagnostics = self.shutdown_nvidia();
+        if crate::diagnostic_log::enabled() {
+            crate::diagnostic_log::log(&format!("NVIDIA monitor event=shutdown {diagnostics:?}"));
+        }
     }
 }
 
@@ -404,6 +430,9 @@ fn monitor_loop(
         if shared.wait_until(next_deadline) {
             break;
         }
+    }
+    if let Some(sampler) = sampler.as_mut() {
+        sampler.shutdown();
     }
 }
 

@@ -10,6 +10,10 @@ use std::{
 };
 
 static READERS: AtomicUsize = AtomicUsize::new(0);
+#[path = "clip_metadata_cache.rs"]
+mod cache;
+static CACHE: std::sync::LazyLock<std::sync::Mutex<cache::Cache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(cache::Cache::default()));
 const OUTPUT_LIMIT: u64 = 16 * 1024;
 struct ReaderPermit;
 impl Drop for ReaderPermit {
@@ -18,7 +22,7 @@ impl Drop for ReaderPermit {
     }
 }
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Clone, Default, Debug, Serialize)]
 pub struct ClipMetadata {
     duration_seconds: Option<f64>,
     width: Option<u64>,
@@ -27,7 +31,10 @@ pub struct ClipMetadata {
 }
 
 #[tauri::command]
-pub async fn clip_metadata(file_name: String) -> Result<ClipMetadata, String> {
+pub async fn clip_metadata(
+    file_name: String,
+    include_fps: Option<bool>,
+) -> Result<ClipMetadata, String> {
     READERS
         .fetch_update(Ordering::Acquire, Ordering::Relaxed, |count| {
             (count < 2).then_some(count + 1)
@@ -36,30 +43,55 @@ pub async fn clip_metadata(file_name: String) -> Result<ClipMetadata, String> {
     let permit = ReaderPermit;
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
-        inspect(&file_name)
+        inspect(&file_name, include_fps.unwrap_or(false))
     })
     .await
     .map_err(|_| "Clip inspection worker stopped")?
 }
 
-fn inspect(file_name: &str) -> Result<ClipMetadata, String> {
+fn inspect(file_name: &str, include_fps: bool) -> Result<ClipMetadata, String> {
     let opened = crate::media::open_inventory_clip(file_name)?;
+    let identity = cache::Identity::new(
+        &opened
+            .file
+            .metadata()
+            .map_err(|_| "Clip details are unavailable")?,
+    );
+    if let Some(value) = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&identity, include_fps)
+    {
+        return Ok(value);
+    }
     let count_file = opened
         .file
         .try_clone()
         .map_err(|_| "Clip details are unavailable")?;
-    let bytes = probe(opened.file, false)?;
-    let mut metadata = parse(&bytes)?;
+    let cached = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&identity, false);
+    let mut metadata = if let Some(value) = cached {
+        value
+    } else {
+        parse(&probe(opened.file, false)?)?
+    };
     // Packet counting scans the clip. Keep the UI responsive for long saves;
     // absent is more honest than FFprobe's nominal H.264 frame rate for VFR.
-    if metadata
-        .duration_seconds
-        .is_some_and(|seconds| seconds <= 120.0)
+    if include_fps
+        && metadata
+            .duration_seconds
+            .is_some_and(|seconds| seconds <= 120.0)
     {
         if let Ok(bytes) = probe(count_file, true) {
             metadata.fps = recorded_fps(&bytes, metadata.duration_seconds);
         }
     }
+    CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .put(identity, metadata.clone(), include_fps);
     Ok(metadata)
 }
 

@@ -285,7 +285,11 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
             }
             HelperEvent::Stopped => {
                 state.state = "Unavailable".into();
-                state.message = Some("Shortcut helper stopped".into());
+                // EOF can race the more useful permission/startup error. Keep
+                // that reason so the owner can correct access and retry.
+                state
+                    .message
+                    .get_or_insert_with(|| "Shortcut helper stopped".into());
             }
             HelperEvent::Rejected(error) => state.message = Some(error),
             HelperEvent::Error(error) => state.message = Some(error),
@@ -402,6 +406,26 @@ fn wake_dispatcher(app: Option<&tauri::AppHandle>, pending: &Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::{parse_helper_event, write_bindings, HelperEvent, ShortcutMonitor};
+
+    #[test]
+    fn helper_exit_preserves_the_activation_failure_reason() {
+        let monitor = ShortcutMonitor::default();
+        let (sender, events) = std::sync::mpsc::sync_channel(32);
+        super::lock(&monitor.state).events = Some(events);
+        sender
+            .send(HelperEvent::Error(
+                "No readable keyboard input device".into(),
+            ))
+            .unwrap();
+        sender.send(HelperEvent::Stopped).unwrap();
+        monitor.dispatch();
+        let status = monitor.status();
+        assert_eq!(status.state, "Unavailable");
+        assert_eq!(
+            status.message.as_deref(),
+            Some("No readable keyboard input device")
+        );
+    }
 
     #[test]
     fn diagnostic_snapshot_is_inactive_without_starting_the_helper() {

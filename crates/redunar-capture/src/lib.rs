@@ -3,6 +3,9 @@
 //! user data; it only identifies one daemon-created session and its timings.
 
 mod overlay;
+mod reply_endpoint;
+
+pub use reply_endpoint::{unique_replay_reply_path, validate_replay_reply_directory};
 
 pub use overlay::{
     OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayHardwareTelemetry, OverlayTelemetryError,

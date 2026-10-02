@@ -90,6 +90,7 @@ impl Error for ReplayPipelineError {
 pub struct ReplayHardwarePipeline {
     settings: ReplaySettings,
     backend: Option<Box<dyn HardwareEncoderBackend>>,
+    shutdown_error: Option<ReplayEncoderError>,
     flow: ReplayPacketFlow,
     store: ReplayClipStore,
     spool: Option<ReplaySegmentSpool>,
@@ -122,6 +123,7 @@ impl ReplayHardwarePipeline {
         Ok(Self {
             settings,
             backend: Some(backend),
+            shutdown_error: None,
             // Long Replay selections are served from the disk spool. Keeping
             // this compatibility window capped prevents a 15-minute shortcut
             // from silently allocating a 15-minute RAM ring.
@@ -205,6 +207,14 @@ impl ReplayHardwarePipeline {
         self.spool.as_ref().map(ReplaySegmentSpool::stats)
     }
 
+    pub(crate) fn in_flight_count(&self) -> usize {
+        self.in_flight_inputs.len()
+    }
+
+    pub(crate) fn teardown_incomplete(&self) -> bool {
+        self.shutdown_error.is_some()
+    }
+
     /// Submit one GPU-exported frame to the hardware-only encoder.
     ///
     /// A keyframe is requested for the first frame and at least every two
@@ -230,6 +240,9 @@ impl ReplayHardwarePipeline {
                 ReplayEncoderError::InvalidInputCompletion,
             ));
         }
+        // Track even an input rejected before encode so fail_closed can
+        // return it after safe teardown, together with earlier GPU reads.
+        self.in_flight_inputs.push_back(input_sequence);
         if frame.width != self.flow.stream().width() || frame.height != self.flow.stream().height()
         {
             self.fail_closed();
@@ -249,7 +262,6 @@ impl ReplayHardwarePipeline {
         let force_keyframe = self
             .last_keyframe_request_timestamp_ns
             .is_none_or(|last| timestamp_ns.saturating_sub(last) >= KEYFRAME_REQUEST_INTERVAL_NS);
-        self.in_flight_inputs.push_back(input_sequence);
         let encoded = match self
             .backend
             .as_mut()
@@ -395,6 +407,9 @@ impl ReplayHardwarePipeline {
             .spool
             .as_ref()
             .ok_or(ReplayPipelineError::InvalidLifecycle)?;
+        // An accepted snapshot may seal the active segment even if assembler
+        // startup fails. The next frame must still resume at a keyframe.
+        self.last_keyframe_request_timestamp_ns = None;
         let job = spool
             .save_async_as(
                 duration,
@@ -489,7 +504,10 @@ impl ReplayHardwarePipeline {
     /// Returns [`ReplayPipelineError`] if backend shutdown reports failure.
     pub fn shutdown(&mut self) -> Result<(), ReplayPipelineError> {
         if matches!(self.phase, ReplayPipelinePhase::Shutdown) {
-            return Ok(());
+            return self
+                .shutdown_error
+                .clone()
+                .map_or(Ok(()), |error| Err(ReplayPipelineError::Encoder(error)));
         }
         let result = self.shutdown_backend();
         self.flow.shutdown();
@@ -568,18 +586,24 @@ impl ReplayHardwarePipeline {
     }
 
     fn shutdown_backend(&mut self) -> Result<(), ReplayEncoderError> {
-        let result = self
-            .backend
-            .take()
-            .map_or(Ok(()), |mut backend| backend.shutdown());
-        if result.is_ok() {
-            while let Some(sequence) = self.in_flight_inputs.pop_front() {
-                if self.completed_inputs.len() < MAX_COMPLETED_INPUTS {
-                    self.completed_inputs.push_back(sequence);
-                }
+        if let Some(error) = self.shutdown_error.as_ref() {
+            return Err(error.clone());
+        }
+        if let Some(backend) = self.backend.as_mut()
+            && let Err(error) = backend.shutdown()
+        {
+            // Preserve both the owner and the failed attestation. Repeated
+            // cleanup must never convert unfinished GPU reads into ACKs.
+            self.shutdown_error = Some(error.clone());
+            return Err(error);
+        }
+        self.backend = None;
+        while let Some(sequence) = self.in_flight_inputs.pop_front() {
+            if self.completed_inputs.len() < MAX_COMPLETED_INPUTS {
+                self.completed_inputs.push_back(sequence);
             }
         }
-        result
+        Ok(())
     }
 }
 
@@ -1183,7 +1207,48 @@ mod tests {
         assert_eq!(pipeline.phase(), ReplayPipelinePhase::Shutdown);
         // A failed device-idle shutdown cannot prove GPU ownership ended.
         assert!(pipeline.take_completed_inputs().is_empty());
-        pipeline.shutdown().expect("second shutdown is idempotent");
+        assert!(pipeline.shutdown().is_err());
+        assert!(pipeline.take_completed_inputs().is_empty());
+        assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn submission_failure_and_repeated_runtime_cleanup_never_ack_unfinished_inputs() {
+        let fixture = Fixture::new();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let backend = FakeBackend {
+            fail_encode: true,
+            ..FakeBackend::shutdown_failing(1_920, 1_080, Arc::clone(&shutdowns))
+        };
+        let pipeline = ReplayHardwarePipeline::new(
+            ReplaySettings::default(),
+            fixture.store(),
+            Box::new(backend),
+        )
+        .expect("pipeline")
+        .with_spool(
+            ReplaySegmentSpool::open(fixture.root.join("spool"), ReplaySettings::default())
+                .expect("spool"),
+        );
+        let runtime = crate::ProductionReplayRuntime::unavailable(ReplaySettings::default());
+        runtime
+            .start_validated_pipeline(
+                ReplaySettings::default(),
+                pipeline,
+                crate::ReplayBackendReadiness::fully_verified(),
+            )
+            .expect("activation");
+        assert!(
+            runtime
+                .submit_frame(1, frame(&fixture.root, 1, 1_920, 1_080))
+                .is_err()
+        );
+        runtime.fail(crate::ReplayFailure::EncoderFailed);
+        assert!(runtime.take_completed_exports().is_empty());
+        assert!(runtime.shutdown().is_err());
+        assert!(runtime.shutdown().is_err());
+        assert!(runtime.take_completed_exports().is_empty());
+        assert_eq!(runtime.status().phase, crate::ReplayPhase::Failed);
         assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
     }
 

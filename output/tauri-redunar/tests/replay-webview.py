@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import threading
 
+from webkit_fixture import configure_webkit
+configure_webkit()
 import gi
 
 gi.require_version("Gtk", "3.0")

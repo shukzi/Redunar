@@ -56,8 +56,19 @@ the cap. The producer selects the largest current viewport as its one active
 presentation source, so an auxiliary window does not double its frame count.
 Diagnostic OpenGL readback tracks at most eight contexts separately from the
 four production pools. The daemon queues at most eight transferred exports and
-tracks at most eight provisional producer paths. Frame telemetry batches at
-most 64 intervals or 250 ms. Presentation takes only try-locks, polls fences
+tracks at most eight provisional producer paths. Source rejection also bounds unsubmitted release
+retry tokens and all outstanding reply routes to 64, with at most eight additional
+invalidated frames held for release only. The same route cap includes queued and
+GPU-owned inputs; it is not 64 per process. At the cap the receiver pauses intake
+before receiving another FD, leaving bounded kernel/producer queues to supply
+backpressure until a route is released. Shutdown still checks its stop flag.
+The worker retries safe releases
+separately from unfinished GPU inputs.
+Vulkan retirement retains two old routes plus one paused route while copy,
+presentation, or external ownership is unproven; an invariant-violation slot
+preserves ownership without aborting the game. See the
+[presentation lifetime limit](REPLAY.md#capture-and-encoding).
+Frame telemetry batches at most 64 intervals or 250 ms. Presentation takes only try-locks, polls fences
 without waiting, and drops Replay work when all six slots or four pools are
 busy. Repeated malformed-source logging is limited to one entry per five
 seconds and omits raw transport errors that could contain private paths.
@@ -67,6 +78,19 @@ limit worst-case queued payload; complete segments are bounded to 32 MiB/four
 seconds and 512 entries. The spool retains a 15-minute horizon, with bitrate-based
 disk limits rather than RAM proportional to the requested duration. Save work
 includes the active tail and preserves the store's 512 MiB filesystem reserve.
+Snapshot requests use the bounded command queue without waiting on the runtime
+thread. The spool worker seals and pins files in command order; an assembler
+waits up to five seconds for that response and supports cancellation. Status
+reads use published counters rather than the filesystem index lock.
+
+Saving indexes packet offsets within the existing packet/byte/duration limits;
+it does not reload the selected clip into an encoded ring. MKV pulls one packet
+at a time; MP4 retains at most an 8 MiB video fragment plus one lookahead packet.
+Individual packets remain capped at 8 MiB; packet conversion can temporarily
+duplicate that one payload. The metadata index follows the bounded frame count,
+and audio retains its separate 32 MiB bound. These are implementation bounds,
+not measured whole-process RSS. Clip muxing does not hold the inventory lock;
+ownership and current inventory are revalidated before atomic commit.
 The authoritative constants live in `replay_spool.rs`, `replay_encoder.rs`, and
 `replay_store.rs` under `crates/redunar-daemon/src/`.
 
@@ -88,9 +112,25 @@ without pausing game presentation.
 
 ## Desktop media and history
 
+Debug logging uses one writer thread and a nonblocking 256-record queue with
+at most 2,048 message bytes per record. Only the writer performs file writes
+and rotation; two private files are limited to 4 MiB each. Queue saturation
+drops messages and reports a count. Repeated consecutive messages within five
+seconds are summarized. Recording diagnostics aggregate every five seconds
+on daemon workers; no file IO or routine log formatting runs in game presents.
+Shutdown allows 500 ms for draining before detaching a filesystem-blocked
+writer, retaining its owned resources until it returns or the process exits.
+Logger failure is exposed in Settings. These are bounds, not a measured
+whole-app performance claim.
+
 - Clip selection keeps the rail mounted and preserves scroll/focus. One frontend
   preparation is in flight, with only the newest pending selection retained.
   Thumbnail workers remain bounded; completions update individual images.
+  Basic metadata and thumbnails precede optional selected-clip packet counting.
+  Native metadata caches at most 64 file identities, including inode, size, and
+  modification/change timestamps. Inventory presentation caches expire after
+  one second and invalidate on directory/attribution/history changes; the store
+  and opened clip descriptors are still validated.
 - Playback preparation runs off the UI thread, with one private cached MP4,
   bounded output, cancellation/cleanup, and a 30-second native deadline.
 - The selected player waits for a decoded frame with a 15-second media deadline.

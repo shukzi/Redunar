@@ -101,6 +101,11 @@ choices. Older fixed 30/120 FPS profiles remain readable and distinct. Variable
 mode follows accepted game presents within hardware and resource limits; it is
 not a display-scanout measurement or a promise to capture every visible frame.
 
+Keyboard shortcuts offers Retry activation when saved bindings exist but the
+helper is inactive or unavailable. Retrying does not save or discard pending
+shortcut/profile drafts. The status message updates with the native activation
+result and retains useful input-access errors after a helper exit.
+
 Settings contains the current application preferences, including Close to tray
 and software updates. Automatic update checks default on; the user can disable
 them or request a manual check. Automatic checks do not install packages.
@@ -125,10 +130,13 @@ diagnostics.
 Settings also owns the optional Debug log switch. It is off by default and
 takes effect on the next Redunar start. When enabled, Redunar records its
 operational messages, timestamped, into a private bounded file in the state
-directory, rotating to at most two bounded files. The settings copy states
+directory, rotating to at most two bounded files. The saved switch is distinct
+from current logger health: Settings reports off, active, restart needed, or
+unavailable, including a write failure after startup. The settings copy states
 plainly that the file can include game names and session details, and offers
 an Open log folder action once the file exists. The log never contains clip
-media. Sharing it is always the owner's explicit choice.
+media. Sharing it is always the owner's explicit choice. Beta access never
+enables logging implicitly. See the [tester workflow](TESTING.md#nvidia-beta-first-hardware-test).
 
 Settings also offers Beta access, off by default. Anyone may opt in to early
 features included in the installed build; it does not fetch code, change the

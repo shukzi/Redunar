@@ -6,16 +6,18 @@ use std::time::SystemTime;
 // The production service owns its runtime. Creating one per command would lose
 // session identity and start competing replay-control servers on every poll.
 static SERVICE: OnceLock<Mutex<Option<RedunarService>>> = OnceLock::new();
+pub fn initialize() -> Result<(), String> {
+    let service = RedunarService::for_tauri().map_err(|_| {
+        "Redunar could not safely acquire backend ownership. Check the state directory permissions."
+    })?;
+    SERVICE
+        .set(Mutex::new(Some(service)))
+        .map_err(|_| "Backend already initialized".to_owned())
+}
 pub fn service() -> RedunarService {
     SERVICE
-        .get_or_init(|| {
-            let service = if other_owner() {
-                RedunarService::for_tauri_read_only()
-            } else {
-                RedunarService::for_tauri()
-            };
-            Mutex::new(Some(service))
-        })
+        .get()
+        .expect("backend ownership acquired before use")
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
@@ -49,6 +51,7 @@ pub struct HardwareStatus {
     ram_total_bytes: Option<u64>,
     available: bool,
     read_only: bool,
+    diagnostic_log_status: &'static str,
 }
 #[tauri::command]
 pub fn daemon_status(monitor: tauri::State<'_, Monitor>) -> Result<HardwareStatus, String> {
@@ -62,6 +65,7 @@ pub fn daemon_status(monitor: tauri::State<'_, Monitor>) -> Result<HardwareStatu
     Ok(HardwareStatus {
         revision: snapshot.revision,
         read_only: other_owner(),
+        diagnostic_log_status: redunar_daemon::diagnostic_log::status().code(),
         cpu_model: hardware.map(|s| s.cpu.model.clone()),
         cpu_temperature_celsius: hardware.and_then(|s| s.cpu.temperature_celsius),
         cpu_utilization_percent: hardware.and_then(|s| s.cpu.utilization_percent),
@@ -189,17 +193,8 @@ pub fn diagnostics_snapshot(
 
 // A second process must remain read-only while the production app owns the
 // control socket, preserving the active session's settings lock.
-static OTHER_OWNER: OnceLock<bool> = OnceLock::new();
 pub fn other_owner() -> bool {
-    *OTHER_OWNER.get_or_init(|| {
-        std::env::var_os("XDG_RUNTIME_DIR")
-            .map(std::path::PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .is_some_and(|path| {
-                std::os::unix::net::UnixStream::connect(path.join("redunar/replay-control-v1.sock"))
-                    .is_ok()
-            })
-    })
+    service().is_read_only()
 }
 pub fn ensure_write_access() -> Result<(), String> {
     if other_owner() {

@@ -1,205 +1,494 @@
 //! Optional, read-only NVIDIA telemetry for the beta hardware monitor.
 //!
-//! NVML is supplied by the installed NVIDIA driver. Resolve its small public
-//! C ABI at runtime so standard Redunar builds do not require that driver.
-//! Failure to load the library or a sensor leaves only that reading absent.
+//! The installed driver's NVML library is loaded once per attempt, never via a
+//! subprocess. Missing readings stay absent. Driver loss invalidates the whole
+//! cached session, with bounded recovery using the original PCI identity.
 
+mod diagnostics;
+mod library;
+
+pub use diagnostics::{
+    NvidiaDiagnostics, NvidiaReadiness, NvidiaSensor, NvidiaSensorStatus, NvidiaSensors, NvmlError,
+    NvmlFailure, NvmlSymbol,
+};
+
+use library::{Device, DriverLoader, Functions, Library, LibraryLoader, Memory, Utilization};
 use redunar_core::GpuSnapshot;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::CString;
 use std::fs;
-use std::mem;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-type Device = *mut c_void;
-type Init = unsafe extern "C" fn() -> i32;
-type Shutdown = unsafe extern "C" fn() -> i32;
-type GetHandle = unsafe extern "C" fn(*const c_char, *mut Device) -> i32;
-type GetName = unsafe extern "C" fn(Device, *mut c_char, u32) -> i32;
-type GetUtilization = unsafe extern "C" fn(Device, *mut Utilization) -> i32;
-type GetTemperature = unsafe extern "C" fn(Device, u32, *mut u32) -> i32;
-type GetClock = unsafe extern "C" fn(Device, u32, *mut u32) -> i32;
-type GetMemory = unsafe extern "C" fn(Device, *mut Memory) -> i32;
-type GetPower = unsafe extern "C" fn(Device, *mut u32) -> i32;
+const RECOVERY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(5),
+    Duration::from_secs(30),
+    Duration::from_mins(2),
+];
 
-#[repr(C)]
-#[derive(Default)]
-struct Utilization {
-    gpu: u32,
-    memory: u32,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct Memory {
-    total: u64,
-    free: u64,
-    used: u64,
-}
-
-/// A single monitor-owned NVML session. Device handles are cached by the
-/// sysfs PCI address rather than by an enumeration index.
+/// One monitor-owned NVML adapter. Startup failure is retained as diagnostics
+/// so the sampler can continue CPU/AMD monitoring and retry without rebuilding
+/// its cached hardware topology. No native handles escape this type.
 pub struct NvidiaNvml {
-    library: *mut c_void,
-    shutdown: Shutdown,
-    devices: Vec<Option<Device>>,
-    get_name: Option<GetName>,
-    get_utilization: Option<GetUtilization>,
-    get_temperature: Option<GetTemperature>,
-    get_clock: Option<GetClock>,
-    get_memory: Option<GetMemory>,
-    get_power: Option<GetPower>,
+    loader: Box<dyn LibraryLoader>,
+    session: Option<Session>,
+    target: Option<Target>,
+    device_name: Option<String>,
+    diagnostics: NvidiaDiagnostics,
+    next_retry: Option<Instant>,
 }
 
-// The monitor moves this privately owned session into exactly one worker;
-// NVML handles are never published to the UI or shared with game code.
+struct Target {
+    index: usize,
+    card: String,
+    address: CString,
+}
+
+struct Session {
+    _library: Box<dyn Library>,
+    functions: Functions,
+    device: Device,
+    initialized: bool,
+}
+
+// The session and device move into one monitor worker. They are never shared
+// with UI/game code, and the library stays loaded through shutdown.
 unsafe impl Send for NvidiaNvml {}
 
 impl std::fmt::Debug for NvidiaNvml {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("NvidiaNvml")
-            .field("device_count", &self.devices.len())
+            .field("diagnostics", &self.diagnostics)
             .finish_non_exhaustive()
     }
 }
 
 impl NvidiaNvml {
-    pub fn open(sys_root: &Path, gpus: &mut [GpuSnapshot]) -> Option<Self> {
-        if !gpus.iter().any(is_nvidia) {
-            return None;
-        }
-        // SAFETY: the library name is a fixed literal and every symbol below
-        // is resolved before use. Missing drivers leave metrics unavailable.
-        let library = unsafe {
-            libc::dlopen(
-                c"libnvidia-ml.so.1".as_ptr(),
-                libc::RTLD_NOW | libc::RTLD_LOCAL,
-            )
-        };
-        if library.is_null() {
-            return None;
-        }
-        // SAFETY: function types match the documented NVML C ABI. Required
-        // functions are checked before initialization and all calls below.
-        let required = || unsafe {
-            Some((
-                symbol::<Init>(library, c"nvmlInit_v2")?,
-                symbol::<Shutdown>(library, c"nvmlShutdown")?,
-                symbol::<GetHandle>(library, c"nvmlDeviceGetHandleByPciBusId_v2")?,
-            ))
-        };
-        let Some((init, shutdown, get_handle)) = required() else {
-            // SAFETY: the handle came from dlopen above and is not retained.
-            unsafe { libc::dlclose(library) };
-            return None;
-        };
-        // SAFETY: initialization precedes every device and sensor call.
-        if unsafe { init() } != 0 {
-            unsafe { libc::dlclose(library) };
-            return None;
-        }
-        let mut session = Self {
-            library,
-            shutdown,
-            devices: Vec::with_capacity(gpus.len()),
-            get_name: unsafe { symbol(library, c"nvmlDeviceGetName") },
-            get_utilization: unsafe { symbol(library, c"nvmlDeviceGetUtilizationRates") },
-            get_temperature: unsafe { symbol(library, c"nvmlDeviceGetTemperature") },
-            get_clock: unsafe { symbol(library, c"nvmlDeviceGetClockInfo") },
-            get_memory: unsafe { symbol(library, c"nvmlDeviceGetMemoryInfo") },
-            get_power: unsafe { symbol(library, c"nvmlDeviceGetPowerUsage") },
-        };
-        for gpu in gpus {
-            let handle = is_nvidia(gpu)
-                .then(|| pci_slot_name(&sys_root.join("class/drm").join(&gpu.card).join("device")))
-                .flatten()
-                .and_then(|address| CString::new(address).ok())
-                .and_then(|address| {
-                    let mut handle = std::ptr::null_mut();
-                    // SAFETY: address is NUL-terminated and handle storage is
-                    // valid for this call; a failed lookup is not retained.
-                    (unsafe { get_handle(address.as_ptr(), &raw mut handle) } == 0
-                        && !handle.is_null())
-                    .then_some(handle)
-                });
-            if let Some(device) = handle
-                && let Some(name) = session.name(device)
-            {
-                gpu.model = name;
-            }
-            session.devices.push(handle);
-        }
-        Some(session)
+    /// Start a monitor adapter, retaining safe failures and bounded recovery.
+    /// The caller must withhold ambiguous render-device attribution first.
+    #[must_use]
+    pub fn open(sys_root: &Path, gpus: &mut [GpuSnapshot]) -> Self {
+        Self::with_loader(sys_root, gpus, Box::new(DriverLoader), Instant::now())
     }
 
-    pub fn sample(&self, index: usize, gpu: &mut GpuSnapshot) {
-        let Some(device) = self.devices.get(index).copied().flatten() else {
+    fn with_loader(
+        sys_root: &Path,
+        gpus: &mut [GpuSnapshot],
+        loader: Box<dyn LibraryLoader>,
+        now: Instant,
+    ) -> Self {
+        for gpu in &mut *gpus {
+            if is_nvidia(gpu) {
+                clear_metrics(gpu);
+            }
+        }
+        let mut adapter = Self {
+            loader,
+            session: None,
+            target: None,
+            device_name: None,
+            diagnostics: NvidiaDiagnostics::withheld(NvidiaReadiness::NoDevice),
+            next_retry: None,
+        };
+        let mut indices = gpus
+            .iter()
+            .enumerate()
+            .filter_map(|(index, gpu)| is_nvidia(gpu).then_some(index));
+        let Some(index) = indices.next() else {
+            return adapter;
+        };
+        if indices.next().is_some() {
+            adapter.diagnostics.readiness = NvidiaReadiness::AmbiguousTopology;
+            return adapter;
+        }
+        let device = sys_root
+            .join("class/drm")
+            .join(&gpus[index].card)
+            .join("device");
+        let Some(address) = pci_slot_name(&device).and_then(|value| CString::new(value).ok())
+        else {
+            adapter.fail(NvmlFailure::PciIdentityUnavailable, now);
+            return adapter;
+        };
+        adapter.target = Some(Target {
+            index,
+            card: gpus[index].card.clone(),
+            address,
+        });
+        adapter.connect(&mut gpus[index], now);
+        adapter
+    }
+
+    #[must_use]
+    pub const fn diagnostics(&self) -> &NvidiaDiagnostics {
+        &self.diagnostics
+    }
+
+    /// Sample cached functions; retries use the cached PCI address after 5,
+    /// 30, and 120 seconds, at most three times across this adapter's lifetime.
+    /// No rediscovery or subprocess runs on a tick.
+    pub fn sample(&mut self, index: usize, gpu: &mut GpuSnapshot) {
+        self.sample_at(index, gpu, Instant::now());
+    }
+
+    fn sample_at(&mut self, index: usize, gpu: &mut GpuSnapshot, now: Instant) {
+        if !is_nvidia(gpu) {
+            return;
+        }
+        clear_metrics(gpu);
+        if self
+            .target
+            .as_ref()
+            .is_none_or(|target| target.index != index || target.card != gpu.card)
+        {
+            return;
+        }
+        if self.session.is_none() && self.next_retry.is_some_and(|deadline| now >= deadline) {
+            self.next_retry = None;
+            self.diagnostics.recovery_attempts += 1;
+            self.connect(gpu, now);
+        }
+        if let Some(name) = &self.device_name {
+            gpu.model.clone_from(name);
+        }
+        let Some(session) = &self.session else {
             return;
         };
-        gpu.utilization_percent = self.get_utilization.and_then(|read| {
-            let mut value = Utilization::default();
-            (unsafe { read(device, &raw mut value) } == 0 && value.gpu <= 100)
-                .then_some(f64::from(value.gpu))
-        });
-        gpu.temperature_celsius = self.get_temperature.and_then(|read| {
-            let mut value = 0;
-            (unsafe { read(device, 0, &raw mut value) } == 0 && value <= 150)
-                .then_some(f64::from(value))
-        });
-        gpu.clock_mhz = self.get_clock.and_then(|read| {
-            let mut value = 0;
-            (unsafe { read(device, 0, &raw mut value) } == 0 && value > 0)
-                .then_some(f64::from(value))
-        });
-        if let Some(read) = self.get_memory {
-            let mut value = Memory::default();
-            if unsafe { read(device, &raw mut value) } == 0 && value.used <= value.total {
-                gpu.vram_used_bytes = Some(value.used);
-                gpu.vram_total_bytes = Some(value.total);
-            } else {
-                gpu.vram_used_bytes = None;
-                gpu.vram_total_bytes = None;
+        match session.sample(gpu, &mut self.diagnostics.sensors) {
+            Ok(()) => self.update_readiness(),
+            Err(failure) => {
+                // Values gathered before device loss cannot describe a valid
+                // sample. Clear them all before releasing the stale handle.
+                clear_metrics(gpu);
+                self.close_session();
+                self.fail(failure, now);
             }
         }
-        gpu.power_watts = self.get_power.and_then(|read| {
-            let mut milliwatts = 0;
-            (unsafe { read(device, &raw mut milliwatts) } == 0)
-                .then_some(f64::from(milliwatts) / 1_000.0)
-        });
     }
 
-    fn name(&self, device: Device) -> Option<String> {
-        let mut buffer = [0_u8; 96];
-        let read = self.get_name?;
-        if unsafe {
-            read(
-                device,
-                buffer.as_mut_ptr().cast(),
-                u32::try_from(buffer.len()).ok()?,
-            )
-        } != 0
-        {
-            return None;
+    fn connect(&mut self, gpu: &mut GpuSnapshot, now: Instant) {
+        clear_metrics(gpu);
+        let Some(target) = &self.target else { return };
+        let result = Session::open(&*self.loader, &target.address);
+        match result {
+            Ok(session) => {
+                self.diagnostics.sensors = session.sensor_status();
+                match session.name() {
+                    Ok(name) => {
+                        if let Some(name) = name {
+                            gpu.model.clone_from(&name);
+                            self.device_name = Some(name);
+                        }
+                        self.diagnostics.sensors.name = if session.functions.get_name.is_some() {
+                            NvidiaSensorStatus::Available
+                        } else {
+                            NvidiaSensorStatus::MissingSymbol
+                        };
+                    }
+                    Err(status) => {
+                        self.diagnostics.sensors.name = status;
+                        if let NvidiaSensorStatus::Unavailable(error) = status
+                            && error.invalidates_session()
+                        {
+                            self.diagnostics.cleanup_failure =
+                                session.close().or(self.diagnostics.cleanup_failure);
+                            self.fail(
+                                NvmlFailure::SensorRead {
+                                    sensor: NvidiaSensor::Name,
+                                    error,
+                                },
+                                now,
+                            );
+                            return;
+                        }
+                    }
+                }
+                self.session = Some(session);
+                self.next_retry = None;
+                self.diagnostics.failure = None;
+                self.diagnostics.retry_delay = None;
+                self.update_readiness();
+            }
+            Err((failure, cleanup_failure)) => {
+                self.diagnostics.cleanup_failure =
+                    cleanup_failure.or(self.diagnostics.cleanup_failure);
+                self.fail(failure, now);
+            }
         }
-        let end = buffer.iter().position(|byte| *byte == 0)?;
-        let name = CStr::from_bytes_with_nul(&buffer[..=end])
-            .ok()?
-            .to_str()
-            .ok()?
-            .trim();
-        (!name.is_empty()).then(|| name.to_owned())
+    }
+
+    fn update_readiness(&mut self) {
+        self.diagnostics.readiness = if self.diagnostics.sensors.degraded() {
+            NvidiaReadiness::Degraded
+        } else {
+            NvidiaReadiness::Ready
+        };
+    }
+
+    fn fail(&mut self, failure: NvmlFailure, now: Instant) {
+        // Once the session is gone, earlier successful readings no longer
+        // indicate current availability. Preserve missing-symbol information,
+        // but invalidate every function whose handle became stale.
+        if let NvmlFailure::SensorRead { error, .. } = failure {
+            let sensors = &mut self.diagnostics.sensors;
+            for status in [
+                &mut sensors.name,
+                &mut sensors.utilization,
+                &mut sensors.temperature,
+                &mut sensors.clock,
+                &mut sensors.memory,
+                &mut sensors.power,
+            ] {
+                if *status != NvidiaSensorStatus::MissingSymbol {
+                    *status = NvidiaSensorStatus::Unavailable(error);
+                }
+            }
+        } else {
+            self.diagnostics.sensors = NvidiaSensors::default();
+        }
+        self.diagnostics.failure = Some(failure);
+        self.next_retry = None;
+        self.diagnostics.retry_delay = None;
+        self.diagnostics.readiness = NvidiaReadiness::Unavailable;
+        if !failure.can_retry() {
+            return;
+        }
+        if let Some(delay) = RECOVERY_DELAYS.get(usize::from(self.diagnostics.recovery_attempts)) {
+            self.next_retry = Some(now + *delay);
+            self.diagnostics.retry_delay = Some(*delay);
+            self.diagnostics.readiness = NvidiaReadiness::Recovering;
+        } else {
+            self.diagnostics.readiness = NvidiaReadiness::RecoveryExhausted;
+        }
+    }
+
+    fn close_session(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.diagnostics.cleanup_failure = session.close().or(self.diagnostics.cleanup_failure);
+        }
+    }
+
+    /// Release the library and cancel recovery. Repeated shutdown is harmless.
+    /// Cleanup failures remain typed diagnostics even though handles are gone.
+    pub fn shutdown(&mut self) {
+        self.next_retry = None;
+        self.close_session();
+        self.diagnostics.retry_delay = None;
+        self.diagnostics.readiness = NvidiaReadiness::Stopped;
+        self.diagnostics.sensors = NvidiaSensors::default();
     }
 }
 
 impl Drop for NvidiaNvml {
     fn drop(&mut self) {
-        // SAFETY: the session was initialized once, owns the library handle,
-        // and no device handles escape it.
-        unsafe {
-            (self.shutdown)();
-            libc::dlclose(self.library);
+        self.close_session();
+    }
+}
+
+impl Session {
+    fn open(
+        loader: &dyn LibraryLoader,
+        address: &CString,
+    ) -> Result<Self, (NvmlFailure, Option<NvmlError>)> {
+        let library = loader.load().map_err(|failure| (failure, None))?;
+        let functions = Functions::load(&*library).map_err(|failure| (failure, None))?;
+        // SAFETY: required symbols are resolved while their library is owned.
+        let result = unsafe { (functions.init)() };
+        if result != 0 {
+            return Err((
+                NvmlFailure::Initialization(NvmlError::from_code(result)),
+                None,
+            ));
+        }
+        let mut session = Self {
+            _library: library,
+            functions,
+            device: std::ptr::null_mut(),
+            initialized: true,
+        };
+        // SAFETY: initialization succeeded, the validated PCI string is
+        // NUL-terminated, and the output handle storage is valid.
+        let result = unsafe { (functions.get_handle)(address.as_ptr(), &raw mut session.device) };
+        let failure = if result != 0 {
+            Some(NvmlFailure::DeviceLookup(NvmlError::from_code(result)))
+        } else if session.device.is_null() {
+            Some(NvmlFailure::DeviceHandleMissing)
+        } else {
+            None
+        };
+        if let Some(failure) = failure {
+            return Err((failure, session.close()));
+        }
+        Ok(session)
+    }
+
+    fn sensor_status(&self) -> NvidiaSensors {
+        fn initial(present: bool) -> NvidiaSensorStatus {
+            if present {
+                NvidiaSensorStatus::NotSampled
+            } else {
+                NvidiaSensorStatus::MissingSymbol
+            }
+        }
+        NvidiaSensors {
+            name: initial(self.functions.get_name.is_some()),
+            utilization: initial(self.functions.get_utilization.is_some()),
+            temperature: initial(self.functions.get_temperature.is_some()),
+            clock: initial(self.functions.get_clock.is_some()),
+            memory: initial(self.functions.get_memory.is_some()),
+            power: initial(self.functions.get_power.is_some()),
         }
     }
+
+    fn name(&self) -> Result<Option<String>, NvidiaSensorStatus> {
+        let Some(read) = self.functions.get_name else {
+            return Ok(None);
+        };
+        let mut buffer = [0_u8; 96];
+        // SAFETY: device belongs to this initialized session; the byte buffer
+        // has exactly the length supplied to NVML.
+        let result = unsafe { read(self.device, buffer.as_mut_ptr().cast(), 96) };
+        if result != 0 {
+            return Err(NvidiaSensorStatus::Unavailable(NvmlError::from_code(
+                result,
+            )));
+        }
+        let end = buffer
+            .iter()
+            .position(|byte| *byte == 0)
+            .ok_or(NvidiaSensorStatus::InvalidValue)?;
+        let name = std::str::from_utf8(&buffer[..end])
+            .map_err(|_| NvidiaSensorStatus::InvalidValue)?
+            .trim();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return Err(NvidiaSensorStatus::InvalidValue);
+        }
+        Ok(Some(name.to_owned()))
+    }
+
+    fn sample(
+        &self,
+        gpu: &mut GpuSnapshot,
+        sensors: &mut NvidiaSensors,
+    ) -> Result<(), NvmlFailure> {
+        // SAFETY: every optional function is checked first; each call uses
+        // an initialized, PCI-matched handle and ABI-sized output storage.
+        gpu.utilization_percent = read_sensor(
+            self.functions.get_utilization,
+            &mut sensors.utilization,
+            NvidiaSensor::Utilization,
+            |read| {
+                let mut value = Utilization::default();
+                let result = unsafe { read(self.device, &raw mut value) };
+                (result, (value.gpu <= 100).then_some(f64::from(value.gpu)))
+            },
+        )?;
+        gpu.temperature_celsius = read_sensor(
+            self.functions.get_temperature,
+            &mut sensors.temperature,
+            NvidiaSensor::Temperature,
+            |read| {
+                let mut value = 0;
+                let result = unsafe { read(self.device, 0, &raw mut value) };
+                (result, (value <= 150).then_some(f64::from(value)))
+            },
+        )?;
+        gpu.clock_mhz = read_sensor(
+            self.functions.get_clock,
+            &mut sensors.clock,
+            NvidiaSensor::Clock,
+            |read| {
+                let mut value = 0;
+                let result = unsafe { read(self.device, 0, &raw mut value) };
+                (result, (value > 0).then_some(f64::from(value)))
+            },
+        )?;
+        let memory = read_sensor(
+            self.functions.get_memory,
+            &mut sensors.memory,
+            NvidiaSensor::Memory,
+            |read| {
+                let mut value = Memory::default();
+                let result = unsafe { read(self.device, &raw mut value) };
+                (
+                    result,
+                    (value.total > 0 && value.used <= value.total && value.free <= value.total)
+                        .then_some(value),
+                )
+            },
+        )?;
+        gpu.vram_used_bytes = memory.map(|value| value.used);
+        gpu.vram_total_bytes = memory.map(|value| value.total);
+        gpu.power_watts = read_sensor(
+            self.functions.get_power,
+            &mut sensors.power,
+            NvidiaSensor::Power,
+            |read| {
+                let mut value = 0;
+                let result = unsafe { read(self.device, &raw mut value) };
+                (result, Some(f64::from(value) / 1_000.0))
+            },
+        )?;
+        Ok(())
+    }
+
+    fn close(mut self) -> Option<NvmlError> {
+        self.release()
+    }
+
+    fn release(&mut self) -> Option<NvmlError> {
+        if !self.initialized {
+            return None;
+        }
+        self.initialized = false;
+        // SAFETY: pair one successful init with one shutdown while loaded,
+        // even when lookup failed or the driver invalidated its handles.
+        let result = unsafe { (self.functions.shutdown)() };
+        (result != 0).then(|| NvmlError::from_code(result))
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+fn read_sensor<F: Copy, T>(
+    function: Option<F>,
+    status: &mut NvidiaSensorStatus,
+    sensor: NvidiaSensor,
+    read: impl FnOnce(F) -> (i32, Option<T>),
+) -> Result<Option<T>, NvmlFailure> {
+    let Some(function) = function else {
+        *status = NvidiaSensorStatus::MissingSymbol;
+        return Ok(None);
+    };
+    let (result, value) = read(function);
+    if result != 0 {
+        let error = NvmlError::from_code(result);
+        *status = NvidiaSensorStatus::Unavailable(error);
+        if error.invalidates_session() {
+            return Err(NvmlFailure::SensorRead { sensor, error });
+        }
+        return Ok(None);
+    }
+    *status = if value.is_some() {
+        NvidiaSensorStatus::Available
+    } else {
+        NvidiaSensorStatus::InvalidValue
+    };
+    Ok(value)
+}
+
+fn clear_metrics(gpu: &mut GpuSnapshot) {
+    gpu.utilization_percent = None;
+    gpu.temperature_celsius = None;
+    gpu.clock_mhz = None;
+    gpu.vram_used_bytes = None;
+    gpu.vram_total_bytes = None;
+    gpu.power_watts = None;
+    gpu.performance_level = None;
 }
 
 #[must_use]
@@ -211,9 +500,13 @@ pub fn is_nvidia(gpu: &GpuSnapshot) -> bool {
 
 fn pci_slot_name(device: &Path) -> Option<String> {
     let uevent = fs::read_to_string(device.join("uevent")).ok()?;
-    let address = uevent
+    let mut addresses = uevent
         .lines()
-        .find_map(|line| line.strip_prefix("PCI_SLOT_NAME="))?;
+        .filter_map(|line| line.strip_prefix("PCI_SLOT_NAME="));
+    let address = addresses.next()?;
+    if addresses.next().is_some() {
+        return None;
+    }
     let bytes = address.as_bytes();
     if bytes.len() != 12
         || !bytes.iter().enumerate().all(|(index, byte)| match index {
@@ -221,18 +514,13 @@ fn pci_slot_name(device: &Path) -> Option<String> {
             10 => *byte == b'.',
             _ => byte.is_ascii_hexdigit(),
         })
+        || u8::from_str_radix(&address[8..10], 16).ok()? > 31
+        || !(b'0'..=b'7').contains(&bytes[11])
     {
         return None;
     }
     Some(address.to_owned())
 }
 
-unsafe fn symbol<T: Copy>(library: *mut c_void, name: &CStr) -> Option<T> {
-    // SAFETY: name is NUL-terminated, the library remains loaded for the
-    // returned pointer's lifetime, and callers specify the exact ABI type.
-    let pointer = unsafe { libc::dlsym(library, name.as_ptr()) };
-    if pointer.is_null() || mem::size_of::<T>() != mem::size_of::<*mut c_void>() {
-        return None;
-    }
-    Some(unsafe { mem::transmute_copy(&pointer) })
-}
+#[cfg(test)]
+mod tests;

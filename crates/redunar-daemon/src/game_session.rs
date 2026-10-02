@@ -173,16 +173,28 @@ struct ReplayExportPump {
 }
 
 pub(crate) trait ReplayFrameSource: Send + Sync {
+    fn take_rejected_exports(&self) -> Vec<u64> {
+        Vec::new()
+    }
+    fn take_source_rejection(&self) -> Option<redunar_capture::ReplaySourceRejection> {
+        None
+    }
     fn wait_next(
         &self,
         timeout: Duration,
     ) -> Result<Option<(u64, DmaBufReplayFrame)>, ReplayRuntimeError>;
     fn release(&self, sequence: u64) -> Result<(), ReplayRuntimeError>;
-    fn drain_and_release(&self);
+    fn drain_and_release(&self) -> Result<(), ReplayRuntimeError>;
     fn wake(&self);
 }
 
 impl ReplayFrameSource for ReplayExportEndpoint {
+    fn take_rejected_exports(&self) -> Vec<u64> {
+        ReplayExportEndpoint::take_rejected_exports(self)
+    }
+    fn take_source_rejection(&self) -> Option<redunar_capture::ReplaySourceRejection> {
+        ReplayExportEndpoint::take_source_rejection(self)
+    }
     fn wait_next(
         &self,
         timeout: Duration,
@@ -190,15 +202,11 @@ impl ReplayFrameSource for ReplayExportEndpoint {
         let Some(export) = ReplayExportEndpoint::wait_next(self, timeout) else {
             return Ok(None);
         };
-        let sequence = export.sequence;
         match ReplayExportEndpoint::import(self, export) {
             Ok(frame) => Ok(Some(frame)),
             Err(error) => {
-                // The queue already removed this export, so the pump cannot
-                // release it. Return producer ownership here; otherwise a
-                // rejected export would strand its staging context forever
-                // and silently stall capture after enough rejects.
-                let _ = ReplayExportEndpoint::release(self, sequence);
+                // The endpoint queues any failed safe ACK for this rejected,
+                // unsubmitted input; the next pump turn retries its original route.
                 Err(ReplayRuntimeError::new(error.to_string()))
             }
         }
@@ -209,8 +217,9 @@ impl ReplayFrameSource for ReplayExportEndpoint {
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))
     }
 
-    fn drain_and_release(&self) {
-        ReplayExportEndpoint::drain_and_release(self);
+    fn drain_and_release(&self) -> Result<(), ReplayRuntimeError> {
+        ReplayExportEndpoint::drain_and_release(self)
+            .map_err(|error| ReplayRuntimeError::new(error.to_string()))
     }
 
     fn wake(&self) {
@@ -887,10 +896,34 @@ fn run_replay_export_pump(
     let mut last_source_error_log: Option<Instant> = None;
     let mut audio_worker = None;
     let mut pending_releases = VecDeque::new();
+    let mut diagnostic_timeline = crate::replay_logging::VideoTimeline::new(settings.frame_rate);
     while !stop.load(Ordering::Acquire) {
+        diagnostic_timeline.tick(&replay);
+        let _ = release_sequences(
+            &mut pending_releases,
+            source.take_rejected_exports(),
+            |sequence| source.release(sequence),
+        );
+        if let Some(reason) = source.take_source_rejection() {
+            crate::diagnostic_log::log(&format!("Replay event=source_rejected reason={reason:?}"));
+            enter_replay_recovery(
+                &replay,
+                &coordinator,
+                ReplayFailure::FrameSourceLost,
+                &mut dimensions,
+                &mut rearm_deadline,
+                &mut rearm_backoff,
+            );
+        }
         // Retry ownership acknowledgements even when a full producer has no
         // free slot to export another frame. Never log sequence identifiers.
         let _ = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
+        // Retained unfinished GPU ownership is terminal. Do not construct
+        // replacement encoders while its producer inputs remain leased.
+        if replay.teardown_incomplete() {
+            stop.store(true, Ordering::Release);
+            break;
+        }
         let frame = match source.wait_next(REPLAY_EXPORT_WAIT) {
             Ok(Some(frame)) => frame,
             Ok(None) => continue,
@@ -929,6 +962,24 @@ fn run_replay_export_pump(
         };
         consecutive_source_errors = 0;
         let (sequence, frame) = frame;
+        if let Some(reason) = source.take_source_rejection() {
+            // A rejection can wake wait_next while this descriptor is popped.
+            // Do not submit it into the epoch that has just been invalidated.
+            let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
+                source.release(completed)
+            });
+            crate::diagnostic_log::log(&format!("Replay event=source_rejected reason={reason:?}"));
+            enter_replay_recovery(
+                &replay,
+                &coordinator,
+                ReplayFailure::FrameSourceLost,
+                &mut dimensions,
+                &mut rearm_deadline,
+                &mut rearm_backoff,
+            );
+            continue;
+        }
+        diagnostic_timeline.source(frame.timestamp_ns, frame.duration_ns);
         if let Some(deadline) = rearm_deadline {
             if Instant::now() < deadline {
                 let _ = release_sequences(&mut pending_releases, [sequence], |completed| {
@@ -1037,17 +1088,14 @@ fn run_replay_export_pump(
             );
             let _ = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
         }
-        if let Err(error) = replay.submit_frame(sequence, frame) {
+        let submitted_at = Instant::now();
+        let submitted = replay.submit_frame(sequence, frame);
+        diagnostic_timeline.submitted(submitted_at.elapsed(), submitted.is_err());
+        if let Err(error) = submitted {
             crate::log_op!("Redunar Replay: hardware frame submission failed: {error}");
-            let completed = replay.take_completed_exports();
-            let release_current = !completed.contains(&sequence);
-            let _ = release_sequences(
-                &mut pending_releases,
-                std::iter::once(sequence)
-                    .filter(|_| release_current)
-                    .chain(completed),
-                |completed| source.release(completed),
-            );
+            // A failed submission can still have queued GPU reads. Only the
+            // pipeline's completion/teardown proof authorizes buffer reuse.
+            let _ = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
             enter_replay_recovery(
                 &replay,
                 &coordinator,
@@ -1073,10 +1121,26 @@ fn run_replay_export_pump(
     if let Some(worker) = audio_worker {
         let _ = worker.join();
     }
+    diagnostic_timeline.finish(&replay);
     let shutdown = replay.shutdown();
     let releases = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
-    source.drain_and_release();
-    shutdown.and(releases)
+    let queued_releases = source.drain_and_release();
+    if releases.is_err() || queued_releases.is_err() {
+        crate::diagnostic_log::log(
+            "Replay event=shutdown_failed stage=export_release reason=acknowledgement_failed",
+        );
+    }
+    let result = shutdown.and(releases).and(queued_releases);
+    crate::diagnostic_log::log(shutdown_event(&result));
+    result
+}
+
+fn shutdown_event(result: &Result<(), ReplayRuntimeError>) -> &'static str {
+    if result.is_ok() {
+        "Replay event=shutdown_complete"
+    } else {
+        "Replay event=shutdown_failed"
+    }
 }
 
 /// Publish one recoverable recorder failure and schedule a re-arm attempt.
@@ -1090,6 +1154,10 @@ fn enter_replay_recovery(
     rearm_deadline: &mut Option<Instant>,
     rearm_backoff: &mut Duration,
 ) {
+    crate::diagnostic_log::log(&format!(
+        "Replay event=recovery failure={failure:?} backoff_ms={}",
+        rearm_backoff.as_millis()
+    ));
     replay.fail(failure);
     publish_replay_component(coordinator, GameSessionComponentState::Failed);
     *dimensions = None;
@@ -1167,9 +1235,11 @@ fn run_game_audio_worker(
         let mut recorder_pause_logged = false;
         let mut last_packet_at = Instant::now();
         let mut received_packet = false;
+        let mut audio_timeline = crate::replay_logging::AudioTimeline::new();
         while !stop.load(Ordering::Acquire) {
             match capture.next_packet(Duration::from_millis(100)) {
                 Ok(Some(packet)) => {
+                    audio_timeline.packet(packet.timestamp_ns, packet.duration_ns);
                     if !received_packet {
                         backend_attempt = 0;
                         received_packet = true;
@@ -1635,6 +1705,18 @@ mod tests {
     }
 
     #[test]
+    fn failed_final_acknowledgement_reports_failed_cleanup() {
+        let mut pending = VecDeque::new();
+        let releases = release_sequences(&mut pending, [1], |_| {
+            Err(ReplayRuntimeError::new("fixture ACK failed"))
+        });
+        let result = Ok(()).and(releases);
+        assert!(result.is_err());
+        assert_eq!(pending, VecDeque::from([1]));
+        assert_eq!(shutdown_event(&result), "Replay event=shutdown_failed");
+    }
+
+    #[test]
     fn replay_pump_startup_failure_is_component_local_and_stop_is_idempotent() {
         let (endpoint, acknowledgements) = ReplayExportEndpoint::new_for_test();
         let stop = Arc::new(AtomicBool::new(false));
@@ -1687,5 +1769,47 @@ mod tests {
         pump.stop_and_join().expect("stop failed pump");
         pump.stop_and_join().expect("second stop is idempotent");
         assert_eq!(*lock_unpoisoned(&acknowledgements), vec![1]);
+    }
+
+    #[test]
+    fn rejection_wakes_an_idle_pump_and_clears_candidate_without_retrying_an_encoder() {
+        let (endpoint, acknowledgements) = ReplayExportEndpoint::new_for_test();
+        let stop = Arc::new(AtomicBool::new(false));
+        let runtime = ProductionReplayRuntime::unavailable(ReplaySettings::default());
+        runtime.configure_validation_candidate(ReplaySettings::default());
+        let worker_stop = Arc::clone(&stop);
+        let worker_endpoint = endpoint.clone();
+        let worker_runtime = runtime.clone();
+        let worker = thread::spawn(move || {
+            run_replay_export_pump(
+                worker_stop,
+                Arc::new(worker_endpoint),
+                worker_runtime,
+                Weak::<CoordinatorInner>::new(),
+                ReplaySettings::default(),
+                ReplayBackendReadiness::fully_verified(),
+                Arc::new(|_| panic!("no encoder without fresh export")),
+                Arc::new(|_| panic!("no replacement without fresh export")),
+            )
+        });
+        endpoint.reject_source_for_test(
+            redunar_capture::ReplaySourceRejection::ExternalMemoryUnsupported,
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while runtime.status().phase != ReplayPhase::Failed && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(runtime.status().phase, ReplayPhase::Failed);
+        assert_eq!(
+            runtime.status().last_failure,
+            Some(ReplayFailure::FrameSourceLost)
+        );
+        let mut pump = ReplayExportPump {
+            stop,
+            source: Arc::new(endpoint),
+            worker: Some(worker),
+        };
+        pump.stop_and_join().unwrap();
+        assert!(lock_unpoisoned(&acknowledgements).is_empty());
     }
 }

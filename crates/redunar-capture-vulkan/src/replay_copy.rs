@@ -1,16 +1,16 @@
-//! Diagnostic-only bounded swapchain readback. Production Replay remains
-//! disabled until encoding and sustained performance are independently proven.
+//! Bounded game-local swapchain copies and release-gated DMA-BUF exports.
 
 #[allow(clippy::wildcard_imports)]
 use crate::ffi::*;
 use crate::producer;
+use crate::replay_memory;
 use crate::replay_transfer;
 use redunar_capture::ReplaySourceCandidate;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{c_char, c_void};
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 unsafe extern "C" {
@@ -47,7 +47,6 @@ const RESET_COMMAND_BUFFER: &[u8] = b"vkResetCommandBuffer\0";
 const BEGIN_COMMAND_BUFFER: &[u8] = b"vkBeginCommandBuffer\0";
 const END_COMMAND_BUFFER: &[u8] = b"vkEndCommandBuffer\0";
 const QUEUE_SUBMIT: &[u8] = b"vkQueueSubmit\0";
-const QUEUE_WAIT_IDLE: &[u8] = b"vkQueueWaitIdle\0";
 const CREATE_BUFFER: &[u8] = b"vkCreateBuffer\0";
 const DESTROY_BUFFER: &[u8] = b"vkDestroyBuffer\0";
 const GET_BUFFER_MEMORY_REQUIREMENTS: &[u8] = b"vkGetBufferMemoryRequirements\0";
@@ -76,10 +75,10 @@ pub(crate) struct DeviceFunctions {
     begin_command_buffer: PfnBeginCommandBuffer,
     end_command_buffer: PfnEndCommandBuffer,
     queue_submit: PfnQueueSubmit,
-    queue_wait_idle: PfnQueueWaitIdle,
     create_buffer: PfnCreateBuffer,
     destroy_buffer: PfnDestroyBuffer,
     get_buffer_memory_requirements: PfnGetBufferMemoryRequirements,
+    get_buffer_requirements2: Option<replay_memory::GetBufferRequirements2>,
     allocate_memory: PfnAllocateMemory,
     free_memory: PfnFreeMemory,
     bind_buffer_memory: PfnBindBufferMemory,
@@ -113,13 +112,21 @@ impl DeviceFunctions {
             begin_command_buffer: load!(BEGIN_COMMAND_BUFFER, PfnBeginCommandBuffer),
             end_command_buffer: load!(END_COMMAND_BUFFER, PfnEndCommandBuffer),
             queue_submit: load!(QUEUE_SUBMIT, PfnQueueSubmit),
-            queue_wait_idle: load!(QUEUE_WAIT_IDLE, PfnQueueWaitIdle),
             create_buffer: load!(CREATE_BUFFER, PfnCreateBuffer),
             destroy_buffer: load!(DESTROY_BUFFER, PfnDestroyBuffer),
             get_buffer_memory_requirements: load!(
                 GET_BUFFER_MEMORY_REQUIREMENTS,
                 PfnGetBufferMemoryRequirements
             ),
+            get_buffer_requirements2:
+                unsafe { next(device, c"vkGetBufferMemoryRequirements2".as_ptr()) }.map(
+                    |raw| unsafe {
+                        mem::transmute::<
+                            unsafe extern "system" fn(),
+                            replay_memory::GetBufferRequirements2,
+                        >(raw)
+                    },
+                ),
             allocate_memory: load!(ALLOCATE_MEMORY, PfnAllocateMemory),
             free_memory: load!(FREE_MEMORY, PfnFreeMemory),
             bind_buffer_memory: load!(BIND_BUFFER_MEMORY, PfnBindBufferMemory),
@@ -137,10 +144,8 @@ impl DeviceFunctions {
     }
 }
 
-#[derive(Default)]
 struct CopyContext {
     command_buffer_address: usize,
-    semaphore: VkSemaphore,
     fence: VkFence,
     buffer: VkBuffer,
     memory: VkDeviceMemory,
@@ -152,6 +157,27 @@ struct CopyContext {
     export_fd: i32,
     export_sequence: u64,
     export_released: bool,
+}
+
+impl Default for CopyContext {
+    fn default() -> Self {
+        Self {
+            command_buffer_address: 0,
+            fence: 0,
+            buffer: 0,
+            memory: 0,
+            mapped_address: 0,
+            captured_at_ns: 0,
+            duration_ns: 0,
+            pending: false,
+            usable: false,
+            // Zero is a valid process descriptor. Keep an uninitialized
+            // context from ever closing stdin/stdout/stderr during rollback.
+            export_fd: -1,
+            export_sequence: 0,
+            export_released: false,
+        }
+    }
 }
 
 struct Route {
@@ -173,6 +199,17 @@ struct Route {
     next_submit_ns: u64,
     command_pool: VkCommandPool,
     contexts: Vec<CopyContext>,
+    // Presentation waits have a separate lifetime from copy/export slots.
+    // Signal reuse is tied to reacquisition of this same swapchain image.
+    presentation_semaphores: [VkSemaphore; MAX_IMAGES],
+    presentation_usable: [bool; MAX_IMAGES],
+    // Queue/device idle is only a copy-execution proof. A presentation wait
+    // remains live until the corresponding image's acquisition fence signals.
+    presentation_pending: [bool; MAX_IMAGES],
+    queue_family_index: u32,
+    export_required: bool,
+    export_requires_dedicated: bool,
+    gpu_idle: bool,
 }
 
 impl Route {
@@ -190,13 +227,64 @@ struct State {
     devices: BTreeMap<usize, PendingDevice>,
     route: Option<Route>,
     pending_swapchain: Option<PendingSwapchain>,
-    retired_routes: [Option<Route>; 1],
+    retired_routes: [Option<Route>; 2],
     abandoned_route: Option<Route>,
+    // Defensive invariant failure: retain one unexpected route and stop
+    // further allocation until device destruction.
+    quarantined_route: Option<Route>,
     disabled: bool,
+    source_rejected: bool,
+    pending_assessment:
+        Option<Result<ReplaySourceCandidate, redunar_capture::ReplaySourceRejection>>,
     /// Highest presentation timestamp already exported to the daemon. This
     /// is process-wide because the daemon keeps one codec epoch across a
     /// swapchain route replacement.
     last_export_timestamp_ns: u64,
+}
+
+impl State {
+    fn can_create_route(&self) -> bool {
+        !self.disabled
+            && self.route.is_none()
+            && self.abandoned_route.is_none()
+            && self.quarantined_route.is_none()
+    }
+
+    fn is_source_swapchain(&self, device_key: usize, previous: VkSwapchainKhr) -> bool {
+        if let Some(route) = &self.route {
+            return route.device_key == device_key
+                && (route.swapchain == previous
+                    || self.pending_swapchain.is_some_and(|pending| {
+                        pending.device_key == device_key && pending.swapchain == previous
+                    }));
+        }
+        self.pending_swapchain.is_none_or(|pending| {
+            pending.device_key == device_key
+                && (previous == pending.swapchain || previous == pending.replaces)
+        })
+    }
+
+    fn assess(
+        &mut self,
+        assessment: Result<ReplaySourceCandidate, redunar_capture::ReplaySourceRejection>,
+    ) {
+        self.source_rejected = assessment.is_err();
+        self.pending_assessment = Some(assessment);
+        self.flush_assessment();
+    }
+    fn flush_assessment(&mut self) -> bool {
+        let Some(assessment) = self.pending_assessment else {
+            return true;
+        };
+        let sent = match assessment {
+            Ok(candidate) => producer::record_replay_source_candidate(candidate),
+            Err(reason) => producer::record_replay_source_rejected(reason),
+        };
+        if sent {
+            self.pending_assessment = None;
+        }
+        sent
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -207,7 +295,7 @@ struct PendingDevice {
     graphics_queue_families: u64,
     queue_address: usize,
     queue_family_index: u32,
-    external_memory_supported: bool,
+    export_support: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -231,6 +319,7 @@ struct CopyProof {
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
+static PRESENTATION_UNCERTAIN: AtomicBool = AtomicBool::new(false);
 static NEXT_REPLAY_EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn requested() -> bool {
@@ -241,6 +330,10 @@ fn requested() -> bool {
 fn production_requested() -> bool {
     env::var("REDUNAR_REPLAY_TRANSFER").ok().as_deref() == Some("1")
         && env::var(PRODUCTION_ENV).ok().as_deref() == Some("1")
+}
+
+pub(crate) fn capture_requested() -> bool {
+    requested() || production_requested()
 }
 
 pub(crate) fn external_memory_export_requested() -> bool {
@@ -303,8 +396,10 @@ fn advance_capture_deadline(
     }
 }
 
-fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64) -> u64 {
-    if current_deadline_ns == 0 {
+fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64, interval_ns: u64) -> u64 {
+    // A missed capture interval is a real source pause/drop, not a frame that
+    // arrived on the old deadline. Reanchor this frame as well as the next one.
+    if current_deadline_ns == 0 || now_ns.saturating_sub(current_deadline_ns) >= interval_ns {
         now_ns
     } else {
         current_deadline_ns
@@ -321,7 +416,11 @@ fn capture_timing(
         (now_ns, interval_ns)
     } else {
         (
-            capture_presentation_timestamp(deadline_ns, now_ns),
+            capture_presentation_timestamp(
+                deadline_ns,
+                now_ns,
+                frame_interval_for_fps(sampling_rate),
+            ),
             frame_interval_for_fps(sampling_rate),
         )
     }
@@ -348,7 +447,7 @@ pub(crate) fn device_created(
     functions: Option<DeviceFunctions>,
     memory_properties: &VkPhysicalDeviceMemoryProperties,
     graphics_queue_families: u64,
-    external_memory_supported: bool,
+    export_support: Option<bool>,
 ) {
     let validation = env::var(EXPORT_DMABUF_ENV).ok().as_deref() == Some("1");
     if (!requested() && !production_requested()) || graphics_queue_families == 0 {
@@ -368,9 +467,6 @@ pub(crate) fn device_created(
         return;
     };
     let mut state = lock_state();
-    if state.disabled {
-        return;
-    }
     if state.devices.len() >= 2 && !state.devices.contains_key(&device_key) {
         return;
     }
@@ -383,7 +479,7 @@ pub(crate) fn device_created(
             graphics_queue_families,
             queue_address: 0,
             queue_family_index: 0,
-            external_memory_supported,
+            export_support,
         },
     );
 }
@@ -403,6 +499,19 @@ pub(crate) fn release_sequence(sequence: u64) -> bool {
     if let Some(route) = state.abandoned_route.as_mut() {
         release_route_sequence(route, sequence);
     }
+    if let Some(route) = state.quarantined_route.as_mut() {
+        release_route_sequence(route, sequence);
+    }
+    // An earlier idle is still a valid proof for a retired route: no new
+    // submissions can reference it. ACK completes the independent FD lease.
+    unsafe { reclaim_idle_released(&mut state) };
+    if let Some(queue) = state
+        .pending_swapchain
+        .and_then(|pending| state.devices.get(&pending.device_key))
+        .map(|device| device.queue_address)
+    {
+        resume_pending_route(&mut state, queue);
+    }
     true
 }
 
@@ -414,8 +523,105 @@ fn release_route_sequence(route: &mut Route, sequence: u64) {
     }
 }
 
-pub(crate) fn reset_export_sequence() {
-    NEXT_REPLAY_EXPORT_SEQUENCE.store(1, Ordering::Relaxed);
+/// A successful acquire return can precede completion. Accept only a fence
+/// which is already signaled while the application's acquire call keeps it
+/// live; never retain or wait an application-owned synchronization handle.
+pub(crate) fn image_acquired(
+    device_key: usize,
+    swapchain: VkSwapchainKhr,
+    image_index: u32,
+    fence: VkFence,
+) {
+    if fence == 0 {
+        return;
+    }
+    let Ok(mut state) = STATE.try_lock() else {
+        return;
+    };
+    let state = &mut *state;
+    for route in state
+        .route
+        .iter_mut()
+        .chain(state.retired_routes.iter_mut().flatten())
+        .chain(state.abandoned_route.iter_mut())
+    {
+        confirm_reacquisition(route, device_key, swapchain, image_index, fence);
+    }
+    // This only reclaims routes for which all independent proofs now exist.
+    unsafe { reclaim_idle_released(state) };
+}
+
+fn confirm_reacquisition(
+    route: &mut Route,
+    device_key: usize,
+    swapchain: VkSwapchainKhr,
+    image_index: u32,
+    fence: VkFence,
+) {
+    let Ok(index) = usize::try_from(image_index) else {
+        return;
+    };
+    if route.device_key != device_key
+        || route.swapchain != swapchain
+        || index >= route.image_count
+        || !route.presentation_usable[index]
+        || fence == 0
+    {
+        return;
+    }
+    if unsafe { (route.functions.get_fence_status)(route.device(), fence) } == VK_SUCCESS {
+        route.presentation_pending[index] = false;
+    }
+}
+
+fn install_route(state: &mut State, pending: PendingSwapchain) -> bool {
+    if !state.can_create_route() {
+        return false;
+    }
+    let Some(device) = state.devices.get(&pending.device_key) else {
+        return false;
+    };
+    if device.queue_address == 0 {
+        return false;
+    }
+    let route = unsafe {
+        create_route(
+            pending.device_key,
+            device,
+            pending.swapchain,
+            pending.candidate,
+            pending.copied_bytes,
+        )
+    };
+    if let Some(route) = route {
+        state.pending_swapchain = None;
+        state.assess(Ok(route.candidate));
+        state.route = Some(route);
+        true
+    } else {
+        state.assess(Err(
+            redunar_capture::ReplaySourceRejection::EncoderBackendUnavailable,
+        ));
+        false
+    }
+}
+
+fn selected_source_assessment(
+    state: &mut State,
+    device_key: usize,
+    previous: VkSwapchainKhr,
+    assessment: Result<ReplaySourceCandidate, redunar_capture::ReplaySourceRejection>,
+) -> Option<ReplaySourceCandidate> {
+    if !state.is_source_swapchain(device_key, previous) {
+        return None;
+    }
+    match assessment {
+        Ok(candidate) => Some(candidate),
+        Err(reason) => {
+            state.assess(Err(reason));
+            None
+        }
+    }
 }
 
 pub(crate) fn queue_observed(
@@ -432,6 +638,16 @@ pub(crate) fn queue_observed(
         return;
     }
     let mut state = lock_state();
+    observe_queue(&mut state, device_key, queue, family_index, validation);
+}
+
+fn observe_queue(
+    state: &mut State,
+    device_key: usize,
+    queue: VkQueue,
+    family_index: u32,
+    validation: bool,
+) {
     let Some(device) = state.devices.get_mut(&device_key) else {
         if validation {
             eprintln!("Redunar Replay validation: observed queue has no registered device");
@@ -445,25 +661,15 @@ pub(crate) fn queue_observed(
     let pending = state
         .pending_swapchain
         .filter(|pending| pending.device_key == device_key && pending.replaces == 0);
-    if state.route.is_none()
-        && let Some(pending) = pending
-        && let Some(device) = state.devices.get(&device_key)
-        && device.queue_address != 0
-        && let Some(route) = unsafe {
-            create_route(
-                device_key,
-                device,
-                pending.swapchain,
-                pending.candidate,
-                pending.copied_bytes,
-            )
-        }
-    {
-        state.pending_swapchain = None;
-        state.route = Some(route);
+    if let Some(pending) = pending {
+        install_route(state, pending);
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "swapchain admission keeps the bounded resize state transition auditable"
+)]
 pub(crate) unsafe fn swapchain_created(
     device_key: usize,
     create_info: *const VkSwapchainCreateInfoKhr,
@@ -474,20 +680,29 @@ pub(crate) unsafe fn swapchain_created(
         return;
     }
     let info = unsafe { &*create_info };
-    let candidate = match unsafe { replay_transfer::assessment_from_create_info(create_info) } {
-        Some(Ok(candidate)) => candidate,
-        Some(Err(rejection)) => {
-            if validation {
-                eprintln!(
-                    "Redunar Replay validation: rejected swapchain format={} color_space={} reason={rejection:?}",
-                    info.image_format, info.image_color_space
-                );
-            }
-            return;
-        }
-        None => return,
-    };
     let mut state = lock_state();
+    // Reject only the selected source/replacement. Auxiliary windows may have
+    // unsupported formats and must not stop healthy process-wide recording.
+    if !state.is_source_swapchain(device_key, info.old_swapchain) {
+        return;
+    }
+    // Shared-present modes do not reacquire images before each presentation,
+    // so they cannot use the per-image binary semaphore reuse proof.
+    if matches!(info.present_mode, 1_000_111_000 | 1_000_111_001) {
+        state.assess(Err(
+            redunar_capture::ReplaySourceRejection::EncoderBackendUnavailable,
+        ));
+        return;
+    }
+    let Some(assessment) = (unsafe { replay_transfer::assessment_from_create_info(create_info) })
+    else {
+        return;
+    };
+    let Some(candidate) =
+        selected_source_assessment(&mut state, device_key, info.old_swapchain, assessment)
+    else {
+        return;
+    };
     let copied_bytes = u64::from(candidate.width)
         .checked_mul(u64::from(candidate.height))
         .and_then(|pixels| pixels.checked_mul(BYTES_PER_PIXEL))
@@ -499,14 +714,27 @@ pub(crate) unsafe fn swapchain_created(
         && state
             .devices
             .get(&device_key)
-            .is_some_and(|device| !device.external_memory_supported)
+            .is_some_and(|device| device.export_support.is_none())
     {
-        producer::record_replay_source_rejected(
+        state.assess(Err(
             redunar_capture::ReplaySourceRejection::ExternalMemoryUnsupported,
-        );
+        ));
         return;
     }
     if env::var(DIAGNOSTIC_FAIL_SETUP_ENV).ok().as_deref() == Some("1") {
+        state.assess(Err(
+            redunar_capture::ReplaySourceRejection::EncoderBackendUnavailable,
+        ));
+        return;
+    }
+    if !state.can_create_route() && state.route.is_none() {
+        state.pending_swapchain = Some(PendingSwapchain {
+            device_key,
+            replaces: 0,
+            swapchain,
+            candidate,
+            copied_bytes,
+        });
         return;
     }
     if let Some(route) = state.route.as_ref() {
@@ -542,12 +770,16 @@ pub(crate) unsafe fn swapchain_created(
         });
         return;
     }
-    let Some(route) =
-        (unsafe { create_route(device_key, &device, swapchain, candidate, copied_bytes) })
-    else {
-        return;
-    };
-    state.route = Some(route);
+    install_route(
+        &mut state,
+        PendingSwapchain {
+            device_key,
+            replaces: 0,
+            swapchain,
+            candidate,
+            copied_bytes,
+        },
+    );
 }
 
 pub(crate) fn swapchain_destroyed(device_key: usize, swapchain: VkSwapchainKhr) {
@@ -565,23 +797,16 @@ pub(crate) fn swapchain_destroyed(device_key: usize, swapchain: VkSwapchainKhr) 
     {
         let route = state.route.take().expect("matched route exists");
         retain_retired_route(&mut state, route);
-        if !state.disabled
-            && let Some(pending) = state
-                .pending_swapchain
-                .take()
-                .filter(|pending| pending.device_key == device_key && pending.replaces == swapchain)
-            && let Some(device) = state.devices.get(&device_key)
-            && let Some(route) = unsafe {
-                create_route(
-                    device_key,
-                    device,
-                    pending.swapchain,
-                    pending.candidate,
-                    pending.copied_bytes,
-                )
-            }
+        if let Some(pending) = state
+            .pending_swapchain
+            .filter(|pending| pending.device_key == device_key && pending.replaces == swapchain)
         {
-            state.route = Some(route);
+            install_route(&mut state, pending);
+        }
+        if state.route.is_none() {
+            state.assess(Err(
+                redunar_capture::ReplaySourceRejection::EncoderBackendUnavailable,
+            ));
         }
     }
 }
@@ -619,6 +844,17 @@ pub(crate) fn device_destroyed(device_key: usize) {
             .expect("matched abandoned route exists");
         unsafe { destroy_route(route) };
     }
+    if state
+        .quarantined_route
+        .as_ref()
+        .is_some_and(|route| route.device_key == device_key)
+    {
+        let route = state
+            .quarantined_route
+            .take()
+            .expect("matched quarantined route exists");
+        unsafe { destroy_route(route) };
+    }
     state.devices.remove(&device_key);
     if state
         .pending_swapchain
@@ -628,6 +864,9 @@ pub(crate) fn device_destroyed(device_key: usize) {
     }
     if state.devices.is_empty() {
         state.disabled = false;
+        state.source_rejected = false;
+        state.pending_assessment = None;
+        PRESENTATION_UNCERTAIN.store(false, Ordering::Release);
     }
 }
 
@@ -641,7 +880,16 @@ pub(crate) unsafe fn prepare_present(
     let Ok(mut state) = STATE.try_lock() else {
         return None;
     };
-    if state.disabled {
+    if PRESENTATION_UNCERTAIN.load(Ordering::Acquire) {
+        if state.pending_assessment.is_none() {
+            state.pending_assessment = Some(Err(
+                redunar_capture::ReplaySourceRejection::EncoderBackendUnavailable,
+            ));
+        }
+        state.flush_assessment();
+        return None;
+    }
+    if !state.flush_assessment() || state.disabled || state.source_rejected {
         return None;
     }
     let route = state.route.as_mut()?;
@@ -688,8 +936,9 @@ pub(crate) unsafe fn prepare_present(
             image,
             presentation_timestamp_ns,
             route.frame_interval_ns,
+            usize::try_from(image_index).ok()?,
         )
-    }?;
+    };
     if semaphore != 0 {
         route.next_submit_ns = advance_capture_deadline(
             route.sampling_rate,
@@ -698,33 +947,50 @@ pub(crate) unsafe fn prepare_present(
             capture_interval_ns,
         );
     }
-    let exported_timestamp_ns = proof.map(|proof| {
-        let timestamp_ns =
-            monotonic_export_timestamp(state.last_export_timestamp_ns, proof.timestamp_ns);
-        state.last_export_timestamp_ns = timestamp_ns;
-        (proof, timestamp_ns)
-    });
-    drop(state);
-    if let Some((proof, timestamp_ns)) = exported_timestamp_ns {
-        producer::record_replay_frame_copied(
-            proof.source,
-            proof.copied_bytes,
-            proof.sample_checksum,
-        );
-        if proof.export_fd >= 3 {
-            producer::record_replay_frame_exported(
-                proof.export_sequence.unwrap_or(0),
-                u32::try_from(proof.export_fd).unwrap_or(0),
+    if let Some(proof) = proof {
+        complete_copy_handoff(&mut state, proof, |proof, timestamp_ns| {
+            producer::record_replay_frame_copied(
                 proof.source,
-                0,
-                proof.source.width.saturating_mul(4),
-                0,
-                timestamp_ns,
-                proof.duration_ns,
+                proof.copied_bytes,
+                proof.sample_checksum,
             );
-        }
+            proof.export_sequence.is_none()
+                || producer::record_replay_frame_exported(
+                    proof.export_sequence.unwrap_or(0),
+                    u32::try_from(proof.export_fd).unwrap_or(0),
+                    proof.source,
+                    0,
+                    proof.source.width.saturating_mul(4),
+                    0,
+                    timestamp_ns,
+                    proof.duration_ns,
+                )
+        });
     }
     (semaphore != 0).then_some(semaphore)
+}
+
+fn complete_copy_handoff(
+    state: &mut State,
+    proof: CopyProof,
+    send: impl FnOnce(CopyProof, u64) -> bool,
+) {
+    let timestamp_ns =
+        monotonic_export_timestamp(state.last_export_timestamp_ns, proof.timestamp_ns);
+    if send(proof, timestamp_ns) {
+        state.last_export_timestamp_ns = timestamp_ns;
+    } else if let Some(sequence) = proof.export_sequence {
+        // No SCM_RIGHTS delivery means the consumer never received ownership
+        // and can never acknowledge this lease. Restore it locally.
+        for route in state
+            .route
+            .iter_mut()
+            .chain(state.retired_routes.iter_mut().flatten())
+            .chain(state.abandoned_route.iter_mut())
+        {
+            release_route_sequence(route, sequence);
+        }
+    }
 }
 
 unsafe fn presented_image_index(present: &VkPresentInfoKhr, target: VkSwapchainKhr) -> Option<u32> {
@@ -740,91 +1006,115 @@ unsafe fn presented_image_index(present: &VkPresentInfoKhr, target: VkSwapchainK
 }
 
 pub(crate) fn presentation_failed(semaphore: VkSemaphore) {
+    // Fail closed even if a release callback currently holds the route lock.
+    // Only a fresh route with fresh semaphores clears this latch.
+    PRESENTATION_UNCERTAIN.store(true, Ordering::Release);
     let Ok(mut state) = STATE.try_lock() else {
         return;
     };
     let Some(route) = state.route.as_mut() else {
         return;
     };
-    if let Some(context) = route
-        .contexts
-        .iter_mut()
-        .find(|value| value.semaphore == semaphore)
+    if let Some(index) = route
+        .presentation_semaphores
+        .iter()
+        .position(|value| *value == semaphore)
     {
-        context.usable = false;
+        // Failed present may not have consumed its wait. Never resignal it.
+        route.presentation_usable[index] = false;
     }
 }
 
 fn retain_retired_route(state: &mut State, route: Route) {
     // A copy fence alone cannot prove presentation consumed the signaled binary
-    // semaphore. Keep the complete resource set until a later synchronized
-    // presentation can prove the queue idle, or until vkDestroyDevice.
+    // semaphore. Keep resources until copy idle, producer release and image
+    // reacquisition prove both lifetimes ended, or until vkDestroyDevice.
     if let Some(slot) = state.retired_routes.iter_mut().find(|slot| slot.is_none()) {
         *slot = Some(route);
     } else {
         // Never free potentially in-use Vulkan resources. Pause capture until
-        // a synchronized presentation reclaims both retained allocation sets.
+        // both copy idle and presentation completion release retained sets.
         state.disabled = true;
-        state.abandoned_route = Some(route);
-        eprintln!("Redunar Replay: capture route retirement is waiting for the presentation queue");
+        if state.abandoned_route.is_none() {
+            state.abandoned_route = Some(route);
+        } else if state.quarantined_route.is_none() {
+            // Never abort the game or overwrite pending resource ownership.
+            // All creation paths consult can_create_route before allocating.
+            state.quarantined_route = Some(route);
+        } else {
+            // Preserve native resources and FD leases until process exit if
+            // an impossible repeated invariant violation reaches this point.
+            std::mem::forget(route);
+        }
+        state.assess(Err(
+            redunar_capture::ReplaySourceRejection::EncoderBackendUnavailable,
+        ));
     }
 }
 
-/// Reclaim swapchain-specific capture resources at a point where the caller
-/// already externally synchronizes the presentation queue. `vkQueueWaitIdle`
-/// completes the queued semaphore waits before any Redunar semaphore is
-/// destroyed. Doing this after the first successful present on a replacement
-/// swapchain prevents normal menu/fullscreen transitions from exhausting the
-/// single bounded retired-route slot.
-pub(crate) unsafe fn presentation_finished(queue: VkQueue) {
+/// Observe copy completion only. WSI presentation waits need an independent
+/// completion proof, even after application queue/device idle.
+pub(crate) unsafe fn queue_idle(queue: VkQueue) {
     if queue.is_null() {
         return;
     }
-    let queue_address = queue.addr();
     let mut state = lock_state();
-    let wait_idle = state
-        .retired_routes
-        .iter()
-        .flatten()
-        .chain(state.abandoned_route.iter())
-        .find(|route| presentation_queue_can_reclaim(queue_address, route.queue_address))
-        .map(|route| route.functions.queue_wait_idle);
-    let Some(wait_idle) = wait_idle else {
-        return;
-    };
-    // SAFETY: this hook runs before returning from vkQueuePresentKHR, while
-    // the application still owns the queue's required external synchronization.
-    if unsafe { wait_idle(queue) } != VK_SUCCESS {
-        return;
-    }
+    unsafe { reclaim_after_idle(&mut state, queue.addr()) };
+}
 
+unsafe fn reclaim_after_idle(state: &mut State, queue_address: usize) {
+    for route in state
+        .retired_routes
+        .iter_mut()
+        .flatten()
+        .chain(state.abandoned_route.iter_mut())
+    {
+        if presentation_queue_can_reclaim(queue_address, route.queue_address) {
+            route.gpu_idle = true;
+        }
+    }
+    unsafe { reclaim_idle_released(state) };
+    resume_pending_route(state, queue_address);
+}
+
+unsafe fn reclaim_idle_released(state: &mut State) {
     for slot in &mut state.retired_routes {
-        if slot
-            .as_ref()
-            .is_some_and(|route| presentation_queue_can_reclaim(queue_address, route.queue_address))
-        {
+        if slot.as_ref().is_some_and(retired_route_reclaimable) {
             let route = slot.take().expect("matched retired route exists");
-            // SAFETY: queue idle proves every submission and presentation wait
-            // referring to this route's binary semaphores has completed.
+            // SAFETY: both local execution and every tracked presentation
+            // wait are complete, and exported ownership has been released.
             unsafe { destroy_route(route) };
         }
     }
     if state
         .abandoned_route
         .as_ref()
-        .is_some_and(|route| presentation_queue_can_reclaim(queue_address, route.queue_address))
+        .is_some_and(retired_route_reclaimable)
     {
         let route = state
             .abandoned_route
             .take()
             .expect("matched abandoned route exists");
-        // SAFETY: guarded by the same queue-idle proof above.
+        // SAFETY: guarded by independent copy, presentation and export proofs.
         unsafe { destroy_route(route) };
     }
 
-    state.disabled =
-        state.retired_routes.iter().any(Option::is_some) || state.abandoned_route.is_some();
-    if state.disabled || state.route.is_some() {
+    // Retired resources do not pause a live replacement. Only a full
+    // retirement budget with an overflow route pauses capture.
+    state.disabled = state.abandoned_route.is_some() || state.quarantined_route.is_some();
+}
+
+fn retired_route_reclaimable(route: &Route) -> bool {
+    route.gpu_idle
+        && !route.presentation_pending.iter().any(|pending| *pending)
+        && route
+            .contexts
+            .iter()
+            .all(|context| context.export_sequence == 0 || context.export_released)
+}
+
+fn resume_pending_route(state: &mut State, queue_address: usize) {
+    if !state.can_create_route() {
         return;
     }
     let pending_matches_queue = state.pending_swapchain.is_some_and(|pending| {
@@ -838,25 +1128,8 @@ pub(crate) unsafe fn presentation_finished(queue: VkQueue) {
     }
     let pending = state
         .pending_swapchain
-        .take()
         .expect("matched pending swapchain exists");
-    let Some(device) = state.devices.get(&pending.device_key) else {
-        return;
-    };
-    // SAFETY: the replacement swapchain and device remain live; route creation
-    // uses only the stored, bounded assessment made at vkCreateSwapchainKHR.
-    state.route = unsafe {
-        create_route(
-            pending.device_key,
-            device,
-            pending.swapchain,
-            pending.candidate,
-            pending.copied_bytes,
-        )
-    };
-    if state.route.is_some() {
-        eprintln!("Redunar Replay: capture resumed after swapchain recreation");
-    }
+    install_route(state, pending);
 }
 
 const fn presentation_queue_can_reclaim(
@@ -874,8 +1147,14 @@ unsafe fn create_route(
     copied_bytes: u32,
 ) -> Option<Route> {
     let export_requested = external_memory_export_requested();
-    if export_requested {
-        eprintln!("Redunar Replay validation: creating exportable copy route");
+    if export_requested
+        && (pending.export_support.is_none()
+            || pending.functions.get_buffer_requirements2.is_none())
+    {
+        producer::record_replay_source_rejected(
+            redunar_capture::ReplaySourceRejection::ExternalMemoryUnsupported,
+        );
+        return None;
     }
     let device = pending.device_address as VkDevice;
     let functions = pending.functions;
@@ -931,9 +1210,14 @@ unsafe fn create_route(
         variable_min_interval_ns: variable_min_interval_ns(candidate.width, candidate.height),
         next_submit_ns: 0,
         command_pool: 0,
-        // A binary semaphore is reused only after the same swapchain image is
-        // reacquired. Keep one bounded staging context per image so that this
-        // safety rule cannot starve capture on four-or-more-image swapchains.
+        presentation_semaphores: [0; MAX_IMAGES],
+        presentation_usable: [true; MAX_IMAGES],
+        presentation_pending: [false; MAX_IMAGES],
+        queue_family_index: pending.queue_family_index,
+        export_required: export_requested,
+        export_requires_dedicated: pending.export_support.unwrap_or(false),
+        gpu_idle: false, // Staging reuse depends on both the copy fence and daemon release.
+        // Presentation semaphores are indexed independently by image.
         contexts: (0..context_count).map(|_| CopyContext::default()).collect(),
     };
     let result = unsafe {
@@ -952,11 +1236,30 @@ unsafe fn create_route(
         unsafe { destroy_route(route) };
         return None;
     }
+    PRESENTATION_UNCERTAIN.store(false, Ordering::Release);
     Some(route)
 }
 
 unsafe fn initialize_route_contexts(route: &mut Route) -> bool {
     let device = route.device();
+    let semaphore_info = VkSemaphoreCreateInfo {
+        s_type: VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        p_next: std::ptr::null(),
+        flags: 0,
+    };
+    for semaphore in &mut route.presentation_semaphores[..route.image_count] {
+        let result = unsafe {
+            (route.functions.create_semaphore)(
+                device,
+                &raw const semaphore_info,
+                std::ptr::null(),
+                std::ptr::from_mut(semaphore),
+            )
+        };
+        if result != VK_SUCCESS || *semaphore == 0 {
+            return false;
+        }
+    }
     let allocate = VkCommandBufferAllocateInfo {
         s_type: VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         p_next: std::ptr::null(),
@@ -988,6 +1291,8 @@ unsafe fn initialize_route_contexts(route: &mut Route) -> bool {
                 route.functions,
                 &route.memory_properties,
                 route.copied_bytes,
+                route.export_required,
+                route.export_requires_dedicated,
                 context,
             )
         } {
@@ -1021,19 +1326,15 @@ unsafe fn create_context(
     functions: DeviceFunctions,
     memory_properties: &VkPhysicalDeviceMemoryProperties,
     copied_bytes: u32,
+    export_requested: bool,
+    export_requires_dedicated: bool,
     context: &mut CopyContext,
 ) -> bool {
     context.export_fd = -1;
-    let export_requested = external_memory_export_requested();
     let external_buffer = VkExternalMemoryBufferCreateInfo {
         s_type: VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
         p_next: std::ptr::null(),
         handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-    };
-    let semaphore_info = VkSemaphoreCreateInfo {
-        s_type: VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        p_next: std::ptr::null(),
-        flags: 0,
     };
     let fence_info = VkFenceCreateInfo {
         s_type: VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -1054,18 +1355,6 @@ unsafe fn create_context(
         queue_family_index_count: 0,
         queue_family_indices: std::ptr::null(),
     };
-    let result = unsafe {
-        (functions.create_semaphore)(
-            device,
-            &raw const semaphore_info,
-            std::ptr::null(),
-            &raw mut context.semaphore,
-        )
-    };
-    if result != VK_SUCCESS {
-        validation_setup_failure(export_requested, "vkCreateSemaphore", result);
-        return false;
-    }
     let result = unsafe {
         (functions.create_fence)(
             device,
@@ -1095,9 +1384,42 @@ unsafe fn create_context(
         alignment: 0,
         memory_type_bits: 0,
     };
-    unsafe {
-        (functions.get_buffer_memory_requirements)(device, context.buffer, &raw mut requirements);
-    };
+    let mut requires_dedicated = export_requires_dedicated;
+    if export_requested {
+        let Some(get) = functions.get_buffer_requirements2 else {
+            return false;
+        };
+        let info = replay_memory::BufferRequirementsInfo {
+            s_type: 1_000_146_000,
+            p_next: std::ptr::null(),
+            buffer: context.buffer,
+        };
+        let mut dedicated = replay_memory::DedicatedRequirements {
+            s_type: 1_000_127_000,
+            p_next: std::ptr::null_mut(),
+            prefers: 0,
+            requires: 0,
+        };
+        let mut out = replay_memory::Requirements2 {
+            s_type: 1_000_146_003,
+            p_next: (&raw mut dedicated).cast(),
+            memory: requirements,
+        };
+        unsafe { get(device, &raw const info, &raw mut out) };
+        requirements = out.memory;
+        requires_dedicated |= dedicated.requires != 0 || dedicated.prefers != 0;
+    } else {
+        unsafe {
+            (functions.get_buffer_memory_requirements)(
+                device,
+                context.buffer,
+                &raw mut requirements,
+            );
+        };
+    }
+    if requirements.size < u64::from(copied_bytes) {
+        return false;
+    }
     let memory_type_index = if export_requested {
         export_memory_type(memory_properties, requirements.memory_type_bits)
     } else {
@@ -1112,9 +1434,19 @@ unsafe fn create_context(
         }
         return false;
     };
+    let dedicated = replay_memory::DedicatedAllocation {
+        s_type: 1_000_127_001,
+        p_next: std::ptr::null(),
+        image: 0,
+        buffer: context.buffer,
+    };
     let export_memory = VkExportMemoryAllocateInfo {
         s_type: VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
-        p_next: std::ptr::null(),
+        p_next: if requires_dedicated {
+            (&raw const dedicated).cast()
+        } else {
+            std::ptr::null()
+        },
         handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
     };
     let allocate = VkMemoryAllocateInfo {
@@ -1230,20 +1562,46 @@ unsafe fn submit_copy(
     image: VkImage,
     timestamp_ns: u64,
     duration_ns: u64,
-) -> Option<(VkSemaphore, Option<CopyProof>)> {
+    image_index: usize,
+) -> (VkSemaphore, Option<CopyProof>) {
+    let proof = unsafe { take_completed_copy(route) };
+    // Completion/export ownership is independent of the following submission.
+    // No fallible reset, recording or submit may discard this completed proof.
+    let semaphore = unsafe {
+        submit_next_copy(
+            route,
+            present,
+            image,
+            timestamp_ns,
+            duration_ns,
+            image_index,
+        )
+    };
+    (semaphore.unwrap_or(0), proof)
+}
+
+unsafe fn submit_next_copy(
+    route: &mut Route,
+    present: &VkPresentInfoKhr,
+    image: VkImage,
+    timestamp_ns: u64,
+    duration_ns: u64,
+    image_index: usize,
+) -> Option<VkSemaphore> {
     let device = route.device();
     let queue = route.queue();
     let functions = route.functions;
-    let proof = unsafe { take_completed_copy(route) };
+    let semaphore = *route.presentation_semaphores.get(image_index)?;
+    if !route.presentation_usable[image_index] || semaphore == 0 {
+        return None;
+    }
     let context = route.contexts.iter_mut().find(|context| {
         context.usable
             && !context.pending
             && (context.export_fd < 3 || context.export_released)
             && unsafe { (functions.get_fence_status)(device, context.fence) } == VK_SUCCESS
     });
-    let Some(context) = context else {
-        return proof.map(|proof| (0, Some(proof)));
-    };
+    let context = context?;
     if unsafe { (functions.reset_fences)(device, 1, &raw const context.fence) } != VK_SUCCESS {
         context.usable = false;
         return None;
@@ -1271,6 +1629,9 @@ unsafe fn submit_copy(
             context.buffer,
             route.width,
             route.height,
+            route.queue_family_index,
+            route.export_required,
+            context.captured_at_ns != 0,
         );
     };
     if unsafe { (functions.end_command_buffer)(command_buffer) } != VK_SUCCESS {
@@ -1291,17 +1652,20 @@ unsafe fn submit_copy(
         command_buffer_count: 1,
         command_buffers: &raw const command_buffer,
         signal_semaphore_count: 1,
-        signal_semaphores: &raw const context.semaphore,
+        signal_semaphores: &raw const semaphore,
     };
+    route.presentation_pending[image_index] = true;
+    route.gpu_idle = false;
     if unsafe { (functions.queue_submit)(queue, 1, &raw const submit, context.fence) } != VK_SUCCESS
     {
         context.usable = false;
+        route.presentation_usable[image_index] = false;
         return None;
     }
     context.captured_at_ns = timestamp_ns;
     context.duration_ns = duration_ns;
     context.pending = true;
-    Some((context.semaphore, proof))
+    Some(semaphore)
 }
 
 unsafe fn take_completed_copy(route: &mut Route) -> Option<CopyProof> {
@@ -1349,6 +1713,11 @@ fn oldest_pending_context_index(contexts: &[CopyContext]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "copy and external ownership are recorded in one auditable command sequence"
+)]
 unsafe fn record_copy(
     functions: DeviceFunctions,
     command_buffer: VkCommandBuffer,
@@ -1356,7 +1725,27 @@ unsafe fn record_copy(
     buffer: VkBuffer,
     width: u32,
     height: u32,
+    queue_family_index: u32,
+    export_required: bool,
+    external_reuse: bool,
 ) {
+    if export_required && external_reuse {
+        let acquire = external_buffer_barrier(buffer, queue_family_index, true);
+        unsafe {
+            (functions.cmd_pipeline_barrier)(
+                command_buffer,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0,
+                std::ptr::null(),
+                1,
+                (&raw const acquire).cast(),
+                0,
+                std::ptr::null(),
+            );
+        };
+    }
     let range = VkImageSubresourceRange {
         aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT,
         base_mip_level: 0,
@@ -1424,6 +1813,10 @@ unsafe fn record_copy(
         new_layout: VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         ..to_transfer
     };
+    // Make transfer writes available to the external/foreign owner before
+    // the completion fence permits exporting the descriptor. On slot reuse,
+    // the daemon ACK follows its release barrier and completion fence.
+    let release = external_buffer_barrier(buffer, queue_family_index, false);
     let host_visibility = VkMemoryBarrier {
         s_type: VK_STRUCTURE_TYPE_MEMORY_BARRIER,
         p_next: std::ptr::null(),
@@ -1434,12 +1827,24 @@ unsafe fn record_copy(
         (functions.cmd_pipeline_barrier)(
             command_buffer,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            if export_required {
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+            } else {
+                VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+            },
             0,
-            1,
-            std::ptr::from_ref(&host_visibility).cast(),
-            0,
-            std::ptr::null(),
+            u32::from(!export_required),
+            if export_required {
+                std::ptr::null()
+            } else {
+                std::ptr::from_ref(&host_visibility).cast()
+            },
+            u32::from(export_required),
+            if export_required {
+                (&raw const release).cast()
+            } else {
+                std::ptr::null()
+            },
             1,
             &raw const to_present,
         );
@@ -1461,10 +1866,77 @@ unsafe fn sampled_checksum(address: usize, copied_bytes: u32) -> u64 {
     hash
 }
 
+#[repr(C)]
+struct BufferBarrier {
+    s_type: i32,
+    p_next: *const c_void,
+    src_access_mask: u32,
+    dst_access_mask: u32,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+    buffer: VkBuffer,
+    offset: u64,
+    size: u64,
+}
+
+fn external_buffer_barrier(buffer: VkBuffer, family: u32, acquire: bool) -> BufferBarrier {
+    // FOREIGN also covers a Vulkan consumer on the same physical device and
+    // avoids silently assuming an identical driver instance at the boundary.
+    BufferBarrier {
+        s_type: VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        p_next: std::ptr::null(),
+        src_access_mask: if acquire {
+            0
+        } else {
+            VK_ACCESS_TRANSFER_WRITE_BIT
+        },
+        dst_access_mask: if acquire {
+            VK_ACCESS_TRANSFER_WRITE_BIT
+        } else {
+            0
+        },
+        src_queue_family_index: if acquire {
+            VK_QUEUE_FAMILY_FOREIGN_EXT
+        } else {
+            family
+        },
+        dst_queue_family_index: if acquire {
+            family
+        } else {
+            VK_QUEUE_FAMILY_FOREIGN_EXT
+        },
+        buffer,
+        offset: 0,
+        size: u64::MAX,
+    }
+}
+
+pub(crate) unsafe fn device_idle(device_key: usize) {
+    let mut state = lock_state();
+    for route in state.retired_routes.iter_mut().flatten() {
+        if route.device_key == device_key {
+            route.gpu_idle = true;
+        }
+    }
+    if let Some(route) = state.abandoned_route.as_mut()
+        && route.device_key == device_key
+    {
+        route.gpu_idle = true;
+    }
+    unsafe { reclaim_idle_released(&mut state) };
+    let queue_address = state
+        .pending_swapchain
+        .and_then(|pending| state.devices.get(&pending.device_key))
+        .map(|device| device.queue_address);
+    if let Some(queue_address) = queue_address {
+        resume_pending_route(&mut state, queue_address);
+    }
+}
+
 unsafe fn destroy_route(mut route: Route) {
     let device = route.device();
     for context in &mut route.contexts {
-        if context.export_fd >= 0 {
+        if context.export_fd >= 3 {
             unsafe { close(context.export_fd) };
             context.export_fd = -1;
         }
@@ -1480,11 +1952,13 @@ unsafe fn destroy_route(mut route: Route) {
         if context.fence != 0 {
             unsafe { (route.functions.destroy_fence)(device, context.fence, std::ptr::null()) };
         }
-        if context.semaphore != 0 {
-            unsafe {
-                (route.functions.destroy_semaphore)(device, context.semaphore, std::ptr::null());
-            };
-        }
+    }
+    for semaphore in route
+        .presentation_semaphores
+        .into_iter()
+        .filter(|value| *value != 0)
+    {
+        unsafe { (route.functions.destroy_semaphore)(device, semaphore, std::ptr::null()) };
     }
     if route.command_pool != 0 {
         unsafe {
@@ -1542,6 +2016,26 @@ mod tests {
     }
 
     #[test]
+    fn fixed_capture_dates_resumed_frames_at_their_actual_present() {
+        for fps in [30, 60, 120] {
+            let interval = frame_interval_for_fps(fps);
+            let deadline = 5_000_000_000;
+            for late in [interval, interval * 10, 2_000_000_000] {
+                let now = deadline + late;
+                assert_eq!(capture_presentation_timestamp(deadline, now, interval), now);
+                assert_eq!(
+                    next_capture_deadline(deadline, now, interval),
+                    now + interval
+                );
+            }
+            assert_eq!(
+                capture_presentation_timestamp(deadline, deadline + interval - 1, interval),
+                deadline
+            );
+        }
+    }
+
+    #[test]
     fn sixty_fps_deadlines_do_not_collapse_to_half_rate_on_an_eighty_four_fps_game() {
         let source_interval_ns = 1_000_000_000 / 84;
         let capture_interval_ns = frame_interval_for_fps(60);
@@ -1567,7 +2061,11 @@ mod tests {
         for source_frame in 1..=84_u64 {
             let now_ns = source_frame.saturating_mul(source_interval_ns);
             if deadline_ns == 0 || now_ns >= deadline_ns {
-                presentation_timestamps.push(capture_presentation_timestamp(deadline_ns, now_ns));
+                presentation_timestamps.push(capture_presentation_timestamp(
+                    deadline_ns,
+                    now_ns,
+                    capture_interval_ns,
+                ));
                 deadline_ns = next_capture_deadline(deadline_ns, now_ns, capture_interval_ns);
             }
         }
@@ -1637,3 +2135,6 @@ mod tests {
         assert!(!presentation_queue_can_reclaim(presentation_queue, 71));
     }
 }
+
+#[cfg(test)]
+mod contract_tests;

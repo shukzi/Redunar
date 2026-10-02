@@ -1,6 +1,6 @@
 # Hardware and integration support
 
-Reviewed September 26, 2026 against the local implementation and retained test
+Reviewed October 2, 2026 against the local implementation and retained test
 records. The known tested baseline is **x86_64 Linux with AMD hardware**. This
 is narrower than a future cross-vendor goal; other setups may be tried and
 reported after publication. A detected interface or a successful fixture does
@@ -31,6 +31,16 @@ The monitor caches discovery, samples hardware at 1 Hz, and performs bounded
 same-user process scans at the slower cadence in [PERFORMANCE.md](PERFORMANCE.md).
 Runtime process supervision is still needed even though Library no longer imports
 running-process candidates. Ordinary tests use fake `/proc` and `/sys` data.
+
+NVIDIA beta topology counts render devices, excluding display-only DRM cards.
+Ambiguous or multiple NVIDIA render devices remain gated. On a hybrid machine,
+eligible AMD telemetry remains available while NVIDIA attribution is withheld.
+NVML readiness, sensor availability, device loss, and cleanup are distinct
+diagnostic states. Device loss clears old sensor values; recovery reuses the
+same cached device identity at 5, 30, and 120 seconds, with three lifetime
+attempts. Missing optional sensors do not become zero readings. These behaviors
+have fake-library coverage, not NVIDIA hardware evidence. See the
+[first hardware test](TESTING.md#nvidia-beta-first-hardware-test).
 
 ## Recorded evidence and remaining gates
 

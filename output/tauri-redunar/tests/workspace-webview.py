@@ -6,6 +6,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import json
 import threading
+from webkit_fixture import configure_webkit
+configure_webkit()
 import gi
 gi.require_version('Gtk','3.0')
 gi.require_version('WebKit2','4.1')
@@ -32,7 +34,8 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  bridge.calls.push({command,args:structuredClone(args)});
  if(command==='save_replay'&&bridge.failSave)throw Error('Fixture save failed');
  if(command==='replay_runtime_status'&&bridge.failRuntime)throw Error('Fixture runtime unavailable');
- if(command==='daemon_status')return bridge.unavailable?{available:false}:{available:true,revision:++bridge.revision,cpu_model:'Fixture CPU',cpu_utilization_percent:32,cpu_temperature_celsius:61,gpu_model:'Fixture GPU',gpu_utilization_percent:81,gpu_temperature_celsius:67,ram_used_bytes:12884901888,ram_total_bytes:34359738368,vram_used_bytes:5368709120,vram_total_bytes:12884901888};
+ if(command==='daemon_status'&&bridge.failDaemon)throw Error('Fixture native status unavailable');
+ if(command==='daemon_status')return bridge.unavailable?{available:false}:{available:true,diagnostic_log_status:bridge.logStatus||'off',revision:++bridge.revision,cpu_model:'Fixture CPU',cpu_utilization_percent:32,cpu_temperature_celsius:61,gpu_model:'Fixture GPU',gpu_utilization_percent:81,gpu_temperature_celsius:67,ram_used_bytes:12884901888,ram_total_bytes:34359738368,vram_used_bytes:5368709120,vram_total_bytes:12884901888};
  if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
  if(command==='session_status')return {phase:'Running',game:games[0].name,can_end:true,launch_locked:true,elapsed_seconds:1938,captures_saved:3,profile_label:'Session profile',feature_summary:'Metrics enabled · replay enabled',restoration:'NotRequired',history_revision:1,measurements:{revision:bridge.revision,average_fps:141,frame_time_ms:7.1,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000+Math.round(Math.sin(bridge.revision)*700000)],phase:'Live'}};
  if(command==='replay_runtime_status'&&bridge.replayInactive)return {phase:'Inactive',can_save:false,buffered_seconds:0};
@@ -48,8 +51,9 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='clip_metadata')return {duration_seconds:30,width:640,height:360,fps:60};
  if(command==='clip_thumbnail')return captureFixture;
  if(command==='replay_storage_status')return {used_bytes:0};
- if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};
+ if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates,diagnostic_log:bridge.logRequested===true,diagnostic_log_status:bridge.logStatus||'off'};
  if(command==='set_close_to_tray')return {close_to_tray:args.enabled,automatic_updates:bridge.automaticUpdates};
+ if(command==='set_diagnostic_log'){bridge.logRequested=args.enabled;return {diagnostic_log:args.enabled,diagnostic_log_status:bridge.logStatus||'off'};}
  if(command==='set_automatic_updates'){bridge.automaticUpdates=args.enabled;return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};}
  if(command==='check_for_updates'){
   if(bridge.installedUpdate)return {current_version:'0.1.2',state:'restart-needed',message:'Redunar 0.1.3 is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.',latest_version:'0.1.3',package_kind:'rpm',asset_name:'redunar-app-linux-x86_64.rpm'};
@@ -65,6 +69,8 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {close_overlay_on_outside_click:args.closeOnOutsideClick,overlay_shortcut:values.shortcuts.overlay||''};}
  if(command==='replay_preferences')return {initial_save_duration_seconds:30,resolved_directory:'/fixture/Videos/Redunar Replays',custom_save_parent:'/fixture',close_overlay_on_outside_click:bridge.outsideClick!==false};
  if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
+ if(command==='activate_shortcuts')bridge.shortcutUnavailable=false;
+ if(command==='shortcut_status'&&bridge.shortcutUnavailable)return {state:'Unavailable',message:'No readable keyboard input device'};
  if(command==='shortcut_status'||command==='activate_shortcuts')return {state:Object.values(values.shortcuts).some(Boolean)?'Active':'Inactive'};
  if(command==='session_history')return bridge.historyFixture??[0,1,2].map((n)=>({id:n+1,game:n===2?'Other local game':games[0].name,started_unix:1789300000-n*86400,duration_seconds:1800,average_fps:141-n,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000,7300000],timeline:Array.from({length:96},(_,i)=>({elapsed_seconds:i*1800/95,fps:135+Math.sin(i)*6,frame_time_ms:7.1+Math.sin(i)*.3,cpu_temperature_celsius:61,gpu_temperature_celsius:67,cpu_utilization_percent:32,gpu_utilization_percent:81}))}));
  return {};
@@ -73,6 +79,7 @@ window.check=(condition,message)=>{if(!condition)throw new Error(message)};
 window.q=s=>document.querySelector(s);
 window.click=s=>{const el=q(s);check(!!el,'Missing '+s);check(!el.disabled,'Disabled '+s);el.click();};
 """
+fixture = "window.fixturePalettes=" + (NATIVE / "ui/overlay-palettes.json").read_text() + ";" + fixture
 manager.add_script(WebKit2.UserScript.new(fixture,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
 view=WebKit2.WebView.new_with_user_content_manager(manager)
 view.set_background_color(Gdk.RGBA(0,0,0,0))
@@ -144,8 +151,8 @@ try:
     test('HUD preview retains native FPS typography',"check(getComputedStyle(q('.hud-native-value')).fontSize==='24px','native 24px measurement font');")
     test('Clean global settings hide draft actions',"check(q('.settings-save-bar').hidden,'clean bar hidden')")
     snap('global-overlay')
-    test('Layout and palette change structure and color without changing selected metrics',"const metrics=[...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|');const layout=q('[data-global=layout]');layout.value='Ribbon';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));const hud=q('#hud'),brand=q('.hud-layout-brand'),brandText=q('.hud-layout-brand span'),hudBounds=hud.getBoundingClientRect(),textBounds=brandText.getBoundingClientRect();check(hud.dataset.layout==='Ribbon','ribbon preview');check(getComputedStyle(hud).width==='628px','ribbon fits six visible metrics');check(getComputedStyle(brand).flexDirection==='row','generic HUD rule does not top-align brand');check(Math.abs((textBounds.top+textBounds.bottom-hudBounds.top-hudBounds.bottom)/2)<1,'brand text vertically centered');check(hud.style.getPropertyValue('--hud-accent')==='#5ec8e5','glacier accent');check([...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|')===metrics,'metrics unchanged');check(q('[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','layout card selected');check(q('[data-palette=Glacier]').getAttribute('aria-pressed')==='true','palette swatch selected');")
-    test('Every overlay palette controls both preview borders',"const expected={Redunar:['rgb(231, 71, 79)','rgb(48, 48, 52)'],Glacier:['rgb(94, 200, 229)','rgb(41, 64, 71)'],Ember:['rgb(243, 166, 74)','rgb(70, 56, 43)'],Mint:['rgb(114, 214, 160)','rgb(41, 66, 52)'],Mono:['rgb(232, 232, 232)','rgb(56, 56, 56)'],Amethyst:['rgb(176, 140, 255)','rgb(61, 51, 74)'],Solar:['rgb(241, 212, 91)','rgb(71, 66, 41)'],Rose:['rgb(255, 130, 173)','rgb(74, 48, 59)']};const palette=q('[data-global=palette]'),hud=q('#hud');for(const [name,[accent,border]] of Object.entries(expected)){palette.value=name;palette.dispatchEvent(new Event('change',{bubbles:true}));const style=getComputedStyle(hud);check(style.borderLeftColor===accent,name+' accent border');check(style.borderTopColor===border,name+' panel border');}palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));")
+    test('Layout and palette change structure and color without changing selected metrics',"const metrics=[...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|');const layout=q('[data-global=layout]');layout.value='Ribbon';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));const hud=q('#hud'),brand=q('.hud-layout-brand'),brandText=q('.hud-layout-brand span'),hudBounds=hud.getBoundingClientRect(),textBounds=brandText.getBoundingClientRect();check(hud.dataset.layout==='Ribbon','ribbon preview');check(getComputedStyle(hud).width==='628px','ribbon fits six visible metrics');check(getComputedStyle(brand).flexDirection==='row','generic HUD rule does not top-align brand');check(Math.abs((textBounds.top+textBounds.bottom-hudBounds.top-hudBounds.bottom)/2)<1,'brand text vertically centered');check(hud.style.getPropertyValue('--hud-accent')===window.fixturePalettes.Glacier[0],'glacier accent');check([...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|')===metrics,'metrics unchanged');check(q('[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','layout card selected');check(q('[data-palette=Glacier]').getAttribute('aria-pressed')==='true','palette swatch selected');")
+    test('Every overlay palette controls both preview borders',"const expected=Object.fromEntries(Object.entries(window.fixturePalettes).map(([name,colors])=>[name,[colors[0],colors[4]].map(hex=>'rgb('+[1,3,5].map(offset=>parseInt(hex.slice(offset,offset+2),16)).join(', ')+')')]));const palette=q('[data-global=palette]'),hud=q('#hud');for(const [name,[accent,border]] of Object.entries(expected)){palette.value=name;palette.dispatchEvent(new Event('change',{bubbles:true}));const style=getComputedStyle(hud);check(style.borderLeftColor===accent,name+' accent border');check(style.borderTopColor===border,name+' panel border');}palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));")
     snap('global-overlay-ribbon-glacier')
     test('Telemetry and Rose produce the dense preview',"const layout=q('[data-global=layout]');layout.value='Telemetry';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Rose';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('#hud').dataset.layout==='Telemetry','telemetry preview');check(q('.hud-telemetry-row'),'dense metric row');check(q('#hud').style.getPropertyValue('--hud-accent')==='#ff82ad','rose accent');")
     snap('global-overlay-telemetry-rose')
@@ -159,10 +166,13 @@ try:
     test('Conflict feedback and retry state',"check(q('#toast').textContent.includes('changed elsewhere'),'conflict surfaced');check(!q('[data-action=save-global]').disabled,'draft preserved');bridge.conflict=false;click('[data-action=discard-global]');check(!q('[data-global=overlay]').checked,'discard uses saved false');check(q('.settings-save-bar').hidden,'discard hides bar');")
     test('Preset and range update native preview',"const preset=q('[data-global=preset]');preset.value='Custom';preset.dispatchEvent(new Event('change',{bubbles:true}));check(!q('[data-metric=FPS]').disabled,'custom metrics enabled');const range=q('[data-global=scale]');range.value='150';range.dispatchEvent(new Event('input',{bubbles:true}));check(q('#hud').style.getPropertyValue('--hud-scale')==='1.5','native geometry scale');check(range.style.getPropertyValue('--range-fill')!=='','precision fill');")
     js("click('[data-global-tab=replay]')");pump()
-    test('Draft survives global tab switch and 120 FPS is gated',"check(!q('[data-action=save-global]').disabled,'draft retained across tabs');check(q('[data-global=fps] option[value=\"120\"]').disabled,'unsupported capture rate gated');check(!q('.global-grid'),'removed replay card leaves no empty grid column');const a=q('.replay-pref-actions').getBoundingClientRect(),above=q('.replay-pref-actions').previousElementSibling.getBoundingClientRect();check(a.top-above.bottom>=15,'folder action divider spacing')")
+    test('Draft survives global tab switch with the current recording modes',"check(!q('[data-action=save-global]').disabled,'draft retained across tabs');check([...q('[data-global=fps]').options].map(option=>option.value).join(',')==='60,240','60 and Variable modes; legacy rates are shown only when saved');check(!q('.global-grid'),'removed replay card leaves no empty grid column');const a=q('.replay-pref-actions').getBoundingClientRect(),above=q('.replay-pref-actions').previousElementSibling.getBoundingClientRect();check(a.top-above.bottom>=15,'folder action divider spacing')")
     test('Global draft actions remain at viewport bottom while scrolling',"const bar=q('.settings-save-bar'),root=q('.window-content');check(!bar.hidden,'dirty bar shown');root.scrollTo(0,root.scrollHeight);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed while scrolled');root.scrollTo(0,0);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed at page start');")
     snap('global-replay')
     js("click('[data-global-tab=shortcuts]')");pump()
+    js("bridge.shortcutUnavailable=true");pump(2800);snap('shortcuts-unavailable')
+    test('Shortcut failure has a retry action and retains unsaved bindings',"check(!q('[data-action=retry-shortcuts]').hidden,'retry available');check(q('#shortcut-feedback').textContent.includes('No readable keyboard'),'failure reason visible');const input=q('[data-shortcut]');window.previousShortcut=input.value;input.value='Ctrl+Alt+Z';input.dispatchEvent(new Event('input',{bubbles:true}));window.pendingShortcut=input.value;window.shortcutWrites=bridge.calls.filter(call=>call.command==='save_shortcuts').length;click('[data-action=retry-shortcuts]');",350)
+    test('Retry activation avoids changing saved or pending shortcuts',"check(q('[data-action=retry-shortcuts]').hidden,'active retry hidden');check(q('[data-shortcut]').value===pendingShortcut,'draft preserved');check(bridge.calls.filter(call=>call.command==='save_shortcuts').length===shortcutWrites,'retry made no preference write');const input=q('[data-shortcut]');input.value=previousShortcut;input.dispatchEvent(new Event('input',{bubbles:true}));")
     test('All nine shortcut assignments remain accessible',"check(document.querySelectorAll('[data-shortcut]').length===9,'nine shortcuts');const shortcut=document.querySelectorAll('[data-shortcut]')[1];shortcut.focus();shortcut.dispatchEvent(new KeyboardEvent('keydown',{key:'F8',ctrlKey:true,bubbles:true}));click('[data-action=save-global]')")
     pump();test('Separate shortcut save does not discard profile draft',"check(bridge.calls.some(c=>c.command==='save_shortcuts'&&c.args.shortcuts['15']==='Ctrl+F8'),'shortcut payload');click('[data-global-tab=overlay]');check(!q('[data-action=save-global]').disabled,'profile still dirty');click('[data-action=discard-global]')")
     js("click('[data-global-tab=shortcuts]')");snap('global-shortcuts')
@@ -249,6 +259,18 @@ try:
     test('Empty History disables the timeline without inventing numbers',"check(q('[data-history-cursor]').disabled,'disabled scrubber');check(q('#history-moment-fps').textContent==='—','unknown FPS');check(q('#history-slider-time').textContent==='00:00','zero duration');check(!q('#history-cursor-line'),'no fabricated graph');bridge.historyFixture=null;click('[data-action=reload-history]');")
     pump()
     route('settings');snap('settings')
+    test('Debug log distinguishes saved opt-in from runtime health',"check(q('#diagnostic-log-status').textContent==='Logging is off.','actual logger off');q('[data-preference=diagnostic-log]').click()")
+    pump();test('Debug log enable requires restart',"check(q('#diagnostic-log-status').textContent.includes('Restart Redunar'),'preference alone is not active');bridge.logStatus='active';")
+    pump(2800);test('Active logging is observed from native status',"check(q('#diagnostic-log-status').textContent.includes('active on this device'),'live health');bridge.failDaemon=true;")
+    pump(2800);test('Rejected native status clears stale active logging',"check(!q('#diagnostic-log-status').textContent.includes('active on this device'),'stale active cleared');check(q('#diagnostic-log-status').textContent.includes('unavailable'),'unknown health visible');bridge.failDaemon=false;bridge.logStatus='unavailable';")
+    pump(2800);test('Write failure appears while saved switch stays enabled',"check(q('#diagnostic-log-status').textContent.includes('Logging is unavailable'),'failure visible');check(q('[data-preference=diagnostic-log]').checked,'saved opt-in retained');")
+    snap('settings-log-unavailable')
+    window.resize(980,740);pump();snap('settings-log-unavailable-compact')
+    test('Logger failure remains readable at compact width',"check(document.documentElement.scrollWidth<=innerWidth+1,'no horizontal overflow');check(q('#diagnostic-log-status').textContent.includes('Logging is unavailable'),'failure retained');")
+    window.resize(1440,1000);pump()
+
+    js("bridge.logStatus='off';q('[data-preference=diagnostic-log]').click()");pump(1400)
+
     test('Settings exposes only current preferences',"check(!q('[data-module]'),'no module switches');check(!q('[data-preference=motion]'),'no motion toggle');check(!q('[data-action=reload-preferences]'),'no reload button');check(!q('#workspace').textContent.includes('Feature modules'),'no module section');check(!q('.app-about'),'no redundant about card');check(!q('#workspace').textContent.includes('Measurement & storage'),'no fixed implementation counters');check(q('[data-preference=automatic-updates]').checked,'automatic updates default on');check(q('[data-action=install-update]').textContent==='Update now','startup update remains actionable');q('[data-preference=tray]').click()")
     pump();test('Tray persists through the native command',"check(bridge.calls.some(c=>c.command==='set_close_to_tray'&&c.args.enabled===true),'tray save');check(q('[data-preference=tray]').checked,'saved tray state');")
     js("q('[data-preference=tray]').click()");pump()
@@ -284,7 +306,7 @@ try:
     # A running game makes visibility an immediate, isolated save.
     window.resize(1440,1000)
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#global');pump(1800)
-    js("q('[data-global=scale]').value='105';q('[data-global=scale]').dispatchEvent(new Event('input',{bubbles:true}));click('[data-global-tab=replay]');q('[data-global=fps]').value='30';q('[data-global=fps]').dispatchEvent(new Event('change',{bubbles:true}));click('[data-global-tab=overlay]');q('[data-global=overlay]').click();")
+    js("q('[data-global=scale]').value='105';q('[data-global=scale]').dispatchEvent(new Event('input',{bubbles:true}));click('[data-global-tab=replay]');q('[data-global=fps]').value='240';q('[data-global=fps]').dispatchEvent(new Event('change',{bubbles:true}));click('[data-global-tab=overlay]');q('[data-global=overlay]').click();")
     pump(400)
     test('Live visibility saves immediately without committing pending recording or appearance edits',"const save=bridge.calls.findLast(c=>c.command==='save_global_settings');check(save.args.input.overlay===false,'hide persisted without Save button');check(save.args.input.fps===60&&save.args.input.scale===100,'other draft values excluded');check(q('[data-global=scale]').value==='105','appearance draft retained');check(!q('.settings-save-bar').hidden,'other drafts still pending');check(!q('[data-global=overlay]').checked,'hidden');check(!q('[data-global=overlay]').disabled,'can show again');")
     snap('global-live-overlay-hidden')

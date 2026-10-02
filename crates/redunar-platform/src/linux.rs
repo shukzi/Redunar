@@ -1,7 +1,10 @@
 use redunar_core::{CpuSnapshot, GpuSnapshot, HardwareProbe, ProbeError, SystemSnapshot};
-use redunar_nvidia_nvml::{NvidiaNvml, is_nvidia};
+use redunar_nvidia_nvml::{NvidiaDiagnostics, NvidiaNvml, NvidiaReadiness, is_nvidia};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[path = "linux_drm.rs"]
+mod drm;
 
 #[derive(Clone, Debug)]
 pub struct LinuxHardwareProbe {
@@ -32,6 +35,7 @@ pub struct LinuxTelemetrySampler {
     cpu_paths: CpuTelemetryPaths,
     gpu_paths: Vec<GpuTelemetryPaths>,
     nvidia_nvml: Option<NvidiaNvml>,
+    nvidia_diagnostics: NvidiaDiagnostics,
 }
 
 #[derive(Clone, Debug)]
@@ -138,10 +142,9 @@ impl LinuxTelemetrySampler {
         let sys_root = sys_root.into();
         let probe = LinuxHardwareProbe::new(&proc_root, &sys_root)
             .with_nvidia_beta_enabled(allow_nvidia_beta);
-        let mut snapshot = probe.snapshot()?;
-        let nvidia_nvml = allow_nvidia_beta
-            .then(|| NvidiaNvml::open(&sys_root, &mut snapshot.gpus))
-            .flatten();
+        let (mut snapshot, nvidia_readiness) = probe.snapshot_with_nvidia_readiness()?;
+        let nvidia_nvml = (nvidia_readiness == NvidiaReadiness::Ready)
+            .then(|| NvidiaNvml::open(&sys_root, &mut snapshot.gpus));
         let cpufreq = sys_root.join("devices/system/cpu/cpu0/cpufreq");
         let cpu_paths = CpuTelemetryPaths {
             temperature: find_cpu_temperature_path(&sys_root),
@@ -161,7 +164,27 @@ impl LinuxTelemetrySampler {
             cpu_paths,
             gpu_paths,
             nvidia_nvml,
+            nvidia_diagnostics: NvidiaDiagnostics::withheld(nvidia_readiness),
         })
+    }
+
+    /// Non-identifying NVIDIA readiness, optional sensors, and bounded driver
+    /// recovery. Compare before/after `sample` to log only state transitions.
+    #[must_use]
+    pub fn nvidia_diagnostics(&self) -> &NvidiaDiagnostics {
+        self.nvidia_nvml
+            .as_ref()
+            .map_or(&self.nvidia_diagnostics, NvidiaNvml::diagnostics)
+    }
+
+    /// Release NVML and cancel its bounded recovery before monitor teardown.
+    /// The final typed cleanup result remains available for transition logging.
+    /// Repeated calls are harmless; AMD/CPU sampling is unaffected.
+    pub fn shutdown_nvidia(&mut self) -> &NvidiaDiagnostics {
+        if let Some(nvml) = &mut self.nvidia_nvml {
+            nvml.shutdown();
+        }
+        self.nvidia_diagnostics()
     }
 
     /// Refresh dynamic metrics through cached paths only.
@@ -181,7 +204,7 @@ impl LinuxTelemetrySampler {
 
         for (index, (gpu, paths)) in snapshot.gpus.iter_mut().zip(&self.gpu_paths).enumerate() {
             if is_nvidia(gpu) {
-                if let Some(nvml) = &self.nvidia_nvml {
+                if let Some(nvml) = &mut self.nvidia_nvml {
                     nvml.sample(index, gpu);
                 }
                 continue;
@@ -266,25 +289,40 @@ impl LinuxHardwareProbe {
         find_cpu_temperature_path(&self.sys_root).and_then(read_millivalue)
     }
 
-    fn gpu_snapshots(&self) -> Vec<GpuSnapshot> {
-        let drm_root = self.sys_root.join("class/drm");
-        let cards: Vec<_> = sorted_directories(&drm_root)
-            .into_iter()
-            .filter(|directory| is_drm_card(directory))
+    fn gpu_snapshots(&self) -> (Vec<GpuSnapshot>, NvidiaReadiness) {
+        let topology = drm::DrmTopology::discover(&self.sys_root);
+        let readiness = topology.nvidia_readiness(self.allow_nvidia_beta);
+        let mut nvidia_included = false;
+        let gpus = topology
+            .cards
+            .iter()
+            .filter_map(|card_path| {
+                // Ambiguous NVIDIA attribution withholds only NVIDIA. Existing
+                // AMD metrics retain their card identity regardless of beta.
+                let allow_nvidia = !nvidia_included
+                    && readiness == NvidiaReadiness::Ready
+                    && topology.is_nvidia_render_card(card_path);
+                let gpu = Self::gpu_snapshot(card_path, allow_nvidia)?;
+                nvidia_included |= is_nvidia(&gpu);
+                Some(gpu)
+            })
             .collect();
-        // Until a launched game's render device is tied to a PCI address,
-        // showing one card's numbers on a hybrid machine would mislabel them.
-        let has_nvidia = cards.iter().any(|card| {
-            read_trimmed(card.join("device/vendor"))
-                .is_some_and(|vendor| vendor.trim_start_matches("0x").eq_ignore_ascii_case("10de"))
-        });
-        if self.allow_nvidia_beta && has_nvidia && cards.len() != 1 {
-            return Vec::new();
-        }
-        cards
-            .into_iter()
-            .filter_map(|card_path| Self::gpu_snapshot(&card_path, self.allow_nvidia_beta))
-            .collect()
+        (gpus, readiness)
+    }
+
+    fn snapshot_with_nvidia_readiness(
+        &self,
+    ) -> Result<(SystemSnapshot, NvidiaReadiness), ProbeError> {
+        let cpu = self.cpu_snapshot()?;
+        let (gpus, readiness) = self.gpu_snapshots();
+        Ok((
+            SystemSnapshot {
+                memory: crate::memory::read_memory(&self.proc_root.join("meminfo")),
+                cpu,
+                gpus,
+            },
+            readiness,
+        ))
     }
 
     fn gpu_snapshot(card_path: &Path, allow_nvidia_beta: bool) -> Option<GpuSnapshot> {
@@ -370,11 +408,8 @@ impl LinuxHardwareProbe {
 
 impl HardwareProbe for LinuxHardwareProbe {
     fn snapshot(&self) -> Result<SystemSnapshot, ProbeError> {
-        Ok(SystemSnapshot {
-            memory: crate::memory::read_memory(&self.proc_root.join("meminfo")),
-            cpu: self.cpu_snapshot()?,
-            gpus: self.gpu_snapshots(),
-        })
+        self.snapshot_with_nvidia_readiness()
+            .map(|(snapshot, _)| snapshot)
     }
 }
 
@@ -531,6 +566,10 @@ fn gpu_model(
 }
 
 #[cfg(test)]
+#[path = "linux_nvidia_tests.rs"]
+mod nvidia_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -538,7 +577,7 @@ mod tests {
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
-    struct Fixture {
+    pub(super) struct Fixture {
         root: PathBuf,
     }
 
@@ -551,7 +590,7 @@ mod tests {
             Self { root }
         }
 
-        fn write(&self, relative: &str, value: &str) {
+        pub(super) fn write(&self, relative: &str, value: &str) {
             let path = self.root.join(relative);
             fs::create_dir_all(path.parent().expect("fixture parent"))
                 .expect("create fixture parents");
@@ -560,7 +599,7 @@ mod tests {
                 .expect("write fixture file");
         }
 
-        fn probe(&self) -> LinuxHardwareProbe {
+        pub(super) fn probe(&self) -> LinuxHardwareProbe {
             LinuxHardwareProbe::new(self.root.join("proc"), self.root.join("sys"))
         }
 
@@ -580,7 +619,7 @@ mod tests {
         }
     }
 
-    fn amd_fixture() -> Fixture {
+    pub(super) fn amd_fixture() -> Fixture {
         let fixture = Fixture::new();
         fixture.write(
             "proc/cpuinfo",

@@ -1,13 +1,17 @@
 //! Bounded local journal for completed Redunar sessions.
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const FILE: &str = "session-history-v1.tsv";
 const HEADER: &str = "redunar-session-history-v1";
 const MAX_RECORDS: usize = 64;
+const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
 const MAX_TIMELINE_SAMPLES: usize = 7_200;
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
@@ -67,9 +71,26 @@ pub(crate) fn now_unix() -> u64 {
 fn load_unlocked(state: &Path) -> io::Result<Vec<SessionRecord>> {
     let path = state.join(FILE);
     let mut text = String::new();
-    match fs::File::open(&path) {
-        Ok(mut file) => {
-            file.read_to_string(&mut text)?;
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => {
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "session history exceeds its file bounds",
+                ));
+            }
+            file.take(MAX_FILE_BYTES + 1).read_to_string(&mut text)?;
+            if text.len() as u64 > MAX_FILE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "session history grew beyond its file bound",
+                ));
+            }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
@@ -81,13 +102,23 @@ fn load_unlocked(state: &Path) -> io::Result<Vec<SessionRecord>> {
             "session history header is invalid",
         ));
     }
-    Ok(lines.filter_map(parse).collect())
+    let mut records = lines
+        .rev()
+        .filter_map(parse)
+        .take(MAX_RECORDS)
+        .collect::<Vec<_>>();
+    records.reverse();
+    Ok(records)
 }
 
 fn parse(line: &str) -> Option<SessionRecord> {
     let mut fields = line.split('\t');
     let id = fields.next()?.parse().ok()?;
-    let game = fields.next()?.replace("\\t", "\t").replace("\\n", "\n");
+    let escaped_game = fields.next()?;
+    if escaped_game.len() > 4096 {
+        return None;
+    }
+    let game = unescape(escaped_game);
     let started_unix = fields.next()?.parse().ok()?;
     let duration_seconds = fields.next()?.parse().ok()?;
     let average_fps = parse_opt(fields.next()?);
@@ -117,43 +148,91 @@ fn parse_opt(value: &str) -> Option<f64> {
     (value != "-").then(|| value.parse().ok()).flatten()
 }
 fn save_unlocked(state: &Path, records: &[SessionRecord]) -> io::Result<()> {
-    fs::create_dir_all(state)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(state)?;
+    if !fs::symlink_metadata(state)?.is_dir() {
+        return Err(io::Error::other("session state is not a directory"));
+    }
+    fs::set_permissions(state, fs::Permissions::from_mode(0o700))?;
     let path = state.join(FILE);
-    let temporary = state.join(format!(".{FILE}.tmp"));
+    let temporary = state.join(format!(
+        ".{FILE}.{}-{}.tmp",
+        std::process::id(),
+        NEXT_WRITE.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
+        .create_new(true)
+        .mode(0o600)
         .write(true)
         .open(&temporary)?;
-    writeln!(file, "{HEADER}")?;
-    for record in records {
-        let game = record
-            .game
-            .replace('\\', "\\\\")
-            .replace('\t', "\\t")
-            .replace('\n', "\\n");
-        let intervals = record
-            .frame_intervals_ns
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        writeln!(
-            file,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            record.id,
-            game,
-            record.started_unix,
-            record.duration_seconds,
-            format_opt(record.average_fps),
-            format_opt(record.one_percent_low_fps),
-            format_opt(record.point_one_percent_low_fps),
-            intervals,
-            format_timeline(&record.timeline)
-        )?;
+    let result = (|| {
+        writeln!(file, "{HEADER}")?;
+        for record in records {
+            let game = record
+                .game
+                .replace('\\', "\\\\")
+                .replace('\t', "\\t")
+                .replace('\n', "\\n");
+            let intervals = record
+                .frame_intervals_ns
+                .iter()
+                .take(240)
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            writeln!(
+                file,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                record.id,
+                game,
+                record.started_unix,
+                record.duration_seconds,
+                format_opt(record.average_fps),
+                format_opt(record.one_percent_low_fps),
+                format_opt(record.point_one_percent_low_fps),
+                intervals,
+                format_timeline(&record.timeline)
+            )?;
+        }
+        if file.metadata()?.len() > MAX_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "session history exceeds its file bound",
+            ));
+        }
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        fs::File::open(state)?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    file.sync_all()?;
-    fs::rename(temporary, path)
+    result
+}
+
+// Decode the existing v1 writer once, left to right. Chained replacements
+// mistake a literal backslash followed by n/t for an escaped control character.
+fn unescape(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            output.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => output.push('\n'),
+            Some('t') => output.push('\t'),
+            Some('\\') | None => output.push('\\'),
+            Some(other) => {
+                output.push('\\');
+                output.push(other);
+            }
+        }
+    }
+    output
 }
 fn format_opt(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_owned(), |value| format!("{value:.4}"))
@@ -164,7 +243,7 @@ fn parse_timeline(value: &str) -> Vec<SessionTelemetrySample> {
         .split(';')
         .filter(|sample| !sample.is_empty())
         .filter_map(|sample| {
-            let fields = sample.split(',').collect::<Vec<_>>();
+            let fields = sample.splitn(8, ',').collect::<Vec<_>>();
             if fields.len() != 7 {
                 return None;
             }
@@ -205,6 +284,8 @@ fn format_timeline(samples: &[SessionTelemetrySample]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{SessionRecord, SessionTelemetrySample, append, load};
+    use std::fmt::Write as _;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
     #[test]
     fn round_trips_bounded_session_records() {
@@ -217,7 +298,7 @@ mod tests {
         ));
         let record = SessionRecord {
             id: 0,
-            game: "A game\twith\nnewlines".to_owned(),
+            game: "A game\twith\nnewlines and \\new \\tabs \\unknown".to_owned(),
             started_unix: 42,
             duration_seconds: 63,
             average_fps: Some(144.0),
@@ -240,6 +321,18 @@ mod tests {
         assert_eq!(loaded[0].game, record.game);
         assert_eq!(loaded[0].frame_intervals_ns, record.frame_intervals_ns);
         assert_eq!(loaded[0].timeline, record.timeline);
+        assert_eq!(
+            std::fs::metadata(root.join(super::FILE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -262,5 +355,41 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert!(loaded[0].timeline.is_empty());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn oversized_history_and_symlinks_fail_without_touching_targets() {
+        let root =
+            std::env::temp_dir().join(format!("redunar-history-bounds-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(super::FILE);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(super::MAX_FILE_BYTES + 1).unwrap();
+        assert!(load(&root).is_err());
+        drop(file);
+        std::fs::remove_file(&path).unwrap();
+        let target = root.join("unrelated");
+        std::fs::write(&target, "preserve").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(load(&root).is_err());
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "preserve");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loading_keeps_only_the_newest_bounded_records() {
+        let root =
+            std::env::temp_dir().join(format!("redunar-history-records-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut contents = format!("{}\n", super::HEADER);
+        for id in 1..=70 {
+            writeln!(contents, "{id}\tFixture\t42\t60\t60\t50\t40\t16666667").unwrap();
+        }
+        std::fs::write(root.join(super::FILE), contents).unwrap();
+        let records = load(&root).unwrap();
+        assert_eq!(records.len(), 64);
+        assert_eq!(records[0].id, 7);
+        assert_eq!(records[63].id, 70);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

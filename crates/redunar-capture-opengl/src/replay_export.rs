@@ -546,8 +546,10 @@ fn next_capture_deadline(current_deadline_ns: u64, now_ns: u64, interval_ns: u64
 /// Use the cadence deadline as the encoded presentation timestamp. Source
 /// presents need not divide evenly into 30/60/120 FPS, and stamping the
 /// selected frame with wall time would create variable-frame-rate judder.
-fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64) -> u64 {
-    if current_deadline_ns == 0 {
+fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64, interval_ns: u64) -> u64 {
+    // A missed capture interval is a real source pause/drop, not a frame that
+    // arrived on the old deadline. Reanchor this frame as well as the next one.
+    if current_deadline_ns == 0 || now_ns.saturating_sub(current_deadline_ns) >= interval_ns {
         now_ns
     } else {
         current_deadline_ns
@@ -564,7 +566,7 @@ fn capture_timing(
         (now_ns, variable_frame_interval_ns(source))
     } else {
         (
-            capture_presentation_timestamp(deadline_ns, now_ns),
+            capture_presentation_timestamp(deadline_ns, now_ns, frame_interval_ns(source)),
             frame_interval_ns(source),
         )
     }
@@ -1581,8 +1583,29 @@ mod tests {
         assert_eq!(monotonic_export_timestamp(0, 5), 5);
         assert_eq!(monotonic_export_timestamp(5, 5), 6);
         assert_eq!(monotonic_export_timestamp(9, 3), 10);
-        assert_eq!(capture_presentation_timestamp(0, 77), 77);
-        assert_eq!(capture_presentation_timestamp(55, 77), 55);
+        assert_eq!(capture_presentation_timestamp(0, 77, 30), 77);
+        assert_eq!(capture_presentation_timestamp(55, 77, 30), 55);
+    }
+
+    #[test]
+    fn fixed_capture_dates_resumed_frames_at_their_actual_present() {
+        for fps in [30, 60, 120] {
+            let source = source_at(fps, 1_280, 720);
+            let interval = frame_interval_ns(source);
+            let deadline = 5_000_000_000;
+            for late in [interval, interval * 10, 2_000_000_000] {
+                let now = deadline + late;
+                assert_eq!(capture_timing(false, source, deadline, now).0, now);
+                assert_eq!(
+                    advance_capture_deadline(false, deadline, now, interval),
+                    now + interval
+                );
+            }
+            assert_eq!(
+                capture_timing(false, source, deadline, deadline + interval - 1).0,
+                deadline
+            );
+        }
     }
 
     #[test]

@@ -6,6 +6,7 @@
 )]
 
 use super::*;
+use std::mem::ManuallyDrop;
 
 mod encode;
 mod execution;
@@ -397,7 +398,10 @@ struct PendingFrame {
 }
 
 pub struct VulkanVideoH264Encoder {
-    parameters: VulkanVideoH264Parameters,
+    request: VulkanVideoH264Request,
+    // A timeout cannot destroy pending native children or unload their driver.
+    // These owners are dropped explicitly only after completion is proven.
+    parameters: ManuallyDrop<VulkanVideoH264Parameters>,
     functions: Functions,
     slots: Vec<ConversionSlot>,
     descriptor_set_layout: VkDescriptorSetLayout,
@@ -406,8 +410,8 @@ pub struct VulkanVideoH264Encoder {
     pipeline: VkPipeline,
     sampler: VkSampler,
     input_mode: VulkanVideoInputMode,
-    execution: ExecutionResources,
-    encode: EncodeResources,
+    execution: ManuallyDrop<ExecutionResources>,
+    encode: ManuallyDrop<EncodeResources>,
     pending: Vec<Option<PendingFrame>>,
     next_slot: usize,
     frame_index: u64,
@@ -475,7 +479,7 @@ impl VulkanVideoH264Parameters {
 impl VulkanVideoH264Encoder {
     #[must_use]
     pub const fn request(&self) -> VulkanVideoH264Request {
-        self.parameters.request()
+        self.request
     }
 
     #[must_use]
@@ -512,6 +516,22 @@ impl VulkanVideoH264Encoder {
     /// encoded output cannot be validated.
     pub fn drain(&mut self) -> Result<Vec<VulkanVideoEncodedAccessUnit>, VulkanVideoDeviceError> {
         execution::drain(self)
+    }
+
+    /// Retire the owned encoder after a single bounded completion wait.
+    ///
+    /// # Errors
+    ///
+    /// Failure retains all native resources until process exit. The caller
+    /// must preserve this failure and withhold producer-release acknowledgements.
+    pub fn shutdown(mut self) -> Result<(), VulkanVideoDeviceError> {
+        // SAFETY: this consumes the sole owner and no new submission can race.
+        let result = unsafe { self.execution.shutdown() };
+        if result.is_err() {
+            ENCODER_TEARDOWN_INCOMPLETE.store(true, std::sync::atomic::Ordering::Release);
+            mem::forget(self);
+        }
+        result
     }
 }
 
@@ -765,7 +785,16 @@ impl Drop for VulkanVideoH264Encoder {
         // SAFETY: all resources belong to this live device and are destroyed
         // in dependency order before nested session parameters are dropped.
         unsafe {
-            self.execution.shutdown();
+            if self.execution.shutdown().is_err() {
+                // Bound retained resources to the failed encoder generation.
+                // No later open is allowed in this process. Imported allocations,
+                // session/device/instance and dlopen lease survive until exit.
+                ENCODER_TEARDOWN_INCOMPLETE.store(true, std::sync::atomic::Ordering::Release);
+                for pending in self.pending.drain(..).flatten() {
+                    mem::forget(pending);
+                }
+                return;
+            }
             self.pending.clear();
             self.encode.destroy();
             if self.pipeline != 0 {
@@ -801,6 +830,9 @@ impl Drop for VulkanVideoH264Encoder {
                 destroy_image(device, &mut slot.chroma, self.functions);
                 destroy_image(device, &mut slot.luma, self.functions);
             }
+            ManuallyDrop::drop(&mut self.encode);
+            ManuallyDrop::drop(&mut self.execution);
+            ManuallyDrop::drop(&mut self.parameters);
         }
     }
 }
@@ -1261,7 +1293,8 @@ unsafe fn create_encoder(
     let resources = build.disarm();
     drop(build);
     Ok(VulkanVideoH264Encoder {
-        parameters,
+        request: parameters.request(),
+        parameters: ManuallyDrop::new(parameters),
         functions,
         slots: resources.slots,
         descriptor_set_layout: resources.descriptor_set_layout,
@@ -1270,8 +1303,8 @@ unsafe fn create_encoder(
         pipeline: resources.pipeline,
         sampler: resources.sampler,
         input_mode,
-        execution,
-        encode,
+        execution: ManuallyDrop::new(execution),
+        encode: ManuallyDrop::new(encode),
         pending: (0..CONVERSION_SLOT_COUNT).map(|_| None).collect(),
         next_slot: 0,
         frame_index: 0,

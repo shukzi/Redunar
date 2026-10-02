@@ -359,6 +359,18 @@ not rerun for this follow-up.
 
 ## Development entry point
 
+Runtime-efficiency regression coverage includes exclusive startup ownership,
+bounded/private history and escaping, audio progress after retention fills,
+nonblocking snapshot cancellation, decoded synthetic MKV/MP4 with audio gaps,
+failed streamed-output cleanup, cache invalidation, and polling during a delayed
+or failed update check. All media fixtures use private generated data. The
+WebKit scripts share the native renderer default through
+`output/tauri-redunar/tests/webkit_fixture.py`
+and read the frontend palette definitions instead of duplicating color literals.
+This coverage does not replace real-game or installed-runtime acceptance.
+See the [October 2 verification report](docs/verification/2026-10-02-runtime-efficiency.md)
+for the tested source manifest, current results, and remaining acceptance scope.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branches, worktrees, and review.
 `tools/validate.sh quick`, `full`, and `release` share the same local/CI entry
 point. Full checks cover both Rust workspaces and UI; release adds the existing
@@ -576,6 +588,13 @@ cargo build --release --offline --manifest-path output/tauri-redunar/src-tauri/C
 xvfb-run -a output/tauri-redunar/src-tauri/target/release/examples/replay_webview_probe
 ```
 
+Set REDUNAR_PROBE_PLAYBACK_SECONDS=32 for an optional sustained, muted native
+playback check (bounded to 60 seconds). It exercises the production player after
+filmstrip completion and rejects a stalled playback clock. An optional source
+clip is copied privately and never modified. Synthetic sparse-transition tests
+also cover 90 FPS / 1 FPS / 90 FPS, continuous audio with a silent middle,
+MP4 fragment holds, and fixed-rate timestamp recovery after pauses.
+
 The default probe generates isolated H.264/Opus media and requires a decoded frame
 and filmstrip samples. An optional clip argument uses a private copy of that
 recording. Do not log private stream tokens or modify source clips. Fixture
@@ -749,7 +768,13 @@ save a decodable clip without capture drops.
   retained artwork after uninstall/cache removal, separate poster/banner roles.
 - **Replay:** rapid selection/cancellation, rail scroll, native temporary-file
   exhaustion/errors, decode/seek deadlines, resize, save/export failure, source
-  preservation, deletion boundaries, and final empty state.
+  preservation, deletion boundaries, and final empty state. Fake two-producer
+  fixtures cover overlapping/lower wire sequences, delayed/out-of-order GPU
+  completion, duplicate confirmation, failed acknowledgement retry, producer
+  exit, foreign sessions, smaller replacement sources, device recreation,
+  rejected-import cleanup, copied telemetry identity, and capacity backpressure.
+  Private socket fixtures cover saturated shutdown, producer incarnation reuse,
+  and full pathname limits before runtime-file creation.
 - **Menu:** dedicated native document, transparent exterior, preview isolation,
   focus/Escape/outside-click, hidden main window, and close without app shutdown.
 - **Shortcuts/tray:** empty/menu-only/save-only bindings, duplicates, persisted
@@ -770,6 +795,62 @@ Media-tool tests cover executable discovery, provider-neutral encoder checks,
 cached success/retried misses, missing codecs, timeouts, and bounded probe output.
 The RPM gate checks file/capability requirements without pinning a multimedia
 package name or declaring replacement. Remaining release work is in ROADMAP.
+
+## NVIDIA beta first hardware test
+
+The [October 2 readiness report](docs/verification/2026-10-02-nvidia-readiness.md)
+records the tested source, automated evidence, and remaining lifecycle limits.
+The [handoff and compatibility follow-up](docs/verification/2026-10-02-handoff-compatibility.md)
+records the repaired producer ownership and completed release/package gate.
+
+This is an explicit human hardware test, outside ordinary automated validation.
+The official package includes the Beta access switch. Install the exact approved
+candidate, enable **Beta access** and separately **Debug log**, fully quit and
+restart Redunar, then launch a new session. Check that Settings says logging is
+active. A checked saved preference alone does not confirm that the log opened.
+
+Start with x86_64 Linux, one NVIDIA render GPU and one unambiguous Vulkan device,
+native Vulkan, 8-bit SDR, fixed 1080p60/Balanced. Record package version, actual
+executable/sidecar hashes, driver version, compositor, and test scope. The log
+records the running executable hash when readable, but that does not verify the
+sidecars. No driver/GPU model is certified by a fixture or an NVML reading.
+
+Before an owner-approved game run, the bounded generated-scene acceptance runner
+can exercise the production Tauri supervisor with isolated state and the saved
+Beta preference established before service construction:
+
+```sh
+tools/run-tauri-vulkan-replay-acceptance.sh --nvidia-beta
+REDUNAR_TAURI_REPLAY_FORMAT=mp4 tools/run-tauri-vulkan-replay-acceptance.sh --nvidia-beta
+```
+
+These commands open a graphics window, create a real encoded clip, decode its
+video with FFmpeg, and clean their private state. They require explicit hardware
+authorization and the documented matching release artifacts. The lower-level
+capture probe also has an explicit NVIDIA opt-in; inspect its usage before a
+scoped run. KMS examples are not NVIDIA production acceptance.
+
+For the tester's normal app session, first check metrics and their unavailable
+states, then a short capture/save/playback/end cycle. Check video and audio in
+Redunar and an external player. Next test switching windows, resize, shortcuts,
+ending, and relaunching; inspect decoder errors and resource cleanup separately.
+Hybrid machines remain deliberately gated. Stop the run on device loss/reset,
+stalled presentation or end, repeated recovery, corruption, mixed resize epochs,
+or growing retained resources. Report a capability rejection as a finding;
+do not bypass a gate just to make recording start.
+Repeated swapchain replacement can exhaust the bounded presentation retirement
+budget when old images never provide independent completion proof. Treat this
+as an explicit Replay-unavailable result; game presentation should continue.
+See [the lifetime limit](REPLAY.md#capture-and-encoding). Do not infer unlimited
+resize recovery from synthetic copy-fence or queue-idle fixtures.
+
+Use **Open log folder** after reproducing the problem. Logs remain local and
+sharing is explicit. Review the relevant attempt and startup lines before
+sharing; general messages can contain game/session details. Include actual
+failure and successful-stage lines, plus aggregate progress around the problem.
+Wall-clock prefixes may be removed while retaining monotonic elapsed times.
+Queue-drop summaries mean some diagnostics were lost, not that the game dropped
+those frames. Logging cannot replace Vulkan validation or a hardware test.
 
 ## Installed app and owner-controlled runs
 

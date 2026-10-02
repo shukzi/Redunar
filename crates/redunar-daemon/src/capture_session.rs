@@ -1,3 +1,8 @@
+#[cfg(test)]
+mod handoff_tests;
+mod replay_release;
+use replay_release::{REPLAY_RELEASE_TARGET_CAPACITY, ReplayReleaseTransport};
+
 use crate::capture_lifecycle::{CaptureLaunchLifecycle, LifecycleAction};
 use crate::{
     CaptureLaunchDisposition, CaptureLaunchProcessState, CaptureSessionModel, CaptureSnapshot,
@@ -412,6 +417,8 @@ impl CaptureSessionHandle {
         let session_directory = config
             .runtime_root
             .join(format!("capture-{}", session_id.to_hex()));
+        redunar_capture::validate_replay_reply_directory(&session_directory)
+            .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
         let layer_manifest_directory =
             prepare_vulkan_layer_directory(&session_directory, &config.layer_library)
                 .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
@@ -457,16 +464,13 @@ impl CaptureSessionHandle {
         let shared = Arc::new(CaptureShared {
             latest: Mutex::new(Arc::new(initial)),
             stop: AtomicBool::new(false),
-            replay_exports: Mutex::new(VecDeque::with_capacity(REPLAY_EXPORT_QUEUE_CAPACITY)),
+            replay_exports: Mutex::new(ReplayExportQueue::default()),
             replay_export_ready: Condvar::new(),
-            replay_release: ReplayReleaseTransport {
+            replay_release: ReplayReleaseTransport::new(
                 session_id,
-                reply_socket_path: reply_socket_path.clone(),
-                socket: Some(Arc::new(release_socket)),
-                targets: Arc::new(Mutex::new(BTreeMap::new())),
-                #[cfg(test)]
-                acknowledgements: None,
-            },
+                reply_socket_path.clone(),
+                Some(Arc::new(release_socket)),
+            ),
         });
         let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
@@ -514,14 +518,14 @@ impl CaptureSessionHandle {
     }
 
     /// Import the most recently transferred producer FD after validating its
-    /// exact sequence and metadata. This is the only daemon-side bridge from
+    /// receiver token and metadata. This is the only daemon-side bridge from
     /// the metadata protocol to a [`crate::DmaBufReplayFrame`]; pixels never enter the
     /// capture socket.
     ///
     /// # Errors
     ///
     /// Returns [`CaptureSessionError`] when the producer identity, requested
-    /// sequence, exported FD, or frame metadata is unavailable or invalid.
+    /// token, exported FD, or frame metadata is unavailable or invalid.
     pub fn import_replay_export(
         &self,
         sequence: u64,
@@ -541,7 +545,11 @@ impl CaptureSessionHandle {
             return Err(CaptureSessionError::new("replay export FD is unavailable"));
         }
         let mut exports = lock_unpoisoned(&self.shared.replay_exports);
+        if exports.rejection.is_some() || exports.release_only_frames != 0 {
+            return Err(CaptureSessionError::new("replay source was rejected"));
+        }
         let Some(index) = exports
+            .frames
             .iter()
             .position(|export| export.sequence == sequence)
         else {
@@ -549,7 +557,7 @@ impl CaptureSessionHandle {
                 "replay export descriptor is stale or unavailable",
             ));
         };
-        let export = exports.remove(index).ok_or_else(|| {
+        let export = exports.frames.remove(index).ok_or_else(|| {
             CaptureSessionError::new("replay export descriptor became unavailable")
         })?;
         drop(exports);
@@ -609,7 +617,7 @@ impl CaptureSessionHandle {
         &self,
         export: ReplayExportMetadata,
     ) -> Result<crate::DmaBufReplayFrame, CaptureSessionError> {
-        import_replay_export_metadata(&self.last_imported_replay_export, export)
+        import_replay_export_metadata(&self.shared, &self.last_imported_replay_export, export)
     }
 
     #[must_use]
@@ -1080,7 +1088,11 @@ impl CaptureSessionHandle {
         };
         self.shared.stop.store(true, Ordering::Release);
         if let Ok(waker) = UnixDatagram::unbound() {
-            let _ = waker.send_to(&[], &self.socket_path);
+            let _ = redunar_capture_vulkan::fd_transport::send_datagram_to_nonblocking(
+                &waker,
+                &[],
+                &self.socket_path,
+            );
         }
         let _ = worker.join();
         true
@@ -1205,93 +1217,19 @@ impl Drop for CaptureSessionHandle {
 struct CaptureShared {
     latest: Mutex<Arc<CaptureSnapshot>>,
     stop: AtomicBool,
-    replay_exports: Mutex<VecDeque<ReplayExportMetadata>>,
+    replay_exports: Mutex<ReplayExportQueue>,
     replay_export_ready: Condvar,
     replay_release: ReplayReleaseTransport,
 }
 
-#[derive(Clone)]
-struct ReplayReleaseTransport {
-    session_id: CaptureSessionId,
-    reply_socket_path: PathBuf,
-    socket: Option<Arc<UnixDatagram>>,
-    targets: Arc<Mutex<BTreeMap<u64, PathBuf>>>,
-    #[cfg(test)]
-    acknowledgements: Option<Arc<Mutex<Vec<u64>>>>,
-}
-
-impl ReplayReleaseTransport {
-    fn register(
-        &self,
-        sequence: u64,
-        sender_path: Option<&Path>,
-    ) -> Result<(), CaptureSessionError> {
-        let target = sender_path.unwrap_or(&self.reply_socket_path);
-        let expected_parent = self
-            .reply_socket_path
-            .parent()
-            .ok_or_else(|| CaptureSessionError::new("replay reply socket has no private parent"))?;
-        if !target.is_absolute() || target.parent() != Some(expected_parent) {
-            return Err(CaptureSessionError::new(
-                "replay producer reply socket is outside the private session",
-            ));
-        }
-        let mut targets = lock_unpoisoned(&self.targets);
-        match targets.entry(sequence) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(target.to_path_buf());
-            }
-            std::collections::btree_map::Entry::Occupied(_) => {
-                return Err(CaptureSessionError::new(
-                    "replay producer reused an in-flight export sequence",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn release(&self, sequence: u64) -> Result<(), CaptureSessionError> {
-        #[cfg(test)]
-        if let Some(acknowledgements) = &self.acknowledgements {
-            lock_unpoisoned(acknowledgements).push(sequence);
-            return Ok(());
-        }
-        let target = lock_unpoisoned(&self.targets)
-            .get(&sequence)
-            .cloned()
-            .ok_or_else(|| CaptureSessionError::new("replay export has no reply route"))?;
-        let message = redunar_capture::CaptureMessage::ReplayFrameReleased {
-            session_id: self.session_id,
-            sequence,
-        };
-        let mut buffer = [0; MAX_MESSAGE_BYTES];
-        let length = redunar_capture::encode_message(&message, &mut buffer)
-            .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
-        let socket = self.socket.as_ref().ok_or_else(|| {
-            CaptureSessionError::new("replay release transport has no session socket")
-        })?;
-        match socket.send_to(&buffer[..length], &target) {
-            Ok(_) => {
-                lock_unpoisoned(&self.targets).remove(&sequence);
-                Ok(())
-            }
-            // Once the game removes its reply socket, the Vulkan device and
-            // exportable buffers are already being destroyed. No buffer can
-            // be reused, so a missing recipient is a completed release.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-                ) =>
-            {
-                lock_unpoisoned(&self.targets).remove(&sequence);
-                Ok(())
-            }
-            Err(error) => Err(CaptureSessionError::owned(format!(
-                "could not release replay export: {error}"
-            ))),
-        }
-    }
+#[derive(Default)]
+struct ReplayExportQueue {
+    frames: VecDeque<ReplayExportMetadata>,
+    release_only_frames: usize,
+    rejected_exports: VecDeque<u64>,
+    // Same lock as frames: a rejection is consumed before any fresh frame,
+    // even if a replacement candidate is announced before the worker wakes.
+    rejection: Option<redunar_capture::ReplaySourceRejection>,
 }
 
 /// Narrow cloneable endpoint for the daemon-owned Replay encoder worker.
@@ -1317,15 +1255,12 @@ impl ReplayExportEndpoint {
         let shared = Arc::new(CaptureShared {
             latest: Mutex::new(Arc::new(CaptureSessionModel::new(session_id).snapshot())),
             stop: AtomicBool::new(false),
-            replay_exports: Mutex::new(VecDeque::new()),
+            replay_exports: Mutex::new(ReplayExportQueue::default()),
             replay_export_ready: Condvar::new(),
-            replay_release: ReplayReleaseTransport {
+            replay_release: ReplayReleaseTransport::with_acknowledgements(
                 session_id,
-                reply_socket_path: PathBuf::new(),
-                socket: None,
-                targets: Arc::new(Mutex::new(BTreeMap::new())),
-                acknowledgements: Some(Arc::clone(&acknowledgements)),
-            },
+                Arc::clone(&acknowledgements),
+            ),
         });
         (
             Self {
@@ -1337,12 +1272,34 @@ impl ReplayExportEndpoint {
     }
 
     pub(crate) fn take_next(&self) -> Option<ReplayExportMetadata> {
-        lock_unpoisoned(&self.shared.replay_exports).pop_front()
+        let mut queue = lock_unpoisoned(&self.shared.replay_exports);
+        if queue.rejection.is_some() || queue.release_only_frames != 0 {
+            return None;
+        }
+        queue.frames.pop_front()
+    }
+
+    pub(crate) fn take_source_rejection(&self) -> Option<redunar_capture::ReplaySourceRejection> {
+        lock_unpoisoned(&self.shared.replay_exports)
+            .rejection
+            .take()
+    }
+
+    pub(crate) fn take_rejected_exports(&self) -> Vec<u64> {
+        let mut queue = lock_unpoisoned(&self.shared.replay_exports);
+        let mut completed = queue.rejected_exports.drain(..).collect::<Vec<_>>();
+        for _ in 0..queue.release_only_frames {
+            if let Some(export) = queue.frames.pop_front() {
+                completed.push(export.sequence);
+            }
+        }
+        queue.release_only_frames = 0;
+        completed
     }
 
     pub(crate) fn wait_next(&self, timeout: Duration) -> Option<ReplayExportMetadata> {
         let exports = lock_unpoisoned(&self.shared.replay_exports);
-        let mut exports = if exports.is_empty() {
+        let mut exports = if exports.frames.is_empty() && exports.rejection.is_none() {
             self.shared
                 .replay_export_ready
                 .wait_timeout(exports, timeout)
@@ -1351,7 +1308,10 @@ impl ReplayExportEndpoint {
         } else {
             exports
         };
-        exports.pop_front()
+        if exports.rejection.is_some() || exports.release_only_frames != 0 {
+            return None;
+        }
+        exports.frames.pop_front()
     }
 
     pub(crate) fn import(
@@ -1359,7 +1319,7 @@ impl ReplayExportEndpoint {
         export: ReplayExportMetadata,
     ) -> Result<(u64, crate::DmaBufReplayFrame), CaptureSessionError> {
         let sequence = export.sequence;
-        import_replay_export_metadata(&self.last_imported_replay_export, export)
+        import_replay_export_metadata(&self.shared, &self.last_imported_replay_export, export)
             .map(|frame| (sequence, frame))
     }
 
@@ -1367,17 +1327,25 @@ impl ReplayExportEndpoint {
         self.shared.replay_release.release(sequence)
     }
 
-    pub(crate) fn drain_and_release(&self) {
+    pub(crate) fn drain_and_release(&self) -> Result<(), CaptureSessionError> {
         let pending = {
             let mut exports = lock_unpoisoned(&self.shared.replay_exports);
-            exports
-                .drain(..)
-                .map(|export| export.sequence)
-                .collect::<Vec<_>>()
+            let mut pending = exports.rejected_exports.drain(..).collect::<Vec<_>>();
+            pending.extend(exports.frames.drain(..).map(|export| export.sequence));
+            pending
         };
+        let mut first_error = None;
         for sequence in pending {
-            let _ = self.release(sequence);
+            if let Err(error) = self.release(sequence) {
+                lock_unpoisoned(&self.shared.replay_exports)
+                    .rejected_exports
+                    .push_back(sequence);
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
         }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn wake(&self) {
@@ -1388,9 +1356,17 @@ impl ReplayExportEndpoint {
     pub(crate) fn enqueue_for_test(&self, export: ReplayExportMetadata) {
         enqueue_replay_export(&self.shared, export);
     }
+
+    #[cfg(test)]
+    pub(crate) fn reject_source_for_test(&self, reason: redunar_capture::ReplaySourceRejection) {
+        lock_unpoisoned(&self.shared.replay_exports).rejection = Some(reason);
+        self.wake();
+    }
 }
 
 pub(crate) struct ReplayExportMetadata {
+    /// Session-unique token. The release transport retains the wire sequence
+    /// and process reply endpoint separately until safe completion.
     pub sequence: u64,
     pub fd: OwnedFd,
     pub source: redunar_capture::ReplaySourceCandidate,
@@ -1403,18 +1379,36 @@ pub(crate) struct ReplayExportMetadata {
 
 fn enqueue_replay_export(shared: &CaptureShared, exported: ReplayExportMetadata) {
     let mut exports = lock_unpoisoned(&shared.replay_exports);
-    let displaced = (exports.len() == REPLAY_EXPORT_QUEUE_CAPACITY)
-        .then(|| exports.pop_front())
+    let displaced = (exports.frames.len() == REPLAY_EXPORT_QUEUE_CAPACITY)
+        .then(|| exports.frames.pop_front())
         .flatten();
-    exports.push_back(exported);
+    if displaced.is_some() {
+        exports.release_only_frames = exports.release_only_frames.saturating_sub(1);
+    }
+    exports.frames.push_back(exported);
     drop(exports);
     if let Some(displaced) = displaced {
-        let _ = shared.replay_release.release(displaced.sequence);
+        release_unsubmitted_export(shared, displaced.sequence);
     }
     shared.replay_export_ready.notify_one();
 }
 
 fn import_replay_export_metadata(
+    shared: &CaptureShared,
+    last_imported: &AtomicU64,
+    export: ReplayExportMetadata,
+) -> Result<crate::DmaBufReplayFrame, CaptureSessionError> {
+    let token = export.sequence;
+    let result = import_export_frame(last_imported, export);
+    if result.is_err() {
+        // The descriptor is unsubmitted. Retain a failed safe ACK so a
+        // rejected import cannot strand the originating producer's slot.
+        release_unsubmitted_export(shared, token);
+    }
+    result
+}
+
+fn import_export_frame(
     last_imported: &AtomicU64,
     export: ReplayExportMetadata,
 ) -> Result<crate::DmaBufReplayFrame, CaptureSessionError> {
@@ -1458,7 +1452,30 @@ fn receiver_loop(socket: &UnixDatagram, shared: &CaptureShared, session_id: Capt
     let mut model = CaptureSessionModel::new(session_id);
     let mut replay_producers = ReplayProducerSelector::default();
     let mut buffer = [0; MAX_MESSAGE_BYTES + 1];
+    let mut intake_paused = false;
     loop {
+        if shared.stop.load(Ordering::Acquire) {
+            break;
+        }
+        if shared.replay_release.at_capacity() {
+            if !intake_paused {
+                crate::diagnostic_log::log(
+                    "Replay event=capture_intake_paused reason=reply_route_capacity",
+                );
+                intake_paused = true;
+            }
+            // Registration belongs only to this receiver. Stop before taking
+            // another FD from the kernel queue when all routes are leased;
+            // dropping an already-received export here would strand its owner.
+            // The producer's bounded send queue supplies backpressure and its
+            // unsent-export path returns local ownership on send failure.
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        if intake_paused {
+            crate::diagnostic_log::log("Replay event=capture_intake_resumed");
+            intake_paused = false;
+        }
         match redunar_capture_vulkan::fd_transport::receive_datagram_fd(socket, &mut buffer) {
             Ok(_) if shared.stop.load(Ordering::Acquire) => break,
             Ok(received) if received.length == 0 => model.reject_transport_message(),
@@ -1504,50 +1521,124 @@ fn accept_capture_message(
     model: &mut CaptureSessionModel,
     replay_producers: &mut ReplayProducerSelector,
     shared: &CaptureShared,
-    message: redunar_capture::CaptureMessage,
+    mut message: redunar_capture::CaptureMessage,
     received_fd: Option<OwnedFd>,
     sender_path: Option<&Path>,
 ) {
-    let is_hello = matches!(&message, redunar_capture::CaptureMessage::Hello { .. });
-    let exported = replay_export_metadata(&message, received_fd);
-    let export_message = matches!(
-        &message,
-        redunar_capture::CaptureMessage::ReplayFrameExported { .. }
-    );
-    if export_message && exported.is_none() {
+    // Reject foreign sessions before changing producer selection or ACK routes.
+    if message.session_id() != shared.replay_release.session_id {
         model.reject_transport_message();
         return;
     }
-    if let Some(exported) = exported.as_ref()
-        && !replay_producers.accepts(sender_path, exported.source, exported.timestamp_ns)
-    {
-        if release_provisional_export(shared, exported.sequence, sender_path).is_err() {
-            model.reject_transport_message();
-        }
+    let is_hello = matches!(&message, redunar_capture::CaptureMessage::Hello { .. });
+    let source_rejection =
+        if let redunar_capture::CaptureMessage::ReplaySourceRejected { reason, .. } = &message {
+            if !replay_producers.owns_assessment(Some(
+                sender_path.unwrap_or(&shared.replay_release.reply_socket_path),
+            )) {
+                return;
+            }
+            Some(*reason)
+        } else {
+            None
+        };
+    let mut exported = replay_export_metadata(&message, received_fd);
+    if matches!(
+        &message,
+        redunar_capture::CaptureMessage::ReplayFrameCopied { .. }
+    ) && !replay_producers.owns_assessment(Some(
+        sender_path.unwrap_or(&shared.replay_release.reply_socket_path),
+    )) {
         return;
+    }
+    let previous_producer = replay_producers.selected.clone();
+    if matches!(
+        &message,
+        redunar_capture::CaptureMessage::ReplayFrameExported { .. }
+    ) && exported.is_none()
+    {
+        model.reject_transport_message();
+        return;
+    }
+    if let Some(exported) = exported.as_mut() {
+        let wire_sequence = exported.sequence;
+        let Ok(token) = shared.replay_release.register(wire_sequence, sender_path) else {
+            // In particular, never ACK a duplicate of an unfinished GPU input.
+            model.reject_transport_message();
+            return;
+        };
+        exported.sequence = token;
+        if let redunar_capture::CaptureMessage::ReplayFrameExported { sequence, .. } = &mut message
+        {
+            *sequence = token;
+        }
+        // Anonymous diagnostic socket pairs still use their explicit reply
+        // endpoint as one producer identity; production uses process sockets.
+        let producer = sender_path.unwrap_or(&shared.replay_release.reply_socket_path);
+        if !replay_producers.accepts(
+            Some(producer),
+            exported.source,
+            exported.timestamp_ns,
+            wire_sequence,
+        ) {
+            release_unsubmitted_export(shared, token);
+            return;
+        }
+    }
+    if previous_producer != replay_producers.selected {
+        // Selection can change even when this confirmation frame's remaining
+        // metadata is rejected. Never carry the helper's copy watermark into
+        // the replacement process's next valid diagnostic.
+        model.clear_replay_copy_tracking();
     }
     let accepted = model.accept(message).is_ok();
     if accepted && is_hello {
+        // A same-process device recreation can reset the wire sequence.
+        // Outstanding GPU routes retain their unique tokens and original ACKs.
+        *replay_producers = ReplayProducerSelector::default();
         let stale = {
             let mut exports = lock_unpoisoned(&shared.replay_exports);
             exports
+                .frames
                 .drain(..)
                 .map(|export| export.sequence)
                 .collect::<Vec<_>>()
         };
-        for sequence in stale {
-            let _ = shared.replay_release.release(sequence);
+        for token in stale {
+            release_unsubmitted_export(shared, token);
         }
+    } else if accepted && let Some(reason) = source_rejection {
+        let mut exports = lock_unpoisoned(&shared.replay_exports);
+        exports.rejection = Some(reason);
+        // Only unsubmitted leases move to the retry queue. In-flight ownership
+        // remains with the pipeline, even across a process handoff.
+        while exports.rejected_exports.len() < REPLAY_RELEASE_TARGET_CAPACITY {
+            let Some(export) = exports.frames.pop_front() else {
+                break;
+            };
+            exports.rejected_exports.push_back(export.sequence);
+        }
+        exports.release_only_frames = exports.frames.len();
+        drop(exports);
+        shared.replay_export_ready.notify_all();
     } else if accepted && let Some(exported) = exported {
-        if shared
-            .replay_release
-            .register(exported.sequence, sender_path)
-            .is_ok()
-        {
-            enqueue_replay_export(shared, exported);
-        } else {
-            model.reject_transport_message();
-        }
+        // The confirmed process may have a smaller surface than its helper.
+        // Readiness follows the accepted source, not the largest old process.
+        model.select_replay_source(exported.source);
+        enqueue_replay_export(shared, exported);
+    } else if let Some(exported) = exported {
+        release_unsubmitted_export(shared, exported.sequence);
+    }
+}
+
+fn release_unsubmitted_export(shared: &CaptureShared, token: u64) {
+    if shared.replay_release.release(token).is_err() {
+        // Each token has a retained route, bounded by the transport's cap.
+        // The worker retries ACKs on idle turns, so a full producer can recover.
+        lock_unpoisoned(&shared.replay_exports)
+            .rejected_exports
+            .push_back(token);
+        shared.replay_export_ready.notify_one();
     }
 }
 
@@ -1580,33 +1671,34 @@ fn replay_export_metadata(
     })
 }
 
-fn release_provisional_export(
-    shared: &CaptureShared,
-    sequence: u64,
-    sender_path: Option<&Path>,
-) -> Result<(), CaptureSessionError> {
-    shared.replay_release.register(sequence, sender_path)?;
-    shared.replay_release.release(sequence)
-}
-
 #[derive(Default)]
 struct ReplayProducerSelector {
     selected: Option<PathBuf>,
     selected_last_timestamp_ns: u64,
+    selected_last_sequence: u64,
     candidates: BTreeMap<PathBuf, ReplayProducerCandidate>,
 }
 
 #[derive(Clone, Copy)]
 struct ReplayProducerCandidate {
     exports: u16,
+    last_sequence: u64,
 }
 
 impl ReplayProducerSelector {
+    fn owns_assessment(&self, sender_path: Option<&Path>) -> bool {
+        match (&self.selected, sender_path) {
+            (Some(selected), Some(sender)) => selected == sender,
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
+    }
     fn accepts(
         &mut self,
         sender_path: Option<&Path>,
         _source: redunar_capture::ReplaySourceCandidate,
         timestamp_ns: u64,
+        wire_sequence: u64,
     ) -> bool {
         let Some(sender_path) = sender_path else {
             // Connected socket pairs used by local diagnostics have no
@@ -1615,6 +1707,10 @@ impl ReplayProducerSelector {
         };
         if let Some(selected) = &self.selected {
             if selected == sender_path {
+                if wire_sequence <= self.selected_last_sequence {
+                    return false;
+                }
+                self.selected_last_sequence = wire_sequence;
                 self.selected_last_timestamp_ns = self.selected_last_timestamp_ns.max(timestamp_ns);
                 return true;
             }
@@ -1631,6 +1727,7 @@ impl ReplayProducerSelector {
             );
             self.selected = None;
             self.selected_last_timestamp_ns = 0;
+            self.selected_last_sequence = 0;
             self.candidates.clear();
         }
         if !self.candidates.contains_key(sender_path)
@@ -1638,10 +1735,17 @@ impl ReplayProducerSelector {
         {
             return false;
         }
-        let candidate = self
-            .candidates
-            .entry(sender_path.to_path_buf())
-            .or_insert(ReplayProducerCandidate { exports: 0 });
+        let candidate =
+            self.candidates
+                .entry(sender_path.to_path_buf())
+                .or_insert(ReplayProducerCandidate {
+                    exports: 0,
+                    last_sequence: 0,
+                });
+        if wire_sequence <= candidate.last_sequence {
+            return false;
+        }
+        candidate.last_sequence = wire_sequence;
         // Producer identity belongs to the process reply socket, not to one
         // swapchain shape. Real games commonly replace startup, menu, and
         // gameplay swapchains on the same process. Resetting confirmation for
@@ -1656,6 +1760,7 @@ impl ReplayProducerSelector {
             candidate.exports
         );
         self.selected = Some(sender_path.to_path_buf());
+        self.selected_last_sequence = wire_sequence;
         self.selected_last_timestamp_ns = timestamp_ns;
         self.candidates.clear();
         true
@@ -1876,7 +1981,7 @@ fn metric_tenths(value: f64, maximum: u16) -> Option<u16> {
 fn cleanup_session_directory(directory: &Path) {
     // The known files are removed explicitly first, then the private
     // directory is swept: the in-game Vulkan layer binds additional
-    // per-process reply sockets (r-<pid>.sock) that this daemon never
+    // private producer-incarnation reply sockets that this daemon never
     // names, and an unlinked-but-open reply socket stays usable because
     // the game already holds its connected file descriptor.
     for file in [
@@ -2007,10 +2112,8 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-            let root = env::temp_dir().join(format!(
-                "redunar-capture-session-{}-{id}",
-                std::process::id()
-            ));
+            let root =
+                env::temp_dir().join(format!("rd-capture-session-{}-{id}", std::process::id()));
             fs::create_dir_all(&root).expect("create fixture");
             let library = root.join(CAPTURE_LIBRARY_FILE);
             fs::write(&library, b"fixture").expect("write layer fixture");
@@ -2140,18 +2243,16 @@ mod tests {
         let shared = Arc::new(CaptureShared {
             latest: Mutex::new(Arc::new(CaptureSessionModel::new(session_id).snapshot())),
             stop: AtomicBool::new(false),
-            replay_exports: Mutex::new(VecDeque::new()),
+            replay_exports: Mutex::new(ReplayExportQueue::default()),
             replay_export_ready: Condvar::new(),
-            replay_release: ReplayReleaseTransport {
+            replay_release: ReplayReleaseTransport::new(
                 session_id,
-                reply_socket_path: env::temp_dir().join(format!(
+                env::temp_dir().join(format!(
                     "redunar-missing-replay-reply-{}",
                     std::process::id()
                 )),
-                socket: None,
-                targets: Arc::new(Mutex::new(BTreeMap::new())),
-                acknowledgements: None,
-            },
+                None,
+            ),
         });
         let worker_shared = Arc::clone(&shared);
         let worker = thread::spawn(move || receiver_loop(&receiver, &worker_shared, session_id));
@@ -2162,6 +2263,130 @@ mod tests {
         shared.stop.store(true, Ordering::Release);
         sender.send(&[]).expect("wake receiver");
         worker.join().expect("join receiver");
+    }
+
+    #[test]
+    fn saturated_rejection_retry_queue_never_delivers_invalidated_frames() {
+        let (endpoint, _) = ReplayExportEndpoint::new_for_test();
+        let mut queue = lock_unpoisoned(&endpoint.shared.replay_exports);
+        queue.rejected_exports.extend(1..=8);
+        queue.frames.push_back(ReplayExportMetadata {
+            sequence: 9,
+            fd: File::open("/dev/null").unwrap().into(),
+            source: redunar_capture::ReplaySourceCandidate {
+                width: 320,
+                height: 240,
+                pixel_format: ReplayPixelFormat::Bgra8Unorm,
+                target_frames_per_second: 60,
+            },
+            offset: 0,
+            stride: 1280,
+            modifier: 0,
+            timestamp_ns: 1,
+            duration_ns: 16_666_667,
+        });
+        queue.release_only_frames = 1;
+        queue.rejection = Some(redunar_capture::ReplaySourceRejection::ExternalMemoryUnsupported);
+        drop(queue);
+        assert!(endpoint.take_source_rejection().is_some());
+        assert!(endpoint.take_next().is_none());
+        assert!(endpoint.wait_next(Duration::ZERO).is_none());
+        assert_eq!(
+            endpoint.take_rejected_exports(),
+            (1..=9).collect::<Vec<_>>()
+        );
+        assert!(endpoint.take_next().is_none());
+    }
+
+    #[test]
+    fn selected_source_rejection_drains_only_queued_exports_and_survives_reannouncement() {
+        use redunar_capture::{
+            CaptureApi, CaptureMessage, ReplaySourceCandidate, ReplaySourceRejection,
+        };
+        let (endpoint, acknowledgements) = ReplayExportEndpoint::new_for_test();
+        let session_id = endpoint.shared.replay_release.session_id;
+        let mut model = CaptureSessionModel::new(session_id);
+        model
+            .accept(CaptureMessage::Hello {
+                session_id,
+                process_id: 1,
+                api: CaptureApi::Vulkan,
+                producer_started_monotonic_ns: 1,
+            })
+            .unwrap();
+        let candidate = ReplaySourceCandidate {
+            width: 320,
+            height: 240,
+            pixel_format: ReplayPixelFormat::Bgra8Unorm,
+            target_frames_per_second: 60,
+        };
+        model
+            .accept(CaptureMessage::ReplaySourceCandidate {
+                session_id,
+                candidate,
+            })
+            .unwrap();
+        let owner = Path::new("/fixture/owner.sock");
+        let mut selector = ReplayProducerSelector {
+            selected: Some(owner.into()),
+            ..ReplayProducerSelector::default()
+        };
+        endpoint.enqueue_for_test(ReplayExportMetadata {
+            sequence: 1,
+            fd: File::open("/dev/null").unwrap().into(),
+            source: candidate,
+            offset: 0,
+            stride: 1280,
+            modifier: 0,
+            timestamp_ns: 1,
+            duration_ns: 16_666_667,
+        });
+        let rejected = CaptureMessage::ReplaySourceRejected {
+            session_id,
+            reason: ReplaySourceRejection::PixelFormatUnsupported,
+        };
+        accept_capture_message(
+            &mut model,
+            &mut selector,
+            &endpoint.shared,
+            rejected.clone(),
+            None,
+            Some(Path::new("/fixture/helper.sock")),
+        );
+        assert_eq!(model.snapshot().replay_source_candidate, Some(candidate));
+        assert!(endpoint.take_source_rejection().is_none());
+        assert!(lock_unpoisoned(&acknowledgements).is_empty());
+        accept_capture_message(
+            &mut model,
+            &mut selector,
+            &endpoint.shared,
+            rejected,
+            None,
+            Some(owner),
+        );
+        assert!(endpoint.take_next().is_none());
+        assert!(lock_unpoisoned(&acknowledgements).is_empty());
+        assert_eq!(endpoint.take_rejected_exports(), vec![1]);
+        endpoint.release(1).unwrap();
+        assert_eq!(*lock_unpoisoned(&acknowledgements), vec![1]);
+        assert_eq!(model.snapshot().replay_source_candidate, None);
+        accept_capture_message(
+            &mut model,
+            &mut selector,
+            &endpoint.shared,
+            CaptureMessage::ReplaySourceCandidate {
+                session_id,
+                candidate,
+            },
+            None,
+            Some(owner),
+        );
+        assert_eq!(model.snapshot().replay_source_candidate, Some(candidate));
+        assert_eq!(
+            endpoint.take_source_rejection(),
+            Some(ReplaySourceRejection::PixelFormatUnsupported)
+        );
+        assert!(endpoint.take_source_rejection().is_none());
     }
 
     #[test]
@@ -2479,7 +2704,9 @@ mod tests {
 
         assert_eq!(*lock_unpoisoned(&acknowledgements), vec![1]);
         assert_eq!(
-            lock_unpoisoned(&endpoint.shared.replay_exports).len(),
+            lock_unpoisoned(&endpoint.shared.replay_exports)
+                .frames
+                .len(),
             REPLAY_EXPORT_QUEUE_CAPACITY
         );
     }
@@ -2500,18 +2727,16 @@ mod tests {
             .connect(&daemon_path)
             .expect("connect second producer");
         second.set_nonblocking(true).expect("second nonblocking");
-        let transport = ReplayReleaseTransport {
-            session_id: CaptureSessionId::new([7; 16]).expect("session id"),
-            reply_socket_path: fixture.root.join("capture-reply.sock"),
-            socket: Some(Arc::new(daemon)),
-            targets: Arc::new(Mutex::new(BTreeMap::new())),
-            acknowledgements: None,
-        };
+        let transport = ReplayReleaseTransport::new(
+            CaptureSessionId::new([7; 16]).expect("session id"),
+            fixture.root.join("capture-reply.sock"),
+            Some(Arc::new(daemon)),
+        );
 
-        transport
+        let token = transport
             .register(9, Some(&second_path))
             .expect("register exporting producer");
-        transport.release(9).expect("release export");
+        transport.release(token).expect("release export");
 
         let mut bytes = [0_u8; MAX_MESSAGE_BYTES];
         let length = second.recv(&mut bytes).expect("receive release");
@@ -2544,24 +2769,35 @@ mod tests {
         let frame_ns = 16_666_667;
         for export in 1..=REPLAY_PRODUCER_CONFIRMATION_EXPORTS {
             assert_eq!(
-                selector.accepts(Some(helper), source, u64::from(export) * frame_ns),
+                selector.accepts(
+                    Some(helper),
+                    source,
+                    u64::from(export) * frame_ns,
+                    u64::from(export)
+                ),
                 export == REPLAY_PRODUCER_CONFIRMATION_EXPORTS
             );
         }
         let helper_last = u64::from(REPLAY_PRODUCER_CONFIRMATION_EXPORTS) * frame_ns;
-        assert!(!selector.accepts(Some(game), source, helper_last + REPLAY_PRODUCER_STALE_NS));
+        assert!(!selector.accepts(
+            Some(game),
+            source,
+            helper_last + REPLAY_PRODUCER_STALE_NS,
+            1
+        ));
         let game_start = helper_last + REPLAY_PRODUCER_STALE_NS + 1;
         for export in 0..REPLAY_PRODUCER_CONFIRMATION_EXPORTS {
             assert_eq!(
                 selector.accepts(
                     Some(game),
                     source,
-                    game_start + u64::from(export) * frame_ns
+                    game_start + u64::from(export) * frame_ns,
+                    u64::from(export) + 2,
                 ),
                 export + 1 == REPLAY_PRODUCER_CONFIRMATION_EXPORTS
             );
         }
-        assert!(!selector.accepts(Some(helper), source, game_start + 3 * frame_ns));
+        assert!(!selector.accepts(Some(helper), source, game_start + 3 * frame_ns, 4));
     }
 
     #[test]
@@ -2583,12 +2819,18 @@ mod tests {
 
         for export in 1..REPLAY_PRODUCER_CONFIRMATION_EXPORTS {
             let source = if export % 2 == 0 { startup } else { gameplay };
-            assert!(!selector.accepts(Some(game), source, u64::from(export) * 16_666_667));
+            assert!(!selector.accepts(
+                Some(game),
+                source,
+                u64::from(export) * 16_666_667,
+                u64::from(export)
+            ));
         }
         assert!(selector.accepts(
             Some(game),
             gameplay,
-            u64::from(REPLAY_PRODUCER_CONFIRMATION_EXPORTS) * 16_666_667
+            u64::from(REPLAY_PRODUCER_CONFIRMATION_EXPORTS) * 16_666_667,
+            u64::from(REPLAY_PRODUCER_CONFIRMATION_EXPORTS),
         ));
     }
 
