@@ -110,7 +110,7 @@ fn assert_sparse_video_timing(
             "-select_streams",
             "v:0",
             "-show_entries",
-            "packet=pts_time,duration_time",
+            "packet=pts_time",
             "-of",
             "csv=p=0",
         ])
@@ -121,24 +121,69 @@ fn assert_sparse_video_timing(
     let rows = String::from_utf8(probe.stdout).unwrap();
     let records = rows
         .lines()
-        .map(|line| {
-            line.split(',')
-                .map(|value| value.parse::<f64>().unwrap())
-                .collect::<Vec<_>>()
-        })
+        .map(|line| line.parse::<f64>().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(records.len(), timestamps.len());
-    for (index, record) in records.iter().enumerate() {
+    for (index, &pts) in records.iter().enumerate() {
         #[allow(clippy::cast_precision_loss)]
         let expected = timestamps[index] as f64 / 1_000_000_000.0;
-        assert!((record[0] - expected).abs() < 0.0011);
-        if format == ReplayOutputFormat::Mp4 && index + 1 < records.len() {
-            assert!(
-                (record[0] + record[1] - records[index + 1][0]).abs() < 0.000_002,
-                "frame hold ends at next fragment PTS"
-            );
+        assert!((pts - expected).abs() < 0.0011);
+    }
+    if format == ReplayOutputFormat::Mp4 {
+        // Older FFprobe versions report codec-derived durations for fragmented
+        // H.264, even when the container stores different sample durations.
+        // Check those stored durations directly; keep the independent demux
+        // and audio decode checks above/below on their normal production flags.
+        assert_mp4_sample_timing(path, timestamps);
+    }
+}
+
+fn mp4_boxes(mut bytes: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    std::iter::from_fn(move || {
+        if bytes.is_empty() {
+            return None;
+        }
+        assert!(bytes.len() >= 8, "complete fixture box header");
+        let size = usize::try_from(u32::from_be_bytes(bytes[..4].try_into().unwrap())).unwrap();
+        assert!((8..=bytes.len()).contains(&size), "bounded fixture box");
+        let result = (&bytes[4..8], &bytes[8..size]);
+        bytes = &bytes[size..];
+        Some(result)
+    })
+}
+
+fn assert_mp4_sample_timing(path: &std::path::Path, timestamps: &[u64]) {
+    let bytes = fs::read(path).unwrap();
+    let mut samples = Vec::new();
+    for (_, moof) in mp4_boxes(&bytes).filter(|(kind, _)| *kind == b"moof") {
+        for (_, traf) in mp4_boxes(moof).filter(|(kind, _)| *kind == b"traf") {
+            let boxes = mp4_boxes(traf).collect::<Vec<_>>();
+            let find = |kind| boxes.iter().find(|(name, _)| *name == kind).unwrap().1;
+            let tfhd = find(b"tfhd".as_slice());
+            if u32::from_be_bytes(tfhd[4..8].try_into().unwrap()) != 1 {
+                continue; // Audio has its own timescale and decode assertion.
+            }
+            let tfdt = find(b"tfdt".as_slice());
+            assert_eq!(tfdt[0], 1, "64-bit fragment decode time");
+            let mut start = u64::from_be_bytes(tfdt[4..12].try_into().unwrap());
+            let trun = find(b"trun".as_slice());
+            assert_eq!(&trun[..4], &[0, 0, 7, 1], "explicit sample durations");
+            let count =
+                usize::try_from(u32::from_be_bytes(trun[4..8].try_into().unwrap())).unwrap();
+            assert_eq!(trun.len(), 12 + count * 12, "complete sample table");
+            for sample in trun[12..].chunks_exact(12) {
+                let duration = u64::from(u32::from_be_bytes(sample[..4].try_into().unwrap()));
+                samples.push((start, duration));
+                start = start.checked_add(duration).unwrap();
+            }
         }
     }
+    let expected = timestamps
+        .iter()
+        .zip(timestamps.iter().skip(1).copied().chain([6_000_000_000]))
+        .map(|(&start, end)| (start / 1_000, end / 1_000 - start / 1_000))
+        .collect::<Vec<_>>();
+    assert_eq!(samples, expected, "every stored frame ends at the next PTS");
 }
 
 fn assert_sparse_audio(path: &std::path::Path) {

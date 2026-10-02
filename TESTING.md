@@ -387,6 +387,12 @@ preservation of the original. It needs no GPU, display, or real recording. FFV1
 is unsuitable for this copy-video-to-MP4 path on older FFmpeg versions. If FFmpeg
 is absent the test returns early; acceptance runs must have FFmpeg installed,
 as the shared CI setup does. A missing `libx264` encoder fails fixture generation.
+The sparse-focus fixture checks demuxed video PTS, stored MP4 fragment/sample
+start times and durations, and decoded Opus audio continuity. Older FFprobe
+versions can report codec-derived packet durations for fragmented H.264, so the
+fixture reads the saved MP4 sample tables independently instead of treating
+those estimates as container timing. The no-loss spool history fixture waits
+for bounded worker progress; production queue-full drops remain unchanged.
 New detailed results belong in [docs/verification](docs/verification/README.md).
 See the [September 26 workflow verification](docs/verification/2026-09-26-development-workflow.md)
 for the isolated build and validation entry point.

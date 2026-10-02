@@ -1323,17 +1323,15 @@ mod tests {
         let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds15))
             .expect("open spool");
         for second in 0..40_u64 {
-            loop {
-                match spool.try_submit(packet(second * NANOSECONDS_PER_SECOND, second % 2 == 0)) {
-                    Ok(()) => {
-                        thread::sleep(Duration::from_millis(1));
-                        break;
-                    }
-                    Err(ReplaySpoolSubmitError::QueueFull(_)) => {
-                        thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(error) => panic!("submit failed: {error}"),
-                }
+            spool
+                .try_submit(packet(second * NANOSECONDS_PER_SECOND, second % 2 == 0))
+                .expect("queue no-loss history fixture packet");
+            // This history assertion requires no queue-full discontinuity.
+            // Wait for worker progress instead of assuming a 1 ms disk write.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while spool.stats().accepted_packets < second + 1 {
+                assert!(Instant::now() < deadline, "spool fixture worker stalled");
+                thread::sleep(Duration::from_millis(1));
             }
         }
         wait_for_segments(&spool, 1);
@@ -1350,6 +1348,8 @@ mod tests {
                 .bytes
         );
         assert_eq!(stats.buffered_duration_ns, 40 * NANOSECONDS_PER_SECOND);
+        assert_eq!(stats.accepted_packets, 40);
+        assert_eq!(stats.dropped_queue_full, 0);
         assert_eq!(COMMAND_CAPACITY, 4);
         assert_eq!(MAX_SEGMENT_BYTES, 32 * 1024 * 1024);
         let _ = fs::remove_dir_all(root);
