@@ -2,6 +2,8 @@
 set -euo pipefail
 
 workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+sh -n "$workspace_root/install.sh"
+if command -v dash >/dev/null 2>&1; then dash -n "$workspace_root/install.sh"; fi
 mkdir -p "$workspace_root/target"
 test_root=$(mktemp -d "$workspace_root/target/.installer-tests.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT
@@ -109,9 +111,10 @@ fake_bin="$test_root/fake-bin"
 installer_tmp="$test_root/installer-tmp"
 mkdir -p "$download_root" "$fake_bin" "$installer_tmp"
 printf '%s\n' 'isolated DEB fixture' >"$download_root/redunar-app-linux-amd64.deb"
+printf '%s\n' 'isolated Arch fixture' >"$download_root/redunar-app-linux-x86_64.pkg.tar.zst"
 (
   cd "$download_root"
-  sha256sum redunar-app-linux-amd64.deb >SHA256SUMS
+  sha256sum redunar-app-linux-amd64.deb redunar-app-linux-x86_64.pkg.tar.zst >SHA256SUMS
 )
 openssl dgst -sha256 -sign "$test_private_key" \
   -out "$download_root/SHA256SUMS.sig" "$download_root/SHA256SUMS"
@@ -128,6 +131,16 @@ cat >"$fake_bin/apt-get" <<'EOF'
 printf '%s\n' "$*" >>"$REDUNAR_TEST_COMMAND_LOG"
 EOF
 chmod 0755 "$fake_bin/id" "$fake_bin/apt-get"
+cat >"$fake_bin/pacman" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = -Q ]; then
+  [ "$2" = "$REDUNAR_TEST_AUDIO_PROVIDER" ]
+  exit $?
+fi
+# Retain argument boundaries so an unwanted empty package cannot go unnoticed.
+printf '%s\n' "$@" >"$REDUNAR_TEST_COMMAND_LOG.$1"
+EOF
+chmod 0755 "$fake_bin/pacman"
 
 "$workspace_root/tools/render-public-installer.sh" \
   example/redunar "$test_root/rendered-install.sh" "$test_public_key" >/dev/null
@@ -147,6 +160,36 @@ test ! -s "$test_root/install-error.log"
 grep -Fxq update "$command_log"
 grep -Eq '^install -y .*/redunar-app-linux-amd64\.deb$' "$command_log"
 grep -Fq 'Redunar installed successfully.' "$test_root/install-output.log"
+
+for provider in pipewire-pulse pulseaudio missing; do
+  arch_command_log="$test_root/arch-$provider"
+  PATH="$fake_bin:$PATH" TMPDIR="$installer_tmp" \
+  REDUNAR_TEST_COMMAND_LOG="$arch_command_log" \
+  REDUNAR_TEST_AUDIO_PROVIDER="$provider" \
+  REDUNAR_RELEASE_BASE_URL="file://$download_root" REDUNAR_ALLOW_INSECURE_URL=1 \
+  REDUNAR_OS_RELEASE_FILE="$test_root/arch" REDUNAR_ARCHITECTURE=x86_64 \
+  REDUNAR_GLIBC_VERSION=2.41 \
+    "$test_root/rendered-install.sh" \
+    >"$test_root/arch-$provider-output.log" 2>"$test_root/arch-$provider-error.log"
+  test ! -s "$test_root/arch-$provider-error.log"
+  python3 - "$arch_command_log" "$provider" "$installer_tmp" <<'PY'
+from pathlib import Path
+import sys
+
+log, provider, temporary_root = sys.argv[1:]
+expected = ["-S", "--needed", "--noconfirm", "gtk3", "webkit2gtk-4.1",
+            "libdrm", "libpulse", "opus", "ffmpeg", "gst-libav"]
+if provider == "missing":
+    expected.append("pipewire-pulse")
+assert Path(log + ".-S").read_text().splitlines() == expected
+install = Path(log + ".-U").read_text().splitlines()
+assert install[:3] == ["-U", "--needed", "--noconfirm"] and len(install) == 4
+asset = Path(install[3])
+assert asset.name == "redunar-app-linux-x86_64.pkg.tar.zst"
+assert asset.parent.parent == Path(temporary_root)
+PY
+  grep -Fq 'Redunar installed successfully.' "$test_root/arch-$provider-output.log"
+done
 
 printf '%s\n' 'corrupted DEB fixture' >"$download_root/redunar-app-linux-amd64.deb"
 expect_failure 'downloaded release checksum does not match' env \

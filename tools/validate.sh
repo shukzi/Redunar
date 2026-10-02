@@ -20,6 +20,9 @@ node --version
 git diff --check
 python3 -m unittest discover -s tools/tests -p 'test_*.py'
 for script in tools/*.sh tools/lib/*.sh; do bash -n "$script"; done
+# Check the public POSIX entry point before any expensive native compilation.
+sh -n install.sh
+if command -v dash >/dev/null 2>&1; then dash -n install.sh; fi
 cargo fmt --all -- --check
 cargo fmt --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all -- --check
 root_target="$build_root/checks/root"

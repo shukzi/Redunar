@@ -113,7 +113,9 @@ tools/render-public-installer.sh shukzi/Redunar /absolute/output/install.sh pack
 ```
 
 The source template can also use `REDUNAR_GITHUB_REPOSITORY` for local plan
-checks.
+checks. It runs through POSIX `sh`, including Debian/Ubuntu's `dash`; the
+Arch dependency path preserves each package as a literal argument and reuses
+an installed PipeWire or PulseAudio provider.
 
 The installer accepts no prompts of its own. It may still require the normal
 sudo or doas authentication required for a system installation. It downloads

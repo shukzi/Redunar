@@ -4,6 +4,21 @@ Current Tauri and shared-backend checks, reviewed September 26, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## Installer shell and dependency fixtures
+
+`tools/test-installer.sh` uses signed local fixture files and fake package
+managers; it performs no installation or network download. It covers the
+rendered Debian installer and the Arch dependency path with PipeWire, PulseAudio,
+or neither already installed, preserving exact package argument boundaries.
+Corrupted packages and invalid signatures must fail before installation.
+
+All `tools/validate.sh` modes check the source installer with `sh -n` before
+native compilation and also with `dash -n` when available. The release gate
+runs the full installer fixture suite. A host whose `sh` is Bash does not
+establish POSIX portability; repeat the fixture suite in an isolated Debian or
+Ubuntu environment whose `sh` is `dash` before qualifying installer changes.
+These fixtures do not establish real distribution installation/runtime support.
+
 ## September 26, 2026 v0.1.10 release preparation
 
 Source `fc6acfd` plus the Variable FPS Replay-menu fix and v0.1.10 metadata

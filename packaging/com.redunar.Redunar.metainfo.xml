@@ -27,7 +27,7 @@
     <category>Game</category>
   </categories>
   <releases>
-    <release version="0.1.12" date="2026-10-03">
+    <release version="0.1.13" date="2026-10-03">
       <description>
         <p>Improves Replay saving, playback timing, shortcut recovery, and producer handoff; hardens experimental NVIDIA capture and metrics; and improves local diagnostic logging. NVIDIA hardware support remains unverified.</p>
       </description>

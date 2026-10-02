@@ -364,13 +364,14 @@ case "$distribution_family" in
     ;;
   arch)
     command -v pacman >/dev/null 2>&1 || fail 'pacman is required on this distribution'
-    audio_provider=()
+    # This installer also runs through POSIX sh on Debian/Ubuntu. Keep each
+    # package a literal argument without Bash arrays or an empty provider.
+    set -- gtk3 webkit2gtk-4.1 libdrm libpulse opus ffmpeg gst-libav
     if ! pacman -Q pipewire-pulse >/dev/null 2>&1 && \
        ! pacman -Q pulseaudio >/dev/null 2>&1; then
-      audio_provider=(pipewire-pulse)
+      set -- "$@" pipewire-pulse
     fi
-    run_as_root pacman -S --needed --noconfirm \
-      gtk3 webkit2gtk-4.1 libdrm libpulse opus ffmpeg gst-libav "${audio_provider[@]}"
+    run_as_root pacman -S --needed --noconfirm "$@"
     run_as_root pacman -U --needed --noconfirm "$asset_path"
     ;;
   suse)
