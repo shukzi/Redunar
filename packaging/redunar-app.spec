@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.10
+Version:        0.1.11
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,10 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Fri Oct 02 2026 Redunar <local@redunar.invalid> - 0.1.11-1.local
+- Improve Replay saving, playback timing, shortcut recovery, and producer handoff.
+- Harden NVIDIA beta capture and metrics and improve private diagnostic logging.
+
 * Sat Sep 26 2026 Redunar <local@redunar.invalid> - 0.1.10-1.local
 - Fix Replay menu visibility and audio timing in Instant Replay clips.
 

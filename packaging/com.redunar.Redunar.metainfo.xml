@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.11" date="2026-10-02">
+      <description>
+        <p>Improves Replay saving, playback timing, shortcut recovery, and producer handoff; hardens experimental NVIDIA capture and metrics; and improves local diagnostic logging. NVIDIA hardware support remains unverified.</p>
+      </description>
+    </release>
     <release version="0.1.10" date="2026-09-26">
       <description>
         <p>Fixes Replay menu visibility and sound timing in Instant Replay clips.</p>
