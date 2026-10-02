@@ -46,6 +46,19 @@ jobs:
           tools/check-release-inputs.sh "$RELEASE_TAG"
           printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup
+      # The workflow runs from main even when checkout uses an older release tag.
+      # Provision gate tools here so the immutable candidate stays unchanged.
+      - name: Install and check release verification tools
+        run: |
+          sudo apt-get install --yes ripgrep
+          for command_name in ar appstreamcli cargo cargo-deny desktop-file-validate \
+            ffmpeg ffprobe flock node npm objdump openssl podman python3 rg \
+            rpm rpmbuild sha256sum tar zstd; do
+            command -v "$command_name" >/dev/null || {
+              printf 'Missing release verification tool: %s\n' "$command_name" >&2
+              exit 1
+            }
+          done
       - name: Bootstrap compatibility image
         run: |
           podman build --pull=always --network=host \
