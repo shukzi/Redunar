@@ -81,7 +81,7 @@ impl SessionTimeline {
         }
         let metrics = capture.and_then(|snapshot| snapshot.metrics.as_ref());
         let hardware = monitor.hardware.as_deref();
-        let gpu = hardware.and_then(|snapshot| snapshot.gpus.first());
+        let gpu = redunar_daemon::capture_gpu(capture, hardware);
         self.push(SessionTelemetrySample {
             elapsed_seconds,
             fps: metrics.map(|value| value.average_fps),

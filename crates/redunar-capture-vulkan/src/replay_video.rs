@@ -380,6 +380,7 @@ pub enum VulkanVideoProbeBlocker {
     InstanceCreationFailed(i32),
     PhysicalDeviceEnumerationFailed(i32),
     NoSupportedPhysicalDevice,
+    SourceDeviceNotFound,
     Vulkan13Unsupported,
     Synchronization2Unsupported,
     DeviceExtensionEnumerationFailed(i32),
@@ -435,7 +436,7 @@ impl VulkanVideoH264Probe {
         }
         // SAFETY: `probe_local` contains the native loader boundary and copies
         // every result into owned Rust values before destroying the instance.
-        unsafe { probe_local(request, allow_nvidia_beta) }
+        unsafe { probe_local(request, allow_nvidia_beta, None) }
     }
 
     #[must_use]
@@ -622,6 +623,39 @@ impl VulkanVideoH264Device {
             .ok_or(VulkanVideoDeviceError::Probe(probe.blockers))?;
         // SAFETY: `open_device` contains all native ownership transitions and
         // returns only after instance/device/queue creation succeeds.
+        unsafe { open_device(request, candidate) }
+    }
+
+    /// Open only the physical device identified by the producing game. All
+    /// profile/import/queue gates still apply; vendor or enumeration order
+    /// alone can never satisfy this match.
+    /// # Errors
+    /// Returns the normal typed probe/open failure for a missing match or
+    /// unsupported device, without attempting another GPU.
+    pub fn open_for_capture_gpu(
+        request: VulkanVideoH264Request,
+        source: redunar_capture::CaptureGpuIdentity,
+    ) -> Result<Self, VulkanVideoDeviceError> {
+        if !request.is_valid() {
+            return Err(VulkanVideoDeviceError::Probe(vec![
+                VulkanVideoProbeBlocker::InvalidRequest,
+            ]));
+        }
+        if ENCODER_TEARDOWN_INCOMPLETE.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(VulkanVideoDeviceError::EncoderPoisoned);
+        }
+        // SAFETY: the bounded request has been checked; the probe owns and
+        // destroys its private Vulkan instance before returning copied data.
+        let probe = unsafe {
+            probe_local(
+                request,
+                source.vendor_id() == NVIDIA_VENDOR_ID,
+                Some(source),
+            )
+        };
+        let candidate = probe
+            .candidate
+            .ok_or(VulkanVideoDeviceError::Probe(probe.blockers))?;
         unsafe { open_device(request, candidate) }
     }
 
@@ -1393,6 +1427,7 @@ unsafe fn resolve_device_command(
 unsafe fn probe_local(
     request: VulkanVideoH264Request,
     allow_nvidia_beta: bool,
+    source_gpu: Option<redunar_capture::CaptureGpuIdentity>,
 ) -> VulkanVideoH264Probe {
     let library_name = b"libvulkan.so.1\0";
     // SAFETY: the name is a terminated static byte string.
@@ -1508,6 +1543,9 @@ unsafe fn probe_local(
     for (device_index, physical_device) in devices.into_iter().enumerate() {
         let identity =
             unsafe { device_identity::query(physical_device, get_physical_device_properties) };
+        if source_gpu.is_some() && identity.capture_identity() != source_gpu {
+            continue;
+        }
         let api_version = identity.api_version;
         let vendor_id = identity.vendor_id;
         if (allow_nvidia_beta && vendor_id != NVIDIA_VENDOR_ID)
@@ -1721,7 +1759,11 @@ unsafe fn probe_local(
         }
     }
     if !saw_supported_device {
-        return VulkanVideoH264Probe::blocked(VulkanVideoProbeBlocker::NoSupportedPhysicalDevice);
+        return VulkanVideoH264Probe::blocked(if source_gpu.is_some() {
+            VulkanVideoProbeBlocker::SourceDeviceNotFound
+        } else {
+            VulkanVideoProbeBlocker::NoSupportedPhysicalDevice
+        });
     }
     VulkanVideoH264Probe {
         candidate: None,
@@ -3055,6 +3097,18 @@ unsafe fn h264_capabilities(
         encode,
         h264,
     })
+}
+
+/// Query the real game's physical device through its own instance dispatch.
+/// The caller proves Properties2 is supported and uses the exact ABI.
+pub(crate) unsafe fn producer_gpu_identity(
+    device: crate::ffi::VkPhysicalDevice,
+    raw: unsafe extern "system" fn(),
+) -> Option<redunar_capture::CaptureGpuIdentity> {
+    let get = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn(), device_identity::GetProperties2>(raw)
+    };
+    unsafe { device_identity::query(device.cast(), get) }.capture_identity()
 }
 
 #[cfg(test)]

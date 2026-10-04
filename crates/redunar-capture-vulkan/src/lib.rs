@@ -320,6 +320,9 @@ unsafe extern "system" fn create_device(
             dispatch::insert_device(
                 key,
                 DeviceDispatch {
+                    gpu_identity: unsafe {
+                        capture_gpu_identity(physical_device, next_instance_proc)
+                    },
                     next_get_device_proc_addr: next_device_proc,
                     destroy_device: destroy,
                     get_device_queue,
@@ -388,6 +391,22 @@ unsafe fn load_device_idle(
     unsafe { next(device, DEVICE_WAIT_IDLE.as_ptr().cast()) }.map(|raw| unsafe {
         mem::transmute::<unsafe extern "system" fn(), ffi::PfnDeviceWaitIdle>(raw)
     })
+}
+
+unsafe fn capture_gpu_identity(
+    physical_device: VkPhysicalDevice,
+    next: PfnGetInstanceProcAddr,
+) -> Option<redunar_capture::CaptureGpuIdentity> {
+    if !unsafe { producer_export_core_ready(physical_device, next) } {
+        return None;
+    }
+    let raw = unsafe {
+        next(
+            physical_device_instance(physical_device)?,
+            c"vkGetPhysicalDeviceProperties2".as_ptr(),
+        )
+    }?;
+    unsafe { replay_video::producer_gpu_identity(physical_device, raw) }
 }
 
 unsafe fn producer_export_support(
@@ -828,6 +847,7 @@ unsafe extern "system" fn queue_present(
     if presentation_succeeded(result)
         && let Some(now_ns) = producer::monotonic_ns()
     {
+        producer::record_gpu_identity(dispatch.gpu_identity);
         producer::record_present_at(now_ns);
         overlay::presentation_finished(now_ns);
     }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 #[path = "linux_drm.rs"]
 mod drm;
+pub use drm::{DrmRenderDevice, unique_render_device};
 
 #[derive(Clone, Debug)]
 pub struct LinuxHardwareProbe {

@@ -694,10 +694,15 @@ pub(crate) unsafe fn swapchain_created(
         ));
         return;
     }
-    let Some(assessment) = (unsafe { replay_transfer::assessment_from_create_info(create_info) })
+    let Some(mut assessment) =
+        (unsafe { replay_transfer::assessment_from_create_info(create_info) })
     else {
         return;
     };
+    if let Ok(candidate) = &mut assessment {
+        candidate.gpu_identity =
+            crate::dispatch::device(device_key).and_then(|device| device.gpu_identity);
+    }
     let Some(candidate) =
         selected_source_assessment(&mut state, device_key, info.old_swapchain, assessment)
     else {

@@ -25,7 +25,10 @@ pub use launch::{
     game_launch_process_ownership, prepare_vulkan_layer_directory, supports_host_capture_launch,
     supports_host_explicit_layer_launch,
 };
-pub use linux::{LinuxCpuUtilizationSampler, LinuxHardwareProbe, LinuxTelemetrySampler};
+pub use linux::{
+    DrmRenderDevice, LinuxCpuUtilizationSampler, LinuxHardwareProbe, LinuxTelemetrySampler,
+    unique_render_device,
+};
 pub use process_control::{
     AffinityMask, apply_affinity, apply_priority, read_affinity, read_priority,
 };

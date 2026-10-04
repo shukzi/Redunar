@@ -9,6 +9,7 @@
 //! metadata-only.
 
 mod fd_transport;
+mod gpu_identity;
 mod overlay;
 mod replay_export;
 mod replay_readback;
@@ -165,7 +166,14 @@ macro_rules! launch_diag {
     ($event:ident, $message:literal) => {};
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GpuIdentityReport {
+    Unreported,
+    Reported(Option<redunar_capture::CaptureGpuIdentity>),
+}
+
 struct Producer {
+    gpu_identity_reported: GpuIdentityReport,
     initialized: bool,
     socket: Option<UnixDatagram>,
     session_id: Option<CaptureSessionId>,
@@ -211,6 +219,7 @@ impl PresentationTarget {
 impl Default for Producer {
     fn default() -> Self {
         Self {
+            gpu_identity_reported: GpuIdentityReport::Unreported,
             initialized: false,
             socket: None,
             session_id: None,
@@ -517,6 +526,7 @@ unsafe extern "C" fn sdl_gl_swap_window(window: *mut c_void) {
     }
     poll_replay_releases();
     if selected {
+        record_gpu_identity(gpu_identity::for_context(context_key));
         overlay::render(context_key, overlay::ApiFlavor::Desktop);
         replay_readback::capture(context_key, overlay::ApiFlavor::Desktop);
         // SAFETY: the window's GL context is current for this presentation.
@@ -577,6 +587,7 @@ unsafe extern "C" fn sdl_render_present(renderer: *mut c_void) {
     let selected = select_presentation(context_key);
     poll_replay_releases();
     if selected {
+        record_gpu_identity(gpu_identity::for_context(context_key));
         overlay::render(context_key, overlay::ApiFlavor::Desktop);
         replay_readback::capture(context_key, overlay::ApiFlavor::Desktop);
         // SAFETY: the renderer's target GL context is current for this present.
@@ -816,6 +827,7 @@ unsafe extern "C" fn glx_swap_buffers(display: *mut c_void, drawable: usize) {
         }
         poll_replay_releases();
         if selected {
+            record_gpu_identity(gpu_identity::for_context(context_key));
             overlay::render(context_key, overlay::ApiFlavor::Desktop);
             replay_readback::capture(context_key, overlay::ApiFlavor::Desktop);
             // SAFETY: the GLX current context matches the context key used for
@@ -861,6 +873,7 @@ unsafe extern "C" fn egl_destroy_context(display: *mut c_void, context: *mut c_v
 }
 
 fn destroy_context(context: usize) {
+    gpu_identity::destroyed(context);
     PRESENTATION_TARGET
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -893,6 +906,7 @@ unsafe extern "C" fn egl_swap_buffers(display: *mut c_void, surface: *mut c_void
     }
     poll_replay_releases();
     if selected {
+        record_gpu_identity(gpu_identity::for_context(context_key));
         overlay::render(context_key, overlay::ApiFlavor::Embedded);
         replay_readback::capture(context_key, overlay::ApiFlavor::Embedded);
         // SAFETY: the EGL current context matches the context key used for the
@@ -1064,6 +1078,30 @@ fn real_dlopen() -> Option<Dlopen> {
             Some(unsafe { mem::transmute_copy(&address) })
         }
     })
+}
+
+pub(crate) fn record_gpu_identity(identity: Option<redunar_capture::CaptureGpuIdentity>) {
+    let Ok(mut producer) = PRODUCER.try_lock() else {
+        return;
+    };
+    producer.initialize(monotonic_ns().unwrap_or(1));
+    if producer.gpu_identity_reported == GpuIdentityReport::Reported(identity) {
+        return;
+    }
+    let (Some(socket), Some(session_id)) = (&producer.socket, producer.session_id) else {
+        return;
+    };
+    let message = CaptureMessage::GpuIdentity {
+        session_id,
+        api: CaptureApi::OpenGl,
+        identity,
+    };
+    let mut bytes = [0; MAX_MESSAGE_BYTES];
+    if let Ok(length) = encode_message(&message, &mut bytes)
+        && socket.send(&bytes[..length]).is_ok()
+    {
+        producer.gpu_identity_reported = GpuIdentityReport::Reported(identity);
+    }
 }
 
 fn record_present() {
@@ -1402,6 +1440,7 @@ impl Producer {
     }
 
     fn finish(&mut self) {
+        self.gpu_identity_reported = GpuIdentityReport::Unreported;
         let now_ns = monotonic_ns().unwrap_or(self.last_flush_ns);
         self.flush(now_ns);
         if let (Some(socket), Some(session_id)) = (&self.socket, self.session_id) {

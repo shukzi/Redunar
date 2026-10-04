@@ -867,6 +867,7 @@ impl CaptureSessionHandle {
             &self.overlay_telemetry_file,
             &self.overlay_telemetry_revision,
             hardware,
+            crate::capture::capture_gpu(Some(&self.snapshot()), hardware),
             self.overlay_config.load(Ordering::Relaxed),
             self.overlay_replay_saved_revision.load(Ordering::Relaxed),
         )
@@ -1445,7 +1446,7 @@ fn import_export_frame(
         ));
     }
     last_imported.store(sequence, Ordering::Release);
-    Ok(frame)
+    Ok(frame.with_gpu_identity(source.gpu_identity))
 }
 
 fn receiver_loop(socket: &UnixDatagram, shared: &CaptureShared, session_id: CaptureSessionId) {
@@ -1517,6 +1518,31 @@ fn receiver_loop(socket: &UnixDatagram, shared: &CaptureShared, session_id: Capt
     }
 }
 
+fn log_capture_gpu_identity(
+    report: Option<(
+        redunar_capture::CaptureApi,
+        Option<redunar_capture::CaptureGpuIdentity>,
+    )>,
+) {
+    let Some((api, identity)) = report else {
+        return;
+    };
+    crate::diagnostic_log::log(&format!(
+        "Capture event=gpu_identity api={api:?} state={} vendor={}",
+        if identity.is_some() {
+            "available"
+        } else {
+            "unavailable"
+        },
+        match identity.map(redunar_capture::CaptureGpuIdentity::vendor_id) {
+            Some(0x10de) => "nvidia",
+            Some(0x1002) => "amd",
+            Some(0x8086) => "intel",
+            _ => "unknown",
+        }
+    ));
+}
+
 fn accept_capture_message(
     model: &mut CaptureSessionModel,
     replay_producers: &mut ReplayProducerSelector,
@@ -1530,27 +1556,24 @@ fn accept_capture_message(
         model.reject_transport_message();
         return;
     }
-    let is_hello = matches!(&message, redunar_capture::CaptureMessage::Hello { .. });
-    let source_rejection =
-        if let redunar_capture::CaptureMessage::ReplaySourceRejected { reason, .. } = &message {
-            if !replay_producers.owns_assessment(Some(
-                sender_path.unwrap_or(&shared.replay_release.reply_socket_path),
-            )) {
-                return;
-            }
-            Some(*reason)
-        } else {
-            None
-        };
-    let mut exported = replay_export_metadata(&message, received_fd);
     if matches!(
         &message,
-        redunar_capture::CaptureMessage::ReplayFrameCopied { .. }
+        redunar_capture::CaptureMessage::GpuIdentity { .. }
+            | redunar_capture::CaptureMessage::ReplayFrameCopied { .. }
+            | redunar_capture::CaptureMessage::ReplaySourceRejected { .. }
     ) && !replay_producers.owns_assessment(Some(
         sender_path.unwrap_or(&shared.replay_release.reply_socket_path),
     )) {
         return;
     }
+    let is_hello = matches!(&message, redunar_capture::CaptureMessage::Hello { .. });
+    let source_rejection =
+        if let redunar_capture::CaptureMessage::ReplaySourceRejected { reason, .. } = &message {
+            Some(*reason)
+        } else {
+            None
+        };
+    let mut exported = replay_export_metadata(&message, received_fd);
     let previous_producer = replay_producers.selected.clone();
     if matches!(
         &message,
@@ -1591,7 +1614,16 @@ fn accept_capture_message(
         // the replacement process's next valid diagnostic.
         model.clear_replay_copy_tracking();
     }
+    let gpu_report =
+        if let redunar_capture::CaptureMessage::GpuIdentity { api, identity, .. } = &message {
+            Some((*api, *identity))
+        } else {
+            None
+        };
     let accepted = model.accept(message).is_ok();
+    if accepted {
+        log_capture_gpu_identity(gpu_report);
+    }
     if accepted && is_hello {
         // A same-process device recreation can reset the wire sequence.
         // Outstanding GPU routes retain their unique tokens and original ACKs.
@@ -1848,6 +1880,7 @@ fn write_overlay_hardware(
     file: &File,
     revision: &AtomicU64,
     hardware: Option<&SystemSnapshot>,
+    gpu: Option<&redunar_core::GpuSnapshot>,
     packed_config: u64,
     replay_saved_revision: u16,
 ) -> io::Result<()> {
@@ -1860,7 +1893,6 @@ fn write_overlay_hardware(
     file.write_all_at(&odd_revision.to_le_bytes(), 16)?;
     file.write_all_at(&odd_revision.to_le_bytes(), 40)?;
 
-    let gpu = hardware.and_then(|snapshot| snapshot.gpus.first());
     let telemetry = OverlayHardwareTelemetry {
         revision: next_revision,
         corner: (packed_config & 0xff) as u8,
@@ -2274,6 +2306,7 @@ mod tests {
             sequence: 9,
             fd: File::open("/dev/null").unwrap().into(),
             source: redunar_capture::ReplaySourceCandidate {
+                gpu_identity: None,
                 width: 320,
                 height: 240,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -2315,6 +2348,7 @@ mod tests {
             })
             .unwrap();
         let candidate = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 320,
             height: 240,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -2433,6 +2467,7 @@ mod tests {
             &file,
             &revision,
             Some(&hardware),
+            hardware.gpus.first(),
             pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true),
             0,
         )
@@ -2457,6 +2492,7 @@ mod tests {
         write_overlay_hardware(
             &file,
             &revision,
+            None,
             None,
             pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true),
             9,
@@ -2689,6 +2725,7 @@ mod tests {
                 sequence,
                 fd: File::open("/dev/null").expect("open fd").into(),
                 source: redunar_capture::ReplaySourceCandidate {
+                    gpu_identity: None,
                     width: 320,
                     height: 240,
                     pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -2759,6 +2796,7 @@ mod tests {
         let helper = Path::new("/run/user/1000/redunar/session/r-101.sock");
         let game = Path::new("/run/user/1000/redunar/session/r-202.sock");
         let source = redunar_capture::ReplaySourceCandidate {
+            gpu_identity: None,
             width: 2_560,
             height: 1_440,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -2804,12 +2842,14 @@ mod tests {
     fn replay_producer_confirmation_survives_game_swapchain_recreation() {
         let game = Path::new("/run/user/1000/redunar/session/r-202.sock");
         let startup = redunar_capture::ReplaySourceCandidate {
+            gpu_identity: None,
             width: 1_280,
             height: 720,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
             target_frames_per_second: 60,
         };
         let gameplay = redunar_capture::ReplaySourceCandidate {
+            gpu_identity: None,
             width: 2_560,
             height: 1_440,
             pixel_format: ReplayPixelFormat::Bgra8Srgb,

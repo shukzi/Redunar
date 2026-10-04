@@ -116,6 +116,7 @@ dependencies = [
  "nix",
  "redunar-capture",
  "redunar-core",
+ "redunar-platform",
 ]
 
 [[package]]

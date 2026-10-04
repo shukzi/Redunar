@@ -503,6 +503,7 @@ fn reset() {
 }
 fn candidate() -> ReplaySourceCandidate {
     ReplaySourceCandidate {
+        gpu_identity: None,
         width: 16,
         height: 16,
         pixel_format: ReplayPixelFormat::Rgba8Unorm,

@@ -53,7 +53,9 @@ pub fn session_started_unix() -> u64 {
 }
 
 pub use app_preferences::{AppPreferences, AppPreferencesError};
-pub use capture::{CaptureFrameMetrics, CapturePhase, CaptureSessionModel, CaptureSnapshot};
+pub use capture::{
+    CaptureFrameMetrics, CapturePhase, CaptureSessionModel, CaptureSnapshot, capture_gpu,
+};
 pub use capture_lifecycle::{
     ARMED_STARTUP_GRACE, CaptureLaunchDisposition, CaptureLaunchProcessState,
 };
@@ -554,8 +556,8 @@ impl RedunarService {
         let pipeline_settings = settings;
         let pipeline_save_directory = save_directory.clone();
         let pipeline_spool_directory = spool_directory.clone();
-        // The encoder vendor must agree with the one eligible DRM node. A
-        // preference alone is insufficient to select a Vulkan physical device.
+        // Beta admission requires an accessible, identifiable NVIDIA device.
+        // The first game export independently selects and matches its UUIDs.
         let allow_nvidia_beta = self.beta_access_at_start
             && self
                 .replay_hardware_encoder_probe()
@@ -1108,7 +1110,7 @@ impl RedunarService {
             module_state::ModuleCapability::Available
         } else {
             module_state::ModuleCapability::PlannedUnavailable(
-                "Instant Replay requires Vulkan game capture and an accessible hardware encoder. NVIDIA candidates require Beta access and a single GPU.".to_owned(),
+                "Instant Replay requires Vulkan game capture and an accessible hardware encoder. NVIDIA candidates require Beta access, one identifiable NVIDIA GPU, and a matching game device.".to_owned(),
             )
         };
         module_state::ModuleCapabilities {
@@ -1487,7 +1489,9 @@ fn vulkan_replay_backend(
     frame: &DmaBufReplayFrame,
     settings: redunar_core::ReplaySettings,
 ) -> Result<Box<dyn HardwareEncoderBackend>, String> {
-    vulkan_replay_backend_with_nvidia_beta(frame, settings, false)
+    // Retained KMS engineering diagnostics have no game producer identity.
+    // This separate entry point never authorizes the production game path.
+    vulkan_replay_backend_inner(frame, settings, false, false)
 }
 
 fn vulkan_replay_backend_with_nvidia_beta(
@@ -1495,12 +1499,56 @@ fn vulkan_replay_backend_with_nvidia_beta(
     settings: redunar_core::ReplaySettings,
     allow_nvidia_beta: bool,
 ) -> Result<Box<dyn HardwareEncoderBackend>, String> {
+    vulkan_replay_backend_inner(frame, settings, allow_nvidia_beta, true)
+}
+
+fn validate_game_gpu_identity(
+    identity: Option<redunar_capture::CaptureGpuIdentity>,
+    allow_nvidia_beta: bool,
+    require_game_identity: bool,
+) -> Result<bool, String> {
+    if require_game_identity && identity.is_none() {
+        replay_nvidia_diagnostics::source_device(
+            allow_nvidia_beta,
+            "unavailable",
+            "source_identity_missing",
+        );
+        return Err("Replay source GPU identity is unavailable".to_owned());
+    }
+    let selected_nvidia = identity.is_some_and(|identity| identity.vendor_id() == 0x10de);
+    if identity.is_some_and(|identity| !matches!(identity.vendor_id(), 0x1002 | 0x10de))
+        || (selected_nvidia && !allow_nvidia_beta)
+    {
+        replay_nvidia_diagnostics::source_device(
+            allow_nvidia_beta,
+            "unavailable",
+            "source_vendor_not_admitted",
+        );
+        return Err("Replay source GPU is not an admitted hardware encoder candidate".to_owned());
+    }
+    Ok(selected_nvidia)
+}
+
+fn vulkan_replay_backend_inner(
+    frame: &DmaBufReplayFrame,
+    settings: redunar_core::ReplaySettings,
+    allow_nvidia_beta: bool,
+    require_game_identity: bool,
+) -> Result<Box<dyn HardwareEncoderBackend>, String> {
     use replay_nvidia_diagnostics::{Stage, startup_result};
     const DRM_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
     const DRM_FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
     const DRM_FORMAT_XBGR8888: u32 = u32::from_le_bytes(*b"XB24");
     const DRM_FORMAT_ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
     let variable_rate = settings.frame_rate == redunar_core::ReplayFrameRate::Variable;
+    let identity = frame.gpu_identity();
+    let selected_nvidia =
+        validate_game_gpu_identity(identity, allow_nvidia_beta, require_game_identity)?;
+    replay_nvidia_diagnostics::source_device(
+        selected_nvidia,
+        "identified",
+        "awaiting_encoder_match",
+    );
     let request = redunar_capture_vulkan::replay_video::VulkanVideoH264Request {
         width: frame.width,
         height: frame.height,
@@ -1517,14 +1565,18 @@ fn vulkan_replay_backend_with_nvidia_beta(
         target_megabits_per_second: settings.quality.target_megabits_per_second(),
     };
     let device = startup_result(
-        allow_nvidia_beta,
+        selected_nvidia,
         Stage::Device,
-        redunar_capture_vulkan::replay_video::VulkanVideoH264Device::open_with_nvidia_beta(
-            request,
-            allow_nvidia_beta,
-        ),
+        match identity {
+            Some(identity) => {
+                redunar_capture_vulkan::replay_video::VulkanVideoH264Device::open_for_capture_gpu(
+                    request, identity,
+                )
+            }
+            None => redunar_capture_vulkan::replay_video::VulkanVideoH264Device::open(request),
+        },
     )?;
-    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Device);
+    replay_nvidia_diagnostics::startup_ready(selected_nvidia, Stage::Device);
     if diagnostic_log::enabled() {
         let candidate = device.candidate();
         diagnostic_log::log(&format!(
@@ -1541,16 +1593,16 @@ fn vulkan_replay_backend_with_nvidia_beta(
         request.target_megabits_per_second,
         frame.drm_fourcc,
     ));
-    let session = startup_result(allow_nvidia_beta, Stage::Session, device.create_session())?;
-    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Session);
+    let session = startup_result(selected_nvidia, Stage::Session, device.create_session())?;
+    replay_nvidia_diagnostics::startup_ready(selected_nvidia, Stage::Session);
     let parameters = startup_result(
-        allow_nvidia_beta,
+        selected_nvidia,
         Stage::Parameters,
         session.create_parameters(),
     )?;
-    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Parameters);
+    replay_nvidia_diagnostics::startup_ready(selected_nvidia, Stage::Parameters);
     let encoder = startup_result(
-        allow_nvidia_beta,
+        selected_nvidia,
         Stage::Encoder,
         if matches!(
             frame.drm_fourcc,
@@ -1561,14 +1613,18 @@ fn vulkan_replay_backend_with_nvidia_beta(
             parameters.create_production_encoder()
         },
     )?;
-    replay_nvidia_diagnostics::startup_ready(allow_nvidia_beta, Stage::Encoder);
+    replay_nvidia_diagnostics::startup_ready(selected_nvidia, Stage::Encoder);
     VulkanVideoH264Backend::new(encoder)
+        .map(|backend| match identity {
+            Some(identity) => backend.with_capture_gpu(identity),
+            None => backend,
+        })
         .map(|backend| Box::new(backend) as Box<dyn HardwareEncoderBackend>)
         .map_err(|error| {
-            if !allow_nvidia_beta {
+            if !selected_nvidia {
                 return error.to_string();
             }
-            replay_nvidia_diagnostics::backend_failed(allow_nvidia_beta);
+            replay_nvidia_diagnostics::backend_failed(selected_nvidia);
             "Replay hardware encoder startup failed".to_owned()
         })
 }
@@ -1609,6 +1665,55 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn beta_preference_never_overrides_the_game_vendor() {
+        let identity = |vendor| {
+            Some(redunar_capture::CaptureGpuIdentity::new(vendor, [1; 16], [2; 16]).unwrap())
+        };
+        for beta in [false, true] {
+            assert_eq!(
+                validate_game_gpu_identity(identity(0x1002), beta, true),
+                Ok(false)
+            );
+            assert!(validate_game_gpu_identity(identity(0x8086), beta, true).is_err());
+        }
+        assert!(validate_game_gpu_identity(identity(0x10de), false, true).is_err());
+        assert_eq!(
+            validate_game_gpu_identity(identity(0x10de), true, true),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn production_replay_without_game_gpu_identity_never_probes_hardware() {
+        let file = fs::File::open("/dev/null").unwrap();
+        let frame = DmaBufReplayFrame::new_multi_object(
+            vec![file.into()],
+            320,
+            240,
+            u32::from_le_bytes(*b"XR24"),
+            0,
+            1,
+            16_666_667,
+            vec![DmaBufImagePlane {
+                object_index: 0,
+                offset: 0,
+                stride: 1_280,
+            }],
+        )
+        .unwrap();
+        for beta in [false, true] {
+            let error = vulkan_replay_backend_with_nvidia_beta(
+                &frame,
+                redunar_core::ReplaySettings::default(),
+                beta,
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error, "Replay source GPU identity is unavailable");
+        }
+    }
 
     #[test]
     fn read_only_tauri_service_cannot_claim_the_primary_replay_socket() {

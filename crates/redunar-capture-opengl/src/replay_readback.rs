@@ -392,6 +392,7 @@ fn source_candidate(width: u32, height: u32) -> Option<ReplaySourceCandidate> {
         && width <= MAX_REPLAY_SOURCE_WIDTH
         && height <= MAX_REPLAY_SOURCE_HEIGHT)
         .then_some(ReplaySourceCandidate {
+            gpu_identity: None,
             width,
             height,
             pixel_format: ReplayPixelFormat::Rgba8Unorm,

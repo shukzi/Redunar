@@ -43,6 +43,11 @@ impl std::fmt::Debug for Identity {
 }
 
 impl Identity {
+    pub(super) fn capture_identity(&self) -> Option<redunar_capture::CaptureGpuIdentity> {
+        redunar_capture::CaptureGpuIdentity::new(self.vendor_id, self.device_uuid, self.driver_uuid)
+            .ok()
+    }
+
     pub(super) fn is_stable(&self) -> bool {
         self.device_uuid != [0; 16] && self.driver_uuid != [0; 16]
     }
@@ -149,5 +154,22 @@ mod tests {
         );
         expected.device_uuid = [0; 16];
         assert!(!expected.is_stable());
+    }
+
+    #[test]
+    fn capture_match_requires_vendor_device_and_driver_uuid() {
+        let mut identity = unsafe { query(2_usize as VkPhysicalDevice, fake_properties) };
+        let expected = redunar_capture::CaptureGpuIdentity::new(0x10de, [2; 16], [9; 16]).unwrap();
+        assert_eq!(identity.capture_identity(), Some(expected));
+        identity.device_uuid = [1; 16];
+        assert_ne!(identity.capture_identity(), Some(expected));
+        identity.device_uuid = [2; 16];
+        identity.driver_uuid = [8; 16];
+        assert_ne!(identity.capture_identity(), Some(expected));
+        identity.driver_uuid = [9; 16];
+        identity.vendor_id = 0x8086;
+        assert_ne!(identity.capture_identity(), Some(expected));
+        identity.device_uuid = [0; 16];
+        assert_eq!(identity.capture_identity(), None);
     }
 }

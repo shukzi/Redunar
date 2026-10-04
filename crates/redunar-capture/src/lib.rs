@@ -2,6 +2,9 @@
 //! the daemon. The wire format deliberately carries no paths, game names, or
 //! user data; it only identifies one daemon-created session and its timings.
 
+mod gpu_identity;
+pub use gpu_identity::CaptureGpuIdentity;
+
 mod overlay;
 mod reply_endpoint;
 
@@ -17,7 +20,7 @@ pub use overlay::{
 use std::error::Error;
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 pub const MAX_FRAME_INTERVALS: usize = 128;
 pub const MAX_REPLAY_SOURCE_WIDTH: u32 = 3_840;
 pub const MAX_REPLAY_SOURCE_HEIGHT: u32 = 2_160;
@@ -34,12 +37,15 @@ const HEADER_BYTES: usize = 32;
 const HELLO_BYTES: usize = 16;
 const FRAME_BATCH_PREFIX_BYTES: usize = 16;
 const GOODBYE_BYTES: usize = 16;
-const REPLAY_SOURCE_CANDIDATE_BYTES: usize = 16;
+const REPLAY_SOURCE_CANDIDATE_BYTES: usize = 16 + gpu_identity::WIRE_BYTES;
 const REPLAY_SOURCE_REJECTED_BYTES: usize = 8;
-const REPLAY_FRAME_COPIED_BYTES: usize = 32;
-const REPLAY_FRAME_EXPORTED_BYTES: usize = 56;
+const REPLAY_FRAME_COPIED_BYTES: usize = 32 + gpu_identity::WIRE_BYTES;
+const REPLAY_FRAME_EXPORTED_BYTES: usize = 56 + gpu_identity::WIRE_BYTES;
 const REPLAY_FRAME_RELEASED_BYTES: usize = 16;
 const OVERLAY_STATUS_BYTES: usize = 8;
+
+const GPU_IDENTITY_BYTES: usize = 48;
+const KIND_GPU_IDENTITY: u8 = 10;
 
 const KIND_HELLO: u8 = 1;
 const KIND_FRAME_BATCH: u8 = 2;
@@ -201,6 +207,7 @@ impl ReplayPixelFormat {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReplaySourceCandidate {
+    pub gpu_identity: Option<CaptureGpuIdentity>,
     pub width: u32,
     pub height: u32,
     pub pixel_format: ReplayPixelFormat,
@@ -219,6 +226,7 @@ pub enum ReplaySourceRejection {
     ExternalMemoryUnsupported = 7,
     EncoderBackendUnavailable = 8,
     VideoEncodeUnsupported = 9,
+    GpuIdentityUnavailable = 10,
 }
 
 impl ReplaySourceRejection {
@@ -233,6 +241,7 @@ impl ReplaySourceRejection {
             7 => Ok(Self::ExternalMemoryUnsupported),
             8 => Ok(Self::EncoderBackendUnavailable),
             9 => Ok(Self::VideoEncodeUnsupported),
+            10 => Ok(Self::GpuIdentityUnavailable),
             _ => Err(ProtocolError::new(
                 "replay source rejection reason is unsupported",
             )),
@@ -258,6 +267,12 @@ impl ReplaySourceCandidate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CaptureMessage {
+    /// Identity of the currently presenting device; independent of Replay.
+    GpuIdentity {
+        session_id: CaptureSessionId,
+        api: CaptureApi,
+        identity: Option<CaptureGpuIdentity>,
+    },
     Hello {
         session_id: CaptureSessionId,
         process_id: u32,
@@ -325,7 +340,8 @@ impl CaptureMessage {
     #[must_use]
     pub const fn session_id(&self) -> CaptureSessionId {
         match self {
-            Self::Hello { session_id, .. }
+            Self::GpuIdentity { session_id, .. }
+            | Self::Hello { session_id, .. }
             | Self::FrameBatch { session_id, .. }
             | Self::Goodbye { session_id, .. }
             | Self::ReplaySourceCandidate { session_id, .. }
@@ -370,6 +386,7 @@ pub fn encode_message(message: &CaptureMessage, output: &mut [u8]) -> Result<usi
 
 fn message_layout(message: &CaptureMessage) -> Result<(u8, usize), ProtocolError> {
     let layout = match message {
+        CaptureMessage::GpuIdentity { .. } => (KIND_GPU_IDENTITY, GPU_IDENTITY_BYTES),
         CaptureMessage::Hello { .. } => (KIND_HELLO, HELLO_BYTES),
         CaptureMessage::FrameBatch {
             frame_intervals_ns, ..
@@ -421,6 +438,9 @@ fn message_layout(message: &CaptureMessage) -> Result<(u8, usize), ProtocolError
 
 fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), ProtocolError> {
     match message {
+        CaptureMessage::GpuIdentity { identity, api, .. } => {
+            encode_gpu_identity(output, *api, *identity);
+        }
         CaptureMessage::Hello {
             process_id,
             api,
@@ -461,10 +481,7 @@ fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), Pro
             output[HEADER_BYTES + 9] = *api as u8;
         }
         CaptureMessage::ReplaySourceCandidate { candidate, .. } => {
-            write_u32(output, HEADER_BYTES, candidate.width);
-            write_u32(output, HEADER_BYTES + 4, candidate.height);
-            output[HEADER_BYTES + 8] = candidate.pixel_format as u8;
-            output[HEADER_BYTES + 9] = candidate.target_frames_per_second;
+            encode_replay_source_candidate(output, *candidate);
         }
         CaptureMessage::ReplaySourceRejected { reason, .. } => {
             output[HEADER_BYTES] = *reason as u8;
@@ -503,6 +520,7 @@ fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), Pro
             // Duration is carried in the fixed trailing field by reusing the
             // message's reserved extension area in protocol v5.
             write_u64(output, base + 48, *duration_ns);
+            gpu_identity::encode(source.gpu_identity, &mut output[base + 56..]);
         }
         CaptureMessage::ReplayFrameReleased { sequence, .. } => {
             write_u64(output, HEADER_BYTES, *sequence);
@@ -520,6 +538,19 @@ fn encode_payload(message: &CaptureMessage, output: &mut [u8]) -> Result<(), Pro
     Ok(())
 }
 
+fn encode_gpu_identity(output: &mut [u8], api: CaptureApi, identity: Option<CaptureGpuIdentity>) {
+    gpu_identity::encode(identity, &mut output[HEADER_BYTES..]);
+    output[HEADER_BYTES + 40] = api as u8;
+}
+
+fn encode_replay_source_candidate(output: &mut [u8], candidate: ReplaySourceCandidate) {
+    write_u32(output, HEADER_BYTES, candidate.width);
+    write_u32(output, HEADER_BYTES + 4, candidate.height);
+    output[HEADER_BYTES + 8] = candidate.pixel_format as u8;
+    output[HEADER_BYTES + 9] = candidate.target_frames_per_second;
+    gpu_identity::encode(candidate.gpu_identity, &mut output[HEADER_BYTES + 16..]);
+}
+
 fn encode_replay_frame_copied(
     output: &mut [u8],
     sequence: u64,
@@ -534,6 +565,7 @@ fn encode_replay_frame_copied(
     output[HEADER_BYTES + 20] = source.pixel_format as u8;
     output[HEADER_BYTES + 21] = source.target_frames_per_second;
     write_u64(output, HEADER_BYTES + 24, sample_checksum);
+    gpu_identity::encode(source.gpu_identity, &mut output[HEADER_BYTES + 32..]);
 }
 
 /// Encode a frame batch directly from a borrowed slice. Capture layers use
@@ -590,6 +622,18 @@ pub fn decode_message(input: &[u8]) -> Result<CaptureMessage, ProtocolError> {
     let (kind, payload_bytes, session_id) = decode_header(input)?;
 
     match kind {
+        KIND_GPU_IDENTITY if payload_bytes == GPU_IDENTITY_BYTES => {
+            if input[HEADER_BYTES + 41..].iter().any(|byte| *byte != 0) {
+                return Err(ProtocolError::new(
+                    "capture GPU message reserved fields are non-zero",
+                ));
+            }
+            Ok(CaptureMessage::GpuIdentity {
+                session_id,
+                api: CaptureApi::from_wire(input[HEADER_BYTES + 40])?,
+                identity: gpu_identity::decode(&input[HEADER_BYTES..])?,
+            })
+        }
         KIND_HELLO if payload_bytes == HELLO_BYTES => Ok(CaptureMessage::Hello {
             session_id,
             process_id: read_u32(input, HEADER_BYTES),
@@ -629,7 +673,8 @@ pub fn decode_message(input: &[u8]) -> Result<CaptureMessage, ProtocolError> {
         KIND_OVERLAY_STATUS if payload_bytes == OVERLAY_STATUS_BYTES => {
             decode_overlay_status(input, session_id)
         }
-        KIND_HELLO
+        KIND_GPU_IDENTITY
+        | KIND_HELLO
         | KIND_FRAME_BATCH
         | KIND_GOODBYE
         | KIND_REPLAY_SOURCE_CANDIDATE
@@ -766,6 +811,7 @@ fn decode_replay_frame_copied(
     }
     let copied_bytes = read_u32(input, HEADER_BYTES + 8);
     let source = ReplaySourceCandidate {
+        gpu_identity: gpu_identity::decode(&input[HEADER_BYTES + 32..])?,
         width: read_u32(input, HEADER_BYTES + 12),
         height: read_u32(input, HEADER_BYTES + 16),
         pixel_format: ReplayPixelFormat::from_wire(input[HEADER_BYTES + 20])?,
@@ -793,6 +839,7 @@ fn decode_replay_frame_exported(
         ));
     }
     let source = ReplaySourceCandidate {
+        gpu_identity: gpu_identity::decode(&input[HEADER_BYTES + 56..])?,
         width: read_u32(input, base + 12),
         height: read_u32(input, base + 16),
         pixel_format: ReplayPixelFormat::from_wire(input[base + 20])?,
@@ -881,7 +928,7 @@ fn decode_replay_source_candidate(
     input: &[u8],
     session_id: CaptureSessionId,
 ) -> Result<CaptureMessage, ProtocolError> {
-    if input[HEADER_BYTES + 10..HEADER_BYTES + REPLAY_SOURCE_CANDIDATE_BYTES]
+    if input[HEADER_BYTES + 10..HEADER_BYTES + 16]
         .iter()
         .any(|byte| *byte != 0)
     {
@@ -890,6 +937,7 @@ fn decode_replay_source_candidate(
         ));
     }
     let candidate = ReplaySourceCandidate {
+        gpu_identity: gpu_identity::decode(&input[HEADER_BYTES + 16..])?,
         width: read_u32(input, HEADER_BYTES),
         height: read_u32(input, HEADER_BYTES + 4),
         pixel_format: ReplayPixelFormat::from_wire(input[HEADER_BYTES + 8])?,
@@ -991,6 +1039,18 @@ mod tests {
 
     #[test]
     fn every_message_kind_round_trips() {
+        for api in [CaptureApi::Vulkan, CaptureApi::OpenGl] {
+            for identity in [
+                None,
+                Some(CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap()),
+            ] {
+                round_trip(&CaptureMessage::GpuIdentity {
+                    session_id: session_id(),
+                    api,
+                    identity,
+                });
+            }
+        }
         round_trip(&CaptureMessage::Hello {
             session_id: session_id(),
             process_id: 42,
@@ -1018,6 +1078,7 @@ mod tests {
         round_trip(&CaptureMessage::ReplaySourceCandidate {
             session_id: session_id(),
             candidate: ReplaySourceCandidate {
+                gpu_identity: Some(CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap()),
                 width: 2_560,
                 height: 1_440,
                 pixel_format: ReplayPixelFormat::Bgra8Srgb,
@@ -1032,6 +1093,7 @@ mod tests {
             session_id: session_id(),
             sequence: 12,
             source: ReplaySourceCandidate {
+                gpu_identity: Some(CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap()),
                 width: 640,
                 height: 480,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -1045,6 +1107,7 @@ mod tests {
             sequence: 13,
             fd_number: 17,
             source: ReplaySourceCandidate {
+                gpu_identity: Some(CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap()),
                 width: 640,
                 height: 480,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -1070,6 +1133,26 @@ mod tests {
                 status,
             });
         }
+    }
+
+    #[test]
+    fn gpu_identity_wire_rejects_legacy_protocol_and_noncanonical_padding() {
+        let message = CaptureMessage::GpuIdentity {
+            session_id: session_id(),
+            api: CaptureApi::OpenGl,
+            identity: Some(CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap()),
+        };
+        let mut bytes = [0; MAX_MESSAGE_BYTES];
+        let len = encode_message(&message, &mut bytes).unwrap();
+        let original = bytes;
+        bytes[HEADER_BYTES + 47] = 1;
+        assert!(decode_message(&bytes[..len]).is_err());
+        bytes = original;
+        bytes[HEADER_BYTES + 36] = 1;
+        assert!(decode_message(&bytes[..len]).is_err());
+        bytes = original;
+        write_u16(&mut bytes, 8, PROTOCOL_VERSION - 1);
+        assert!(decode_message(&bytes[..len]).is_err());
     }
 
     #[test]
@@ -1190,18 +1273,21 @@ mod tests {
     fn replay_source_candidate_is_metadata_only_and_strictly_bounded() {
         for candidate in [
             ReplaySourceCandidate {
+                gpu_identity: None,
                 width: 0,
                 height: 1_080,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,
                 target_frames_per_second: 60,
             },
             ReplaySourceCandidate {
+                gpu_identity: None,
                 width: MAX_REPLAY_SOURCE_WIDTH + 1,
                 height: 1_080,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,
                 target_frames_per_second: 60,
             },
             ReplaySourceCandidate {
+                gpu_identity: None,
                 width: 1_920,
                 height: 1_080,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -1219,6 +1305,7 @@ mod tests {
             session_id: session_id(),
             sequence: 1,
             source: ReplaySourceCandidate {
+                gpu_identity: None,
                 width: 640,
                 height: 480,
                 pixel_format: ReplayPixelFormat::Bgra8Unorm,

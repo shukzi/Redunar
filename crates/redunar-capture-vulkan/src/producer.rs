@@ -23,7 +23,14 @@ unsafe extern "C" {
     fn clock_gettime(clock_id: i32, time: *mut Timespec) -> i32;
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GpuIdentityReport {
+    Unreported,
+    Reported(Option<redunar_capture::CaptureGpuIdentity>),
+}
+
 struct Producer {
+    gpu_identity_reported: GpuIdentityReport,
     initialized: bool,
     socket: Option<UnixDatagram>,
     session_id: Option<CaptureSessionId>,
@@ -40,6 +47,7 @@ struct Producer {
 impl Default for Producer {
     fn default() -> Self {
         Self {
+            gpu_identity_reported: GpuIdentityReport::Unreported,
             initialized: false,
             socket: None,
             session_id: None,
@@ -79,6 +87,30 @@ pub(crate) fn device_destroyed() {
         // Export leases outlive this device and reply-socket incarnation in
         // the daemon. Keep their wire identifiers unique for the process so a
         // delayed old ACK cannot release a new device's equal-numbered buffer.
+    }
+}
+
+pub(crate) fn record_gpu_identity(identity: Option<redunar_capture::CaptureGpuIdentity>) {
+    let Ok(mut producer) = PRODUCER.try_lock() else {
+        return;
+    };
+    producer.initialize(monotonic_ns().unwrap_or(1));
+    if producer.gpu_identity_reported == GpuIdentityReport::Reported(identity) {
+        return;
+    }
+    let (Some(socket), Some(session_id)) = (&producer.socket, producer.session_id) else {
+        return;
+    };
+    let message = CaptureMessage::GpuIdentity {
+        session_id,
+        api: CaptureApi::Vulkan,
+        identity,
+    };
+    let mut bytes = [0; MAX_MESSAGE_BYTES];
+    if let Ok(length) = encode_message(&message, &mut bytes)
+        && socket.send(&bytes[..length]).is_ok()
+    {
+        producer.gpu_identity_reported = GpuIdentityReport::Reported(identity);
     }
 }
 
@@ -382,6 +414,7 @@ impl Producer {
     }
 
     fn finish(&mut self) {
+        self.gpu_identity_reported = GpuIdentityReport::Unreported;
         self.flush();
         if let (Some(socket), Some(session_id)) = (&self.socket, self.session_id) {
             let goodbye = CaptureMessage::Goodbye {

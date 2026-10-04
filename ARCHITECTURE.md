@@ -220,6 +220,17 @@ The service validates observations and owns summaries. Completed sessions retain
 bounded frame data and timeline observations through `session_history.rs`.
 This is not an unlimited per-frame archive; older records may lack hardware data.
 
+The private capture protocol is version 7. Both graphics producers send a
+bounded GPU identity (PCI vendor and device/driver UUIDs), also attached to every
+Replay source/export. OpenGL queries its current context's external-memory UUIDs;
+Vulkan queries the actual physical device that created the presenting device.
+The daemon matches encoder UUIDs before import and rejects frames whose identity
+changes. Metrics/history use the capture vendor only when the cached hardware
+snapshot contains one physical GPU of that vendor. Missing/ambiguous identity
+omits GPU measurements. UUIDs are private, never persisted in session history
+or printed in diagnostics. The app and both capture sidecars must be rebuilt
+together; older wire versions are rejected. Profile/history formats are unchanged.
+
 The UI plots retained timestamps without smoothing or synthetic endpoints.
 History keeps the existing v1 format and filename. Readers cap the file at
 64 MiB and retain at most the newest 64 records; writes use unique private

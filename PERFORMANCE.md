@@ -73,6 +73,13 @@ without waiting, and drops Replay work when all six slots or four pools are
 busy. Repeated malformed-source logging is limited to one entry per five
 seconds and omits raw transport errors that could contain private paths.
 
+Game GPU identity adds 40 fixed wire bytes to source/copy/export metadata without
+increasing the maximum datagram bound. Vulkan queries identity at device creation;
+OpenGL caches at most 16 context identities and clears them at context teardown.
+GBM topology selection runs once when creating the process allocator. Repeated
+presents do not rescan DRM or query device UUIDs; unchanged identity emits no
+additional datagram. These bounds do not establish NVIDIA frame-pacing performance.
+
 Encoded spool commands use a four-item nonblocking queue. Existing packet bounds
 limit worst-case queued payload; complete segments are bounded to 32 MiB/four
 seconds and 512 entries. The spool retains a 15-minute horizon, with bitrate-based

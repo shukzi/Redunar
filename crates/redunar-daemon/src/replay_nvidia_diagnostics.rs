@@ -202,6 +202,7 @@ fn probe_reason(error: &VulkanVideoProbeBlocker) -> (&'static str, Option<i32>) 
             ("physical_device_enumeration_failed", Some(*result))
         }
         E::NoSupportedPhysicalDevice => ("no_supported_physical_device", None),
+        E::SourceDeviceNotFound => ("source_device_not_found", None),
         E::Vulkan13Unsupported => ("vulkan13_unsupported", None),
         E::Synchronization2Unsupported => ("synchronization2_unsupported", None),
         E::DeviceExtensionEnumerationFailed(result) => {
@@ -230,6 +231,14 @@ fn probe_reason(error: &VulkanVideoProbeBlocker) -> (&'static str, Option<i32>) 
         E::SeparateReferenceImagesUnsupported => ("separate_reference_images_unsupported", None),
         E::SliceUnsupported => ("slice_unsupported", None),
         E::TemporalLayerUnsupported => ("temporal_layer_unsupported", None),
+    }
+}
+
+pub(super) fn source_device(selected: bool, state: &'static str, reason: &'static str) {
+    if selected && crate::diagnostic_log::enabled() {
+        crate::diagnostic_log::log(&format!(
+            "NVIDIA encoder stage=source_device state={state} reason={reason}"
+        ));
     }
 }
 

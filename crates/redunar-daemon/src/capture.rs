@@ -33,6 +33,7 @@ pub struct CaptureSnapshot {
     pub phase: CapturePhase,
     pub producer_process_id: Option<u32>,
     pub capture_api: Option<CaptureApi>,
+    pub gpu_identity: Option<redunar_capture::CaptureGpuIdentity>,
     pub received_frame_count: u64,
     pub dropped_frame_count: u64,
     pub rejected_message_count: u64,
@@ -68,6 +69,7 @@ pub struct CaptureSessionModel {
     phase: CapturePhase,
     producer_process_id: Option<u32>,
     capture_api: Option<CaptureApi>,
+    gpu_identity: Option<redunar_capture::CaptureGpuIdentity>,
     next_sequence: Option<u64>,
     received_frame_count: u64,
     dropped_frame_count: u64,
@@ -104,6 +106,7 @@ impl CaptureSessionModel {
             phase: CapturePhase::Armed,
             producer_process_id: None,
             capture_api: None,
+            gpu_identity: None,
             next_sequence: None,
             received_frame_count: 0,
             dropped_frame_count: 0,
@@ -145,6 +148,14 @@ impl CaptureSessionModel {
         }
 
         match message {
+            CaptureMessage::GpuIdentity { api, identity, .. } => {
+                if self.phase != CapturePhase::Capturing || self.capture_api != Some(api) {
+                    return self.reject("capture GPU identity requires the active graphics API");
+                }
+                self.gpu_identity = identity;
+                self.bump_revision();
+                Ok(())
+            }
             CaptureMessage::Hello {
                 process_id,
                 api,
@@ -217,6 +228,7 @@ impl CaptureSessionModel {
     pub fn fail(&mut self, message: impl Into<String>) {
         if !matches!(self.phase, CapturePhase::Completed | CapturePhase::Failed) {
             self.phase = CapturePhase::Failed;
+            self.gpu_identity = None;
             self.failure = Some(message.into());
             self.bump_revision();
         }
@@ -238,6 +250,7 @@ impl CaptureSessionModel {
             phase: self.phase,
             producer_process_id: self.producer_process_id,
             capture_api: self.capture_api,
+            gpu_identity: self.gpu_identity,
             received_frame_count: self.received_frame_count,
             dropped_frame_count: self.dropped_frame_count,
             rejected_message_count: self.rejected_message_count,
@@ -284,6 +297,7 @@ impl CaptureSessionModel {
         self.phase = CapturePhase::Capturing;
         self.producer_process_id = Some(process_id);
         self.capture_api = Some(api);
+        self.gpu_identity = None;
         self.next_sequence = None;
         self.replay_source_candidate = None;
         self.replay_announced_sources.clear();
@@ -376,6 +390,7 @@ impl CaptureSessionModel {
                 .saturating_add(last_sequence.saturating_add(1));
         }
         self.phase = CapturePhase::Completed;
+        self.gpu_identity = None;
         self.bump_revision();
         Ok(())
     }
@@ -435,6 +450,7 @@ impl CaptureSessionModel {
     }
 
     pub(crate) fn select_replay_source(&mut self, source: ReplaySourceCandidate) {
+        self.gpu_identity = source.gpu_identity;
         // The receiver has validated this export and confirmed its process.
         // A helper's larger surface must not override the actual game's source.
         if self.replay_source_candidate != Some(source) {
@@ -624,6 +640,26 @@ impl fmt::Display for CaptureStateError {
 
 impl Error for CaptureStateError {}
 
+/// Select hardware for the actual capture vendor only when the cached snapshot
+/// has one such physical device. Discovery preserves card/PCI ownership;
+/// array order has no authority over the active game's measurements.
+#[must_use]
+pub fn capture_gpu<'a>(
+    capture: Option<&CaptureSnapshot>,
+    hardware: Option<&'a redunar_core::SystemSnapshot>,
+) -> Option<&'a redunar_core::GpuSnapshot> {
+    let identity = capture?.gpu_identity?;
+    let mut matching = hardware?.gpus.iter().filter(|gpu| {
+        u32::from_str_radix(gpu.vendor_id.trim_start_matches("0x"), 16).ok()
+            == Some(identity.vendor_id())
+    });
+    let gpu = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    Some(gpu)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,6 +676,95 @@ mod tests {
             api: CaptureApi::Vulkan,
             producer_started_monotonic_ns: 1,
         }
+    }
+
+    #[test]
+    fn gpu_identity_requires_current_producer_and_clears_on_completion() {
+        let mut session = CaptureSessionModel::new(session_id());
+        let identity = redunar_capture::CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap();
+        let message = CaptureMessage::GpuIdentity {
+            session_id: session_id(),
+            api: CaptureApi::Vulkan,
+            identity: Some(identity),
+        };
+        assert!(session.accept(message.clone()).is_err());
+        session.accept(hello()).unwrap();
+        assert!(
+            session
+                .accept(CaptureMessage::GpuIdentity {
+                    session_id: session_id(),
+                    api: CaptureApi::OpenGl,
+                    identity: Some(identity),
+                })
+                .is_err()
+        );
+        assert_eq!(session.snapshot().gpu_identity, None);
+        session.accept(message.clone()).unwrap();
+        assert_eq!(session.snapshot().gpu_identity, Some(identity));
+        let mut failed_session = CaptureSessionModel::new(session_id());
+        failed_session.accept(hello()).unwrap();
+        failed_session.accept(message.clone()).unwrap();
+        failed_session.fail("fixture transport failure");
+        assert_eq!(failed_session.snapshot().gpu_identity, None);
+        session
+            .accept(CaptureMessage::Goodbye {
+                session_id: session_id(),
+                api: CaptureApi::Vulkan,
+                last_sequence: 0,
+                reason: GoodbyeReason::Normal,
+            })
+            .unwrap();
+        assert_eq!(session.snapshot().gpu_identity, None);
+        assert!(session.accept(message).is_err());
+    }
+
+    #[test]
+    fn captured_gpu_metrics_follow_vendor_identity_in_both_array_orders() {
+        use redunar_core::{CpuSnapshot, GpuSnapshot, SystemSnapshot};
+        let gpu = |vendor: &str| GpuSnapshot {
+            card: "fixture".into(),
+            vendor_id: vendor.into(),
+            device_id: None,
+            model: "fixture".into(),
+            driver: None,
+            temperature_celsius: None,
+            utilization_percent: None,
+            clock_mhz: None,
+            vram_used_bytes: None,
+            vram_total_bytes: None,
+            power_watts: None,
+            performance_level: None,
+        };
+        let mut hardware = SystemSnapshot {
+            memory: None,
+            cpu: CpuSnapshot {
+                vendor: "fixture".into(),
+                model: "fixture".into(),
+                logical_cpus: 1,
+                temperature_celsius: None,
+                utilization_percent: None,
+                scaling_driver: None,
+                governor: None,
+                energy_performance_preference: None,
+            },
+            gpus: vec![gpu("0x8086"), gpu("0x10de")],
+        };
+        let mut capture = CaptureSessionModel::new(session_id()).snapshot();
+        assert!(capture_gpu(Some(&capture), Some(&hardware)).is_none());
+        capture.gpu_identity =
+            Some(redunar_capture::CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap());
+        for _ in 0..2 {
+            assert_eq!(
+                capture_gpu(Some(&capture), Some(&hardware))
+                    .unwrap()
+                    .vendor_id,
+                "0x10de"
+            );
+            hardware.gpus.reverse();
+        }
+        hardware.gpus.push(gpu("0x10de"));
+        assert!(capture_gpu(Some(&capture), Some(&hardware)).is_none());
+        assert!(capture_gpu(Some(&capture), None).is_none());
     }
 
     #[test]
@@ -720,6 +845,7 @@ mod tests {
             "a second injected API must not complete the selected producer"
         );
         let source = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 640,
             height: 480,
             pixel_format: redunar_capture::ReplayPixelFormat::Rgba8Unorm,
@@ -1027,6 +1153,7 @@ mod tests {
     fn replay_source_candidate_requires_a_producer_and_keeps_the_largest_surface() {
         let mut session = CaptureSessionModel::new(session_id());
         let smaller = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 1_280,
             height: 720,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -1048,6 +1175,7 @@ mod tests {
             })
             .expect("small candidate");
         let larger = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 2_560,
             height: 1_440,
             pixel_format: ReplayPixelFormat::Rgba8Srgb,
@@ -1085,6 +1213,7 @@ mod tests {
         );
 
         let candidate = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 1_920,
             height: 1_080,
             pixel_format: ReplayPixelFormat::Bgra8Srgb,
@@ -1121,6 +1250,7 @@ mod tests {
                 .is_err()
         );
         let replacement = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 640,
             height: 480,
             ..candidate
@@ -1162,6 +1292,7 @@ mod tests {
                 .unwrap();
         }
         let source = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 320,
             height: 240,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -1213,6 +1344,7 @@ mod tests {
         let mut session = CaptureSessionModel::new(session_id());
         session.accept(hello()).expect("hello");
         let source = ReplaySourceCandidate {
+            gpu_identity: None,
             width: 640,
             height: 480,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -1240,6 +1372,7 @@ mod tests {
                     session_id: session_id(),
                     sequence: 2,
                     source: ReplaySourceCandidate {
+                        gpu_identity: None,
                         width: 320,
                         height: 240,
                         pixel_format: ReplayPixelFormat::Bgra8Unorm,

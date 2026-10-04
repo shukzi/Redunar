@@ -195,7 +195,7 @@ fn long_session_timeline_keeps_both_ends_with_bounded_storage() {
 }
 
 #[test]
-fn session_timeline_records_available_hardware_observations() {
+fn session_timeline_without_game_identity_records_cpu_and_omits_gpu() {
     let mut timeline = SessionTimeline::default();
     let monitor = MonitorSnapshot {
         hardware: Some(Arc::new(SystemSnapshot {
@@ -231,9 +231,9 @@ fn session_timeline_records_available_hardware_observations() {
     let sample = timeline.samples.first().unwrap();
     assert_eq!(sample.elapsed_seconds, 12);
     assert_eq!(sample.cpu_temperature_celsius, Some(61.5));
-    assert_eq!(sample.gpu_temperature_celsius, Some(69.0));
+    assert_eq!(sample.gpu_temperature_celsius, None);
     assert_eq!(sample.cpu_utilization_percent, Some(37.0));
-    assert_eq!(sample.gpu_utilization_percent, Some(93.0));
+    assert_eq!(sample.gpu_utilization_percent, None);
 }
 
 #[test]

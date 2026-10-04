@@ -1749,6 +1749,7 @@ mod tests {
                 .expect("open fixture fd")
                 .into(),
             source: redunar_capture::ReplaySourceCandidate {
+                gpu_identity: None,
                 width: 320,
                 height: 240,
                 pixel_format: redunar_capture::ReplayPixelFormat::Bgra8Unorm,

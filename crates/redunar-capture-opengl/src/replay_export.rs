@@ -52,8 +52,6 @@ const MAX_ENCODE_MACROBLOCKS_PER_SECOND: u32 = 2_073_600;
 const DRM_FORMAT_RA24: u32 = 0x3432_4152;
 const LINEAR_MODIFIER: u64 = 0;
 const CLOCK_MONOTONIC: c_int = 1;
-const RENDER_NODE_FIRST: u32 = 128;
-const RENDER_NODE_LAST: u32 = 143;
 const RTLD_NOW: c_int = 2;
 const O_CLOEXEC: i32 = 0o2_000_000;
 
@@ -121,6 +119,7 @@ struct Gbm {
 struct Allocator {
     device: *mut c_void,
     render_node: RawFd,
+    identity: redunar_capture::CaptureGpuIdentity,
     gbm: Gbm,
 }
 
@@ -389,12 +388,14 @@ fn cast_symbol<T: Copy>(address: *mut c_void) -> Option<T> {
     }
 }
 
-/// Open the first accessible DRM render node and bind a GBM device to it.
-fn allocator() -> Option<&'static Allocator> {
+/// Bind GBM to the unique physical GPU of the actual GL context vendor.
+/// The cached allocator additionally matches UUIDs, so context replacement
+/// cannot import a different GPU into an earlier allocator.
+fn allocator(identity: redunar_capture::CaptureGpuIdentity) -> Option<&'static Allocator> {
     ALLOCATOR
         .get_or_init(|| {
             let gbm = gbm_entry_points()?;
-            let render_node = open_render_node()?;
+            let render_node = open_render_node(identity.vendor_id())?;
             // SAFETY: the descriptor is a live DRM render node retained for
             // the process lifetime; the GBM device borrows it.
             let device = unsafe { (gbm.create_device)(render_node) };
@@ -405,25 +406,24 @@ fn allocator() -> Option<&'static Allocator> {
             Some(Allocator {
                 device,
                 render_node,
+                identity,
                 gbm,
             })
         })
         .as_ref()
+        .filter(|allocator| allocator.identity == identity)
 }
 
-fn open_render_node() -> Option<RawFd> {
-    (RENDER_NODE_FIRST..=RENDER_NODE_LAST).find_map(|index| {
-        let path = format!("/dev/dri/renderD{index}");
-        // The node is opened read/write because GBM allocation issues DRM
-        // ioctls on this descriptor. O_CLOEXEC keeps it out of any child.
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(O_CLOEXEC)
-            .open(Path::new(&path))
-            .ok()
-            .map(std::os::fd::IntoRawFd::into_raw_fd)
-    })
+fn open_render_node(vendor_id: u32) -> Option<RawFd> {
+    let device = redunar_platform::unique_render_device(Path::new("/sys"), vendor_id)?;
+    let path = format!("/dev/dri/renderD{}", device.render_node_index);
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(O_CLOEXEC)
+        .open(Path::new(&path))
+        .ok()
+        .map(std::os::fd::IntoRawFd::into_raw_fd)
 }
 
 fn close_descriptor(descriptor: RawFd) {
@@ -620,6 +620,7 @@ fn source_for(
         return Err(ReplaySourceRejection::DimensionsUnsupported);
     }
     Ok(ReplaySourceCandidate {
+        gpu_identity: None,
         width,
         height,
         pixel_format: ReplayPixelFormat::Rgba8Unorm,
@@ -763,7 +764,7 @@ unsafe fn allocate_slots(
     functions: &ExportFunctions,
     source: ReplaySourceCandidate,
 ) -> Option<[Slot; SLOT_COUNT]> {
-    let device = allocator()?;
+    let device = allocator(source.gpu_identity?)?;
     let mut slots: Vec<Slot> = Vec::with_capacity(SLOT_COUNT);
     for _ in 0..SLOT_COUNT {
         // SAFETY: the caller maintains the current-context invariant.
@@ -1144,7 +1145,11 @@ pub(crate) unsafe fn capture(context: usize, api: ApiFlavor) {
         report_unavailable_once(ReplaySourceRejection::ExternalMemoryUnsupported);
         return;
     }
-    if allocator().is_none() {
+    let Some(identity) = super::gpu_identity::for_context(context) else {
+        report_unavailable_once(ReplaySourceRejection::GpuIdentityUnavailable);
+        return;
+    };
+    if allocator(identity).is_none() {
         report_unavailable_once(ReplaySourceRejection::EncoderBackendUnavailable);
         return;
     }
@@ -1152,13 +1157,14 @@ pub(crate) unsafe fn capture(context: usize, api: ApiFlavor) {
         return;
     };
     let variable = *VARIABLE_FRAME_RATE;
-    let source = match viewport_source(&functions) {
+    let mut source = match viewport_source(&functions) {
         Ok(source) => source,
         Err(reason) => {
             report_unavailable_once(reason);
             return;
         }
     };
+    source.gpu_identity = Some(identity);
     let Ok(mut state) = STATE.try_lock() else {
         return;
     };
@@ -1490,6 +1496,7 @@ mod tests {
 
     fn source_at(fps: u8, width: u32, height: u32) -> ReplaySourceCandidate {
         ReplaySourceCandidate {
+            gpu_identity: None,
             width,
             height,
             pixel_format: ReplayPixelFormat::Rgba8Unorm,

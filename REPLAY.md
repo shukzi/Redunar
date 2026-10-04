@@ -114,16 +114,20 @@ six-slot pool of linear GBM RGBA8 buffers per bounded context, imported through
 fence-ready descriptors pass to the same daemon-owned GPU conversion and
 hardware H.264 worker. EGL/OpenGL ES Replay remains unsupported. Every route
 still depends on format, dimensions, device, queue, driver, and encoder gates.
-With Beta access enabled at startup, a single-render-node NVIDIA system may
-attempt the same Vulkan Video H.264 path. The driver must expose the required
-Vulkan Video encode, external-memory import, and queue capabilities. Multi-GPU
-NVIDIA systems are withheld until Redunar can match the game's render GPU to the
-encoder. An eligible NVIDIA attempt selects only a NVIDIA Vulkan device; the
-ordinary AMD route remains separate. This is an unverified beta path, not an
+With Beta access enabled at startup, one identifiable NVIDIA render GPU may
+attempt the same Vulkan Video H.264 path, including alongside known Intel/AMD
+render GPUs. The driver must expose the required Vulkan Video encode,
+external-memory import, and queue capabilities. Vulkan and supported desktop
+OpenGL producers attach the current game's device/driver UUIDs to each source
+and export. The encoder must match both identities before importing; a missing
+match never selects another GPU. OpenGL additionally needs one physical render
+GPU for its context's vendor to select the GBM allocator. Unknown topology and
+multiple NVIDIA GPUs remain withheld. This is an unverified beta path, not an
 NVIDIA recording guarantee.
 When Debug log was enabled before launch, NVIDIA encoder startup reports
 allowlisted stages, readiness, bounded capability rejection reasons, exact known
-missing extension names, and numeric Vulkan results. Device UUIDs, PCI addresses,
+missing extension names, source identity availability/match, and numeric Vulkan
+results. Device UUIDs, PCI addresses,
 paths, and arbitrary driver strings are excluded. NVML readiness and optional
 sensor availability are logged on changes. App startup records the version,
 effective Beta setting, and a bounded asynchronous fingerprint of the running

@@ -104,6 +104,7 @@ impl Fixture {
 
     fn source(width: u32) -> ReplaySourceCandidate {
         ReplaySourceCandidate {
+            gpu_identity: None,
             width,
             height: 240,
             pixel_format: ReplayPixelFormat::Bgra8Unorm,
@@ -418,6 +419,69 @@ fn foreign_session_export_cannot_change_selection_or_release_routes() {
     assert!(f.selector.candidates.is_empty());
     assert!(lock_unpoisoned(&f.shared.replay_release.targets).is_empty());
     Fixture::no_ack(&f.game);
+}
+
+#[test]
+fn game_gpu_identity_survives_private_wire_and_dma_buf_handoff() {
+    let mut f = Fixture::new();
+    f.start_receiver();
+    let session_id = f.shared.replay_release.session_id;
+    let identity = redunar_capture::CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap();
+    let mut source = Fixture::source(320);
+    source.gpu_identity = Some(identity);
+    f.wire(
+        &CaptureMessage::Hello {
+            session_id,
+            process_id: 101,
+            api: CaptureApi::Vulkan,
+            producer_started_monotonic_ns: 1,
+        },
+        false,
+    );
+    f.wire(
+        &CaptureMessage::GpuIdentity {
+            session_id,
+            api: CaptureApi::Vulkan,
+            identity: Some(identity),
+        },
+        false,
+    );
+    f.wire(
+        &CaptureMessage::ReplaySourceCandidate {
+            session_id,
+            candidate: source,
+        },
+        false,
+    );
+    for sequence in 1..=3 {
+        f.wire(
+            &CaptureMessage::ReplayFrameExported {
+                session_id,
+                sequence,
+                fd_number: 10,
+                source,
+                offset: 0,
+                stride: 1_280,
+                modifier: 0,
+                timestamp_ns: sequence,
+                duration_ns: 16_666_667,
+            },
+            true,
+        );
+    }
+    f.wait_exports(1);
+    assert_eq!(
+        lock_unpoisoned(&f.shared.latest).gpu_identity,
+        Some(identity)
+    );
+    assert_eq!(Fixture::ack(&f.game), 1);
+    assert_eq!(Fixture::ack(&f.game), 2);
+    let export = f.endpoint.take_next().unwrap();
+    let (token, frame) = f.endpoint.import(export).unwrap();
+    assert_eq!(frame.gpu_identity(), Some(identity));
+    drop(frame);
+    f.endpoint.release(token).unwrap();
+    assert_eq!(Fixture::ack(&f.game), 3);
 }
 
 #[test]

@@ -823,6 +823,9 @@ The [October 2 readiness report](docs/verification/2026-10-02-nvidia-readiness.m
 records the tested source, automated evidence, and remaining lifecycle limits.
 The [handoff and compatibility follow-up](docs/verification/2026-10-02-handoff-compatibility.md)
 records the repaired producer ownership and completed release/package gate.
+The [October 4 attribution report](docs/verification/2026-10-04-nvidia-game-device.md)
+records the later hybrid discovery and game/encoder identity changes, fake-hardware
+regressions, and matching build checks; it adds no NVIDIA hardware qualification.
 
 This is an explicit human hardware test, outside ordinary automated validation.
 The official package includes the Beta access switch. Install the exact approved
@@ -830,8 +833,9 @@ candidate, enable **Beta access** and separately **Debug log**, fully quit and
 restart Redunar, then launch a new session. Check that Settings says logging is
 active. A checked saved preference alone does not confirm that the log opened.
 
-Start with x86_64 Linux, one NVIDIA render GPU and one unambiguous Vulkan device,
-native Vulkan, 8-bit SDR, fixed 1080p60/Balanced. Record package version, actual
+Start with x86_64 Linux, one identifiable NVIDIA render GPU (a known Intel/AMD
+render GPU may coexist), 8-bit SDR, fixed 1080p60/Balanced. Exercise native Vulkan
+and supported desktop OpenGL separately. Record package version, actual
 executable/sidecar hashes, driver version, compositor, and test scope. The log
 records the running executable hash when readable, but that does not verify the
 sidecars. No driver/GPU model is certified by a fixture or an NVML reading.
@@ -855,7 +859,9 @@ For the tester's normal app session, first check metrics and their unavailable
 states, then a short capture/save/playback/end cycle. Check video and audio in
 Redunar and an external player. Next test switching windows, resize, shortcuts,
 ending, and relaunching; inspect decoder errors and resource cleanup separately.
-Hybrid machines remain deliberately gated. Stop the run on device loss/reset,
+Check source identity availability and encoder UUID matching; do not infer game
+GPU ownership from GPU 0, `card0`, or `renderD128`. Unknown topology and multiple
+NVIDIA render GPUs remain deliberately gated. Stop the run on device loss/reset,
 stalled presentation or end, repeated recovery, corruption, mixed resize epochs,
 or growing retained resources. Report a capability rejection as a finding;
 do not bypass a gate just to make recording start.

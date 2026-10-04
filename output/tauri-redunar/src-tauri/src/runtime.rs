@@ -213,6 +213,8 @@ fn replay_unavailable_copy(
             "This game's pixel format cannot be recorded. Try a standard 8-bit display mode.",
         Some(ReplaySourceRejection::ExternalMemoryUnsupported) =>
             "This OpenGL driver cannot share Replay frames with the encoder. Check graphics driver support.",
+        Some(ReplaySourceRejection::GpuIdentityUnavailable) =>
+            "Replay could not identify the GPU used by this game. Check graphics driver support and relaunch the game.",
         Some(ReplaySourceRejection::EncoderBackendUnavailable | ReplaySourceRejection::VideoEncodeUnsupported) =>
             "The hardware video encoder is unavailable. Check Replay hardware support.",
         Some(ReplaySourceRejection::ProtectedSwapchain) =>

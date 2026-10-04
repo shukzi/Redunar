@@ -27,6 +27,7 @@ const DRM_FORMAT_ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
 /// separate live-transfer, decoded-output, and performance gates remain the
 /// authority for that transition.
 pub struct VulkanVideoH264Backend {
+    source_gpu: Option<redunar_capture::CaptureGpuIdentity>,
     encoder: Option<VulkanVideoH264Encoder>,
     stream: ReplayVideoStream,
     failed: bool,
@@ -36,6 +37,12 @@ pub struct VulkanVideoH264Backend {
 }
 
 impl VulkanVideoH264Backend {
+    #[must_use]
+    pub fn with_capture_gpu(mut self, identity: redunar_capture::CaptureGpuIdentity) -> Self {
+        self.source_gpu = Some(identity);
+        self
+    }
+
     /// Bridge one initialized Vulkan Video encoder into the daemon packet
     /// contract after validating its hardware-produced stream headers.
     ///
@@ -55,6 +62,7 @@ impl VulkanVideoH264Backend {
             parameters.avc_decoder_configuration(),
         )?;
         Ok(Self {
+            source_gpu: None,
             encoder: Some(encoder),
             stream,
             failed: false,
@@ -102,6 +110,16 @@ impl HardwareEncoderBackend for VulkanVideoH264Backend {
         frame: DmaBufReplayFrame,
         force_keyframe: bool,
     ) -> Result<HardwareEncodeOutput, ReplayEncoderError> {
+        if self.source_gpu.is_some() && frame.gpu_identity() != self.source_gpu {
+            self.failed = true;
+            crate::replay_nvidia_diagnostics::source_device(
+                self.source_gpu.is_some_and(|gpu| gpu.vendor_id() == 0x10de),
+                "unavailable",
+                "source_gpu_changed",
+            );
+            return Err(ReplayEncoderError::InvalidDmaBufFrame);
+        }
+
         let timestamp_ns = frame.timestamp_ns;
         let frame = match vulkan_frame(&frame) {
             Ok(frame) => frame,
@@ -340,6 +358,59 @@ mod tests {
         file.set_len(u64::from(width) * u64::from(height) * 4)
             .expect("fixture size");
         (path, file)
+    }
+
+    #[test]
+    fn changed_or_missing_source_gpu_fails_before_any_native_import() {
+        let expected = redunar_capture::CaptureGpuIdentity::new(0x10de, [1; 16], [2; 16]).unwrap();
+        let changed = redunar_capture::CaptureGpuIdentity::new(0x10de, [3; 16], [2; 16]).unwrap();
+        for identity in [None, Some(changed)] {
+            let (path, file) = packed_fixture(324, 240);
+            let frame = DmaBufReplayFrame::new_multi_object(
+                vec![file.into()],
+                324,
+                240,
+                DRM_FORMAT_XRGB8888,
+                0,
+                1,
+                16_666_667,
+                vec![DmaBufImagePlane {
+                    object_index: 0,
+                    offset: 0,
+                    stride: 1_296,
+                }],
+            )
+            .unwrap()
+            .with_gpu_identity(identity);
+            // No native encoder exists: reaching import would return a
+            // different error. The ownership guard must run first.
+            let mut backend = VulkanVideoH264Backend {
+                source_gpu: Some(expected),
+                encoder: None,
+                stream: ReplayVideoStream::new(
+                    ReplayVideoCodec::H264,
+                    ReplayPacketFormat::H264LengthPrefixed4,
+                    324,
+                    240,
+                    60,
+                    vec![
+                        1, 66, 0, 30, 0xff, 0xe1, 0, 2, 0x67, 0x42, 1, 0, 2, 0x68, 0xce,
+                    ],
+                )
+                .unwrap(),
+                failed: false,
+                shutdown_error: None,
+                output_logged: false,
+                pending_inputs: VecDeque::new(),
+            };
+            assert!(matches!(
+                backend.encode(0, frame, false),
+                Err(ReplayEncoderError::InvalidDmaBufFrame)
+            ));
+            assert!(backend.failed);
+            assert!(backend.pending_inputs.is_empty());
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

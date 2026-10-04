@@ -92,7 +92,7 @@ fn display_only_cards_and_connectors_do_not_withhold_single_nvidia_render_gpu() 
 }
 
 #[test]
-fn real_amd_and_nvidia_render_gpus_preserve_amd_metrics_with_beta_on_and_off() {
+fn one_nvidia_alongside_amd_preserves_both_identities_and_amd_metrics() {
     let fixture = amd_fixture();
     render_card(&fixture, "card1", "renderD128", "0x1002\n");
     render_card(&fixture, "card2", "renderD129", "0x10de\n");
@@ -102,12 +102,12 @@ fn real_amd_and_nvidia_render_gpus_preserve_amd_metrics_with_beta_on_and_off() {
         assert_eq!(
             readiness,
             if beta {
-                NvidiaReadiness::AmbiguousTopology
+                NvidiaReadiness::Ready
             } else {
                 NvidiaReadiness::BetaDisabled
             }
         );
-        assert_eq!(snapshot.gpus.len(), 1);
+        assert_eq!(snapshot.gpus.len(), if beta { 2 } else { 1 });
         assert_eq!(snapshot.gpus[0].card, "card1");
         assert_eq!(snapshot.gpus[0].utilization_percent, Some(96.0));
         assert_eq!(snapshot.gpus[0].temperature_celsius, Some(62.0));
@@ -115,12 +115,26 @@ fn real_amd_and_nvidia_render_gpus_preserve_amd_metrics_with_beta_on_and_off() {
             LinuxTelemetrySampler::with_nvidia_beta(probe.proc_root, probe.sys_root, beta)
                 .expect("sampler");
         assert_eq!(sampler.sample().gpus[0].power_watts, Some(210.0));
-        assert_eq!(sampler.nvidia_diagnostics().readiness, readiness);
+        // The fixture has no PCI identity and must never load host NVML.
+        assert_eq!(
+            sampler.nvidia_diagnostics().readiness,
+            if beta {
+                NvidiaReadiness::Unavailable
+            } else {
+                NvidiaReadiness::BetaDisabled
+            }
+        );
+        if beta {
+            assert_eq!(
+                sampler.nvidia_diagnostics().failure,
+                Some(redunar_nvidia_nvml::NvmlFailure::PciIdentityUnavailable)
+            );
+        }
     }
 }
 
 #[test]
-fn intel_hybrid_and_multiple_nvidia_gpus_are_deliberately_withheld() {
+fn intel_hybrid_is_admitted_but_multiple_nvidia_gpus_are_withheld() {
     for vendor in ["0x8086\n", "0x10de\n"] {
         let fixture = nvidia_only();
         render_card(&fixture, "card2", "renderD129", vendor);
@@ -129,8 +143,13 @@ fn intel_hybrid_and_multiple_nvidia_gpus_are_deliberately_withheld() {
             .with_nvidia_beta_enabled(true)
             .snapshot_with_nvidia_readiness()
             .expect("probe");
-        assert_eq!(readiness, NvidiaReadiness::AmbiguousTopology);
-        assert!(snapshot.gpus.is_empty());
+        if vendor == "0x8086\n" {
+            assert_eq!(readiness, NvidiaReadiness::Ready);
+            assert_eq!(snapshot.gpus.len(), 1);
+        } else {
+            assert_eq!(readiness, NvidiaReadiness::AmbiguousTopology);
+            assert!(snapshot.gpus.is_empty());
+        }
     }
 }
 
@@ -233,4 +252,47 @@ fn sampler_shutdown_reports_final_nvml_state_without_loading_hardware() {
     assert_eq!(snapshot.cpu.temperature_celsius, Some(42.25));
     assert_eq!(snapshot.gpus[0].utilization_percent, None);
     assert_eq!(sampler.nvidia_diagnostics().retry_delay, None);
+}
+
+#[test]
+fn game_vendor_selection_is_independent_of_card_and_render_numbering() {
+    for (nvidia_card, nvidia_render, intel_card, intel_render) in [
+        ("card0", "renderD128", "card1", "renderD129"),
+        ("card1", "renderD129", "card0", "renderD128"),
+    ] {
+        let fixture = amd_fixture();
+        fs::remove_dir_all(fixture.probe().sys_root.join("class/drm/card1")).unwrap();
+        render_card(&fixture, nvidia_card, nvidia_render, "0x10de\n");
+        render_card(&fixture, intel_card, intel_render, "0x8086\n");
+        let selected = unique_render_device(&fixture.probe().sys_root, 0x10de).unwrap();
+        assert_eq!(selected.card, nvidia_card);
+        assert_eq!(
+            format!("renderD{}", selected.render_node_index),
+            nvidia_render
+        );
+        assert_eq!(
+            unique_render_device(&fixture.probe().sys_root, 0x8086)
+                .unwrap()
+                .card,
+            intel_card
+        );
+        assert_eq!(
+            fixture
+                .probe()
+                .with_nvidia_beta_enabled(true)
+                .snapshot_with_nvidia_readiness()
+                .unwrap()
+                .1,
+            NvidiaReadiness::Ready
+        );
+    }
+}
+
+#[test]
+fn game_vendor_selection_withholds_duplicate_physical_gpus_and_unknown_devices() {
+    let fixture = nvidia_only();
+    render_card(&fixture, "card2", "renderD129", "0x10de\n");
+    assert!(unique_render_device(&fixture.probe().sys_root, 0x10de).is_none());
+    fs::remove_dir_all(fixture.probe().sys_root.join("class/drm/card2")).unwrap();
+    assert!(unique_render_device(&fixture.probe().sys_root, 0x10de).is_none());
 }

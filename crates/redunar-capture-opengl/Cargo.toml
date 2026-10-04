@@ -12,6 +12,7 @@ launch-diagnostics = []
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+redunar-platform = { path = "../redunar-platform" }
 nix = { version = "0.29", default-features = false, features = ["fs", "socket", "uio"] }
 redunar-capture = { path = "../redunar-capture" }
 redunar-core = { path = "../redunar-core" }

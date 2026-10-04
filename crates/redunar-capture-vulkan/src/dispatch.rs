@@ -18,6 +18,7 @@ pub(crate) struct InstanceDispatch {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DeviceDispatch {
+    pub(crate) gpu_identity: Option<redunar_capture::CaptureGpuIdentity>,
     pub(crate) next_get_device_proc_addr: PfnGetDeviceProcAddr,
     pub(crate) destroy_device: Option<PfnDestroyDevice>,
     pub(crate) get_device_queue: Option<PfnGetDeviceQueue>,

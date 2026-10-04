@@ -202,6 +202,7 @@ fn plan(
     }
     Ok(ReplayTransferPlan {
         candidate: ReplaySourceCandidate {
+            gpu_identity: None,
             width: info.image_extent.width,
             height: info.image_extent.height,
             pixel_format,
@@ -300,7 +301,8 @@ mod tests {
         assert_eq!(transfer_plan.candidate.target_frames_per_second, 30);
         assert_eq!(transfer_plan.frame_interval_ns, NANOSECONDS_PER_SECOND / 30);
         assert_eq!(transfer_plan.maximum_in_flight_images, 5);
-        assert!(std::mem::size_of::<ReplayTransferPlan>() <= 32);
+        // Fixed metadata now includes two private 16-byte GPU UUIDs.
+        assert!(std::mem::size_of::<ReplayTransferPlan>() <= 80);
     }
 
     #[test]
