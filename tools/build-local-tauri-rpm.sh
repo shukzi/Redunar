@@ -16,6 +16,9 @@ mkdir -p "$workspace_root/target"
 build_root=$(mktemp -d "$workspace_root/target/.tauri-rpm-build.XXXXXX")
 trap 'rm -rf -- "$build_root"' EXIT
 mkdir -p "$build_root/tmp" "$build_root/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+mkdir -p "$build_root/rpmdb"
+query_rpm() { command rpm --dbpath "$build_root/rpmdb" "$@"; }
+query_rpm --initdb
 export TMPDIR="$build_root/tmp"
 
 package_root="$build_root/redunar-app-package-root"
@@ -27,6 +30,7 @@ install -m 0644 "$workspace_root/packaging/redunar-app.spec" \
   "$build_root/rpmbuild/SPECS/redunar-app.spec"
 
 rpmbuild --define "_topdir $build_root/rpmbuild" \
+  --define "_dbpath $build_root/rpmdb" \
   --define "_tmppath $build_root/tmp" \
   -bb "$build_root/rpmbuild/SPECS/redunar-app.spec"
 
@@ -35,12 +39,12 @@ if [[ -z "$rpm_path" ]]; then
   printf '%s\n' 'rpmbuild did not produce a Tauri Redunar RPM' >&2
   exit 1
 fi
-if [[ "$(rpm -qp --qf '%{NAME}' "$rpm_path")" != 'redunar-app' ]]; then
+if [[ "$(query_rpm -qp --qf '%{NAME}' "$rpm_path")" != 'redunar-app' ]]; then
   printf '%s\n' 'local Tauri Redunar RPM must use the redunar-app package name' >&2
   exit 1
 fi
 
-rpm_scripts=$(rpm -qp --scripts "$rpm_path")
+rpm_scripts=$(query_rpm -qp --scripts "$rpm_path")
 if ! grep -Fq 'postinstall scriptlet' <<<"$rpm_scripts" || \
    ! grep -Fq '/usr/bin/udevadm control --reload-rules' <<<"$rpm_scripts" || \
    ! grep -Fq '/usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_KEYBOARD=1 --action=change' <<<"$rpm_scripts" || \
@@ -49,31 +53,35 @@ if ! grep -Fq 'postinstall scriptlet' <<<"$rpm_scripts" || \
   printf '%s\n' 'local Tauri Redunar RPM must contain only the fixed udev refresh post-install script' >&2
   exit 1
 fi
-if rpm -qp --filecaps "$rpm_path" | grep -Eq '[[:space:]]cap_[^[:space:]]+'; then
+rpm_capabilities=$(query_rpm -qp --filecaps "$rpm_path")
+if grep -Eq '[[:space:]]cap_[^[:space:]]+' <<<"$rpm_capabilities"; then
   printf '%s\n' 'local Tauri Redunar RPM must not contain file capabilities' >&2
   exit 1
 fi
-helper_record=$(rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms}\n]' "$rpm_path" \
+helper_record=$(query_rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms}\n]' "$rpm_path" \
   | awk '$1 == "/usr/libexec/redunar-hotkey-helper" { print $1, $2 }')
 if [[ "$helper_record" != "/usr/libexec/redunar-hotkey-helper -rwxr-xr-x" ]]; then
   printf 'unexpected Tauri shortcut helper mode in RPM: %s\n' "$helper_record" >&2
   exit 1
 fi
-update_helper_record=$(rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms}\n]' "$rpm_path" \
+update_helper_record=$(query_rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms}\n]' "$rpm_path" \
   | awk '$1 == "/usr/libexec/redunar-update-helper" { print $1, $2 }')
 if [[ "$update_helper_record" != "/usr/libexec/redunar-update-helper -rwxr-xr-x" ]]; then
   printf 'unexpected Tauri update helper mode in RPM: %s\n' "$update_helper_record" >&2
   exit 1
 fi
-if ! rpm -qlp "$rpm_path" | grep -Fxq '/usr/share/polkit-1/actions/com.redunar.install-update.policy'; then
+# grep -q may close a pipe before RPM finishes writing, making pipefail report
+# SIGPIPE as a missing file. Query completely before checking the payload.
+rpm_files=$(query_rpm -qlp "$rpm_path")
+if ! grep -Fxq '/usr/share/polkit-1/actions/com.redunar.install-update.policy' <<<"$rpm_files"; then
   printf '%s\n' 'local Tauri Redunar RPM must install the fixed update policy' >&2
   exit 1
 fi
-if rpm -qlp "$rpm_path" | grep -Eq '/redunar-kms-helper$|/gg\.redunar\.replay-capture\.policy$'; then
+if grep -Eq '/redunar-kms-helper$|/gg\.redunar\.replay-capture\.policy$' <<<"$rpm_files"; then
   printf '%s\n' 'local Tauri Redunar RPM must not contain a privileged Replay capture path' >&2
   exit 1
 fi
-if ! rpm -qlp "$rpm_path" | grep -Fxq '/usr/lib/udev/rules.d/70-redunar-hotkeys.rules'; then
+if ! grep -Fxq '/usr/lib/udev/rules.d/70-redunar-hotkeys.rules' <<<"$rpm_files"; then
   printf '%s\n' 'local Tauri Redunar RPM must install the input uaccess rule' >&2
   exit 1
 fi

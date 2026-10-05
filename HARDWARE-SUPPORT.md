@@ -1,6 +1,6 @@
 # Hardware and integration support
 
-Reviewed October 4, 2026 against the local implementation and retained test
+Reviewed October 5, 2026 against the local implementation and retained test
 records. The known tested baseline is **x86_64 Linux with AMD hardware**. This
 is narrower than a future cross-vendor goal; other setups may be tried and
 reported after publication. A detected interface or a successful fixture does
@@ -50,11 +50,16 @@ have fake-library coverage, not NVIDIA hardware evidence. See the
 
 ## Recorded evidence and remaining gates
 
-The development host is Fedora 44, Ryzen 7 5800X, Radeon RX 6800 XT/Navi 21,
+The retained AMD baseline was recorded on Fedora 44, Ryzen 7 5800X, Radeon RX 6800 XT/Navi 21,
 using RADV with Vulkan Video support exposed by its installed Mesa build.
 Historical controlled probes cover native Wayland/XCB presentation, packed
 10-bit conversion, 30/60 FPS recording, resize/reset, and 4K output. They do not
 establish universal throughput or performance at those modes.
+
+The [October 5 combined-build check](docs/verification/2026-10-05-combined-live-check.md)
+records finite Vulkan and desktop OpenGL Replay saves/decodes on CachyOS with an
+RX 6800 XT/RADV. It includes the Linux Vulkan symbol-binding crash fix; it adds
+no NVIDIA or real-game qualification.
 
 The retained KMS/DRM examples are explicit engineering diagnostics outside the
 production per-game Replay path. Their ability to enumerate an output, open a

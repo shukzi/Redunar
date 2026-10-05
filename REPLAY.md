@@ -66,6 +66,9 @@ Tauri uses the same-user `redunar-hotkey-helper` with bounded evdev reads. It do
 not request Polkit authorization or edit desktop-global shortcuts. The RPM's
 logind `uaccess` rule supplies access where supported; unavailable permissions
 must be reported honestly. Native dispatch works with the main webview hidden.
+Background startup also locates the matching helper beside a local build or in
+an unpacked package's sibling `libexec` directory; it does not need inherited
+game environment overrides. This lookup does not grant input-device access.
 
 The shortcut opens the Replay menu inside the captured game: the active Vulkan
 or OpenGL capture backend renders the panel into the game's own presentation
@@ -109,7 +112,9 @@ save lifecycle. Buffer readiness, saving, unavailable, and failure are distinct.
 
 The production path uses private game-owned graphics exports, not KMS or desktop
 screen scraping. Vulkan supports its implemented 8-bit and packed 10-bit
-swapchain paths. On the validated AMD/RADV host, desktop OpenGL uses a fixed
+swapchain paths. Vulkan Replay requires the game's requested instance API and
+physical device to support Vulkan 1.1 or newer; Vulkan 1.0 stays metrics-only.
+Redunar preserves the game's API request. On the validated AMD/RADV host, desktop OpenGL uses a fixed
 six-slot pool of linear GBM RGBA8 buffers per bounded context, imported through
 `GL_EXT_memory_object_fd`;
 fence-ready descriptors pass to the same daemon-owned GPU conversion and

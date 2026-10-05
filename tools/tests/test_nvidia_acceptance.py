@@ -18,6 +18,8 @@ class NvidiaAcceptanceTests(unittest.TestCase):
             runner = root / 'tools/run-tauri-vulkan-replay-acceptance.sh'
             shutil.copy2(TOOLS / runner.name, runner)
             shutil.copy2(TOOLS / 'lib/release-paths.sh', root / 'tools/lib/release-paths.sh')
+            (root / 'tools/fixtures').mkdir()
+            shutil.copy2(TOOLS / 'fixtures/vulkan_scene.c', root / 'tools/fixtures/vulkan_scene.c')
             release = root / 'release'
             release.mkdir()
             (release / 'libredunar_capture_vulkan.so').write_bytes(b'fixture')
@@ -28,8 +30,10 @@ class NvidiaAcceptanceTests(unittest.TestCase):
             cargo.write_text('''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
+if '--no-run' in sys.argv:
+    sys.exit(0)
 keys = ('HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME',
-        'REDUNAR_TAURI_TEST_STATE', 'REDUNAR_TAURI_BETA_ACCESS')
+        'REDUNAR_TAURI_TEST_STATE', 'REDUNAR_TAURI_BETA_ACCESS', 'REDUNAR_TAURI_VULKAN_SCENE')
 Path(os.environ['FIXTURE_REPORT']).write_text(json.dumps({
     'env': {key: os.environ[key] for key in keys}, 'args': sys.argv[1:]}))
 state = Path(os.environ['REDUNAR_TAURI_TEST_STATE'])
@@ -38,6 +42,16 @@ state.mkdir(parents=True)
 sys.exit(int(os.environ.get('FIXTURE_EXIT', '0')))
 ''')
             cargo.chmod(0o755)
+            compiler = binary / 'cc'
+            compiler.write_text('''#!/usr/bin/env python3
+import sys
+from pathlib import Path
+Path(sys.argv[sys.argv.index('-o') + 1]).write_bytes(b'fixture scene')
+''')
+            compiler.chmod(0o755)
+            pkg_config = binary / 'pkg-config'
+            pkg_config.write_text('#!/bin/sh\nprintf "%s\\n" "-lvulkan -lxcb"\n')
+            pkg_config.chmod(0o755)
             environment = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ['PATH'],
                                REDUNAR_RELEASE_ROOT=str(release), FIXTURE_REPORT=str(report))
             for arguments, expected in [([], '0'), (['--nvidia-beta'], '1')]:
@@ -53,6 +67,8 @@ sys.exit(int(os.environ.get('FIXTURE_EXIT', '0')))
                 self.assertIn('--locked', result['args'])
                 self.assertIn('--offline', result['args'])
                 self.assertIn(str(root / '.redunar-build/native/tauri'), result['args'])
+                self.assertEqual(values['REDUNAR_TAURI_VULKAN_SCENE'],
+                                 str(root / '.redunar-build/native/fixtures/vulkan-scene'))
             failed = subprocess.run(['bash', str(runner), '--nvidia-beta'],
                                     env=dict(environment, FIXTURE_EXIT='7'),
                                     capture_output=True, timeout=10)

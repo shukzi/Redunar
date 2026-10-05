@@ -48,6 +48,12 @@ Follow native command registration and `RedunarService::for_tauri()` for
 production behavior. The Tauri service owns the active feature and privilege
 boundary; compatibility data must never activate an unsupported capability.
 
+The Linux Vulkan cdylib binds its internal function references locally. The
+loader exports the same Vulkan command names; negotiation and proc-address
+lookup must return Redunar hooks even when a game linked the loader globally.
+Calls to the next layer still use its captured dispatch pointers. The ordinary
+competing-symbol fixture in the package gate verifies this without a GPU.
+
 ## Native source map
 
 Paths below are relative to `output/tauri-redunar/`:

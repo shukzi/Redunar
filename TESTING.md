@@ -6,6 +6,10 @@ dependencies. Root Cargo commands do **not** include the separate Tauri workspac
 
 ## Steam Play entry point
 
+The [October 5 combined live check](docs/verification/2026-10-05-combined-live-check.md)
+records the Vulkan symbol-preemption regression, corrected bounded fixture,
+local/unpacked shortcut-helper lookup, package checks and current AMD evidence.
+
 Ordinary private fixtures cover the real `redunar-steam-launch` binary requesting
 preparation before exec, fail-open literal argv, background startup with a fake
 app, same-user PID credentials, exact imported identity, busy-session rejection,
@@ -874,6 +878,24 @@ video with FFmpeg, and clean their private state. They require explicit hardware
 authorization and the documented matching release artifacts. The lower-level
 capture probe also has an explicit NVIDIA opt-in; inspect its usage before a
 scoped run. KMS examples are not NVIDIA production acceptance.
+
+The Tauri Replay runner compiles the independently implemented
+`tools/fixtures/vulkan_scene.c` with a C compiler and the local Vulkan/XCB
+development headers (`pkg-config vulkan xcb`). It explicitly requests Vulkan 1.1,
+runs at bounded dimensions/frame count, and destroys its graphics resources
+normally. Distro vkcube variants that request Vulkan 1.0 cannot exercise Replay.
+The live test has a 45-second session deadline and a separate 75-second process
+deadline after compilation; its failure guard ends the coordinator before
+dropping isolated state. Compilation itself has no hardware deadline.
+The fixture permits up to ten 20-ms retries of the spool's explicit busy
+snapshot response; all other save errors fail immediately, and success still
+requires an indexed fifteen-second clip and a clean FFmpeg video decode.
+
+`tools/check-vulkan-layer-binding.sh /absolute/libredunar_capture_vulkan.so`
+checks the packaged Linux cdylib with competing loader exports and no hardware.
+The release gate runs it after the compatibility build. RPM payload checks use
+a private temporary database and complete file-list queries before filtering,
+so neither a missing host RPM database nor early pipe closure bypasses a gate.
 
 For the tester's normal app session, first check metrics and their unavailable
 states, then a short capture/save/playback/end cycle. Check video and audio in

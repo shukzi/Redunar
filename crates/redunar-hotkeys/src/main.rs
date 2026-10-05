@@ -2,6 +2,7 @@ use evdev::{Device, EventType, KeyCode, RelativeAxisCode};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -207,14 +208,15 @@ fn authenticated_parent_uid() -> Result<u32, String> {
     }
     let parent_executable = fs::read_link(format!("/proc/{parent_pid}/exe"))
         .map_err(|_| "parent executable is unavailable".to_owned())?;
-    let trusted_parent = trusted_parent(&parent_executable);
+    let trusted_parent =
+        trusted_parent(&parent_executable, std::env::current_exe().ok().as_deref());
     if !trusted_parent {
         return Err("the helper was not started by the installed Redunar app".to_owned());
     }
     Ok(effective_uid)
 }
 
-fn trusted_parent(parent_executable: &Path) -> bool {
+fn trusted_parent(parent_executable: &Path, helper_executable: Option<&Path>) -> bool {
     if TRUSTED_PARENTS
         .iter()
         .map(Path::new)
@@ -223,15 +225,31 @@ fn trusted_parent(parent_executable: &Path) -> bool {
         return true;
     }
 
-    // Checkout-only release runs keep the helper beside the Tauri binary.
-    // Require both the exact binary name and its adjacent helper so this
-    // development exception cannot trust an arbitrary parent executable.
-    parent_executable
+    // Local builds and unpacked packages retain the fixed app/helper layout.
+    // Require this running helper's inode, not just a similarly named file.
+    if parent_executable
         .file_name()
-        .is_some_and(|name| name == "redunar-tauri")
-        && parent_executable
-            .parent()
-            .is_some_and(|directory| directory.join("redunar-hotkey-helper").is_file())
+        .is_none_or(|name| name != "redunar-tauri")
+    {
+        return false;
+    }
+    let Some(helper) = helper_executable.and_then(|path| fs::metadata(path).ok()) else {
+        return false;
+    };
+    let Some(directory) = parent_executable.parent() else {
+        return false;
+    };
+    let adjacent = directory.join("redunar-hotkey-helper");
+    let packaged = directory
+        .parent()
+        .map(|path| path.join("libexec/redunar-hotkey-helper"));
+    std::iter::once(adjacent).chain(packaged).any(|path| {
+        fs::metadata(path).is_ok_and(|candidate| {
+            candidate.is_file()
+                && candidate.dev() == helper.dev()
+                && candidate.ino() == helper.ino()
+        })
+    })
 }
 
 fn parse_process_identity(status: &str) -> Result<(u32, u32), String> {
@@ -954,10 +972,29 @@ mod tests {
         let parent = directory.join("redunar-tauri");
         let helper = directory.join("redunar-hotkey-helper");
         std::fs::write(&helper, b"fixture").expect("trust fixture helper");
-        assert!(trusted_parent(&parent));
-        std::fs::remove_file(helper).expect("remove trust fixture helper");
-        assert!(!trusted_parent(&parent));
+        assert!(trusted_parent(&parent, Some(&helper)));
+        let other = directory.join("different-helper");
+        std::fs::write(&other, b"fixture").unwrap();
+        assert!(!trusted_parent(&parent, Some(&other)));
+        assert!(!trusted_parent(&directory.join("other-app"), Some(&helper)));
+        std::fs::remove_file(other).unwrap();
+        std::fs::remove_file(&helper).expect("remove trust fixture helper");
+        assert!(!trusted_parent(&parent, Some(&helper)));
         std::fs::remove_dir(directory).expect("remove trust fixture directory");
+    }
+
+    #[test]
+    fn unpacked_package_parent_requires_its_matching_libexec_helper() {
+        let root = std::env::temp_dir().join(format!("rd-unpacked-{}", std::process::id()));
+        let bin = root.join("usr/bin");
+        let libexec = root.join("usr/libexec");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&libexec).unwrap();
+        let helper = libexec.join("redunar-hotkey-helper");
+        std::fs::write(&helper, b"fixture").unwrap();
+        assert!(trusted_parent(&bin.join("redunar-tauri"), Some(&helper)));
+        assert!(!trusted_parent(&bin.join("redunar-tauri"), None));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

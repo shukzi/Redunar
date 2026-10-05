@@ -19,6 +19,14 @@ if [[ ! -f "$layer" ]]; then
   exit 1
 fi
 
+# Compile our finite Vulkan 1.1 scene rather than relying on distro vkcube's
+# unstated API version. This is a manual hardware runner, not a package input.
+fixture_dir="$workspace_root/.redunar-build/native/fixtures"
+mkdir -p "$fixture_dir"
+read -r -a fixture_flags <<< "$(pkg-config --cflags --libs vulkan xcb)"
+cc -std=c11 -Wall -Wextra -Werror "$workspace_root/tools/fixtures/vulkan_scene.c" \
+  -o "$fixture_dir/vulkan-scene" "${fixture_flags[@]}"
+
 test_root=$(mktemp -d /tmp/rdr-replay.XXXXXX)
 test_home="$test_root/home"
 test_state="$test_root/state"
@@ -44,6 +52,10 @@ cleanup() {
 trap cleanup EXIT
 
 cd -- "$workspace_root"
+# Compilation is unbounded; only the owned live fixture gets a hard deadline.
+cargo test --locked --offline --release --target-dir "$workspace_root/.redunar-build/native/tauri" \
+  --manifest-path output/tauri-redunar/src-tauri/Cargo.toml \
+  replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor --no-run
 HOME="$test_home" \
 XDG_STATE_HOME="$test_state" \
 XDG_CONFIG_HOME="$test_config" \
@@ -54,7 +66,8 @@ REDUNAR_TAURI_BETA_ACCESS="$beta_access" \
 RUSTUP_HOME="${RUSTUP_HOME:-$tool_home/.rustup}" \
 CARGO_HOME="${CARGO_HOME:-$tool_home/.cargo}" \
 REDUNAR_TAURI_CAPTURE_LAYER="$layer" \
-  cargo test --locked --offline --release --target-dir "$workspace_root/.redunar-build/native/tauri" \
+REDUNAR_TAURI_VULKAN_SCENE="$fixture_dir/vulkan-scene" \
+  timeout --kill-after=5s 75s cargo test --locked --offline --release --target-dir "$workspace_root/.redunar-build/native/tauri" \
     --manifest-path output/tauri-redunar/src-tauri/Cargo.toml \
     replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor \
     -- --ignored --nocapture --test-threads=1

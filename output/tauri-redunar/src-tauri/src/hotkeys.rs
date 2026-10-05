@@ -333,8 +333,23 @@ fn helper_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let helper = PathBuf::from(INSTALLED_HELPER);
-    helper.is_file().then_some(helper)
+    packaged_helper_path(env::current_exe().ok().as_deref())
+}
+
+fn packaged_helper_path(executable: Option<&std::path::Path>) -> Option<PathBuf> {
+    // Steam clears game-specific overrides before background startup. Resolve
+    // the matching build/package helper from the app's own location, so an
+    // unpacked candidate cannot silently use a different installed version.
+    let directory = executable.and_then(std::path::Path::parent);
+    let adjacent = directory.map(|path| path.join("redunar-hotkey-helper"));
+    let packaged = directory
+        .and_then(std::path::Path::parent)
+        .map(|path| path.join("libexec/redunar-hotkey-helper"));
+    adjacent
+        .into_iter()
+        .chain(packaged)
+        .chain(std::iter::once(PathBuf::from(INSTALLED_HELPER)))
+        .find(|path| path.is_file())
 }
 
 fn spawn_reader(
@@ -406,6 +421,39 @@ fn wake_dispatcher(app: Option<&tauri::AppHandle>, pending: &Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::{parse_helper_event, write_bindings, HelperEvent, ShortcutMonitor};
+
+    #[test]
+    fn background_start_uses_the_matching_local_or_unpacked_helper() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("rd-helper-{}-{unique}", std::process::id()));
+        let bin = root.join("usr/bin");
+        let libexec = root.join("usr/libexec");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&libexec).unwrap();
+        let executable = bin.join("redunar-tauri");
+        let adjacent = bin.join("redunar-hotkey-helper");
+        let packaged = libexec.join("redunar-hotkey-helper");
+        std::fs::write(&packaged, b"fixture").unwrap();
+        assert_eq!(
+            super::packaged_helper_path(Some(&executable)),
+            Some(packaged.clone())
+        );
+        std::fs::write(&adjacent, b"fixture").unwrap();
+        assert_eq!(
+            super::packaged_helper_path(Some(&executable)),
+            Some(adjacent.clone())
+        );
+        std::fs::remove_file(&adjacent).unwrap();
+        std::fs::create_dir(&adjacent).unwrap();
+        assert_eq!(
+            super::packaged_helper_path(Some(&executable)),
+            Some(packaged)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn helper_exit_preserves_the_activation_failure_reason() {

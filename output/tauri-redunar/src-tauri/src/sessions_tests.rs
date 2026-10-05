@@ -565,7 +565,7 @@ fn capture_enabled_vulkan_fixture_runs_through_tauri_session_supervisor() {
 }
 
 #[test]
-#[ignore = "requires a local Vulkan display, vkcubepp, the built capture layer, and a validated hardware encoder"]
+#[ignore = "requires a local Vulkan display, the generated scene, built capture layer, and a validated hardware encoder"]
 fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
     let layer = std::env::var_os("REDUNAR_TAURI_CAPTURE_LAYER")
         .map(PathBuf::from)
@@ -623,17 +623,22 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
         NEXT.fetch_add(1, Ordering::Relaxed)
     )));
     std::fs::create_dir_all(&root.0).unwrap();
-    let mut engine = Engine::new(service.clone());
-    let mut request = AddGameRequest::new("Vulkan replay fixture", "/usr/bin/vkcubepp");
+    // Reuse the failure guard: a panic must stop/join the Replay pump before
+    // dropping its coordinator and remove only this fixture's runtime.
+    let mut fixture = Fixture {
+        root: root.0.clone(),
+        engine: Engine::new(service.clone()),
+    };
+    let engine = &mut fixture.engine;
+    let scene = PathBuf::from(
+        std::env::var_os("REDUNAR_TAURI_VULKAN_SCENE").expect("runner-built Vulkan 1.1 scene"),
+    );
+    assert!(scene.is_absolute() && scene.is_file());
+    let mut request = AddGameRequest::new("Vulkan replay fixture", scene);
     request.launch.arguments = [
-        "--c".into(),
-        "4000".into(),
-        "--wsi".into(),
-        "xcb".into(),
-        "--width".into(),
         if beta { "1920" } else { "640" }.into(),
-        "--height".into(),
         if beta { "1080" } else { "240" }.into(),
+        "1200".into(),
     ]
     .into_iter()
     .collect();
@@ -675,6 +680,7 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
         .unwrap();
 
     let mut save_requested = false;
+    let mut spool_busy_retries = 0;
     let deadline = std::time::Instant::now() + Duration::from_secs(45);
     while engine.launch_locked() && std::time::Instant::now() < deadline {
         engine.tick(&MonitorSnapshot::default());
@@ -683,20 +689,23 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
             && status.phase == redunar_daemon::ReplayPhase::Buffering
             && status.buffered_duration_ns >= 15_000_000_000
         {
-            service
-                .save_replay(redunar_core::ReplayDuration::Seconds15)
-                .expect("save the validated rolling Replay buffer");
-            save_requested = true;
-        }
-        if save_requested && status.completed_save_revision > 0 {
-            // Only this generated scene belongs to the fixture. Finish it
-            // once the clip commits rather than depending on display cadence.
-            if let Some(active) = engine.active.as_mut() {
-                let _ = active.child.child_mut().kill();
-                let _ = active.child.child_mut().wait();
+            match service.save_replay(redunar_core::ReplayDuration::Seconds15) {
+                Ok(()) => save_requested = true,
+                // The live spool deliberately uses try_lock to keep a save
+                // snapshot bounded. Retry only its explicit contention result;
+                // never turn a storage/encoder failure into an acceptance pass.
+                Err(error)
+                    if error.to_string()
+                        == "replay disk history failed: Replay spool is busy; retry saving"
+                        && spool_busy_retries < 10 =>
+                {
+                    spool_busy_retries += 1;
+                }
+                Err(error) => panic!("save the validated rolling Replay buffer: {error}"),
             }
-            engine.tick(&MonitorSnapshot::default());
         }
+        // The bounded scene closes its Vulkan resources normally. Killing it
+        // immediately after a save skips Goodbye and the producer-exit grace.
         std::thread::sleep(Duration::from_millis(20));
     }
     if engine.launch_locked() {
@@ -707,6 +716,7 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
             }
         }
         engine.tick(&MonitorSnapshot::default());
+        let _ = engine.finish();
     }
     assert!(
         !engine.launch_locked(),
@@ -716,6 +726,7 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
         save_requested,
         "Replay buffer never reached fifteen seconds"
     );
+    eprintln!("Replay fixture accepted save after {spool_busy_retries} spool contention retries");
     let capture = engine.capture.as_ref().expect("capture snapshot");
     assert_eq!(capture.phase, redunar_daemon::CapturePhase::Completed);
     assert!(capture.received_frame_count > 0);

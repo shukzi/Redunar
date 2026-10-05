@@ -60,6 +60,7 @@ bash -n tools/test-updater-versioned-rpm.sh
 tools/test-installer.sh
 
 tools/build-linux-release.sh
+tools/check-vulkan-layer-binding.sh "$workspace_root/.redunar-build/linux/native/tauri/release/libredunar_capture_vulkan.so"
 python3 tools/generate-license-inventory.py --check
 # Session fixtures append random capture directory and socket names. /dev/shm is
 # both outside the quota-constrained /tmp and short enough for AF_UNIX paths.
@@ -143,21 +144,25 @@ REDUNAR_GLIBC_VERSION=2.36 "$installer_output/install.sh" --check \
   | grep -Fq 'https://github.com/example/redunar/releases/latest/download/'
 
 if command -v rpmbuild >/dev/null 2>&1; then
-  rpm_output=$(mktemp -d)
+  rpm_output="$release_check_root/rpm-output"
+  mkdir -p "$rpm_output/database"
+  query_rpm() { command rpm --dbpath "$rpm_output/database" "$@"; }
+  query_rpm --initdb
   tools/build-local-tauri-rpm.sh "$rpm_output"
   rpm_path=$(find "$rpm_output" -type f \( -name 'redunar-app.rpm' -o -name 'redunar-app-*.rpm' \) -print -quit)
   test -n "$rpm_path"
-  test "$(rpm -qp --qf '%{NAME}' "$rpm_path")" = redunar-app
+  test "$(query_rpm -qp --qf '%{NAME}' "$rpm_path")" = redunar-app
   # Both FFmpeg package families provide these files. The full codec library
   # and standalone freeworld package provide the same architecture capability.
-  rpm_requirements=$(rpm -qp --requires "$rpm_path")
+  rpm_requirements=$(query_rpm -qp --requires "$rpm_path")
   grep -Fxq '/usr/bin/ffmpeg' <<<"$rpm_requirements"
   grep -Fxq '/usr/bin/ffprobe' <<<"$rpm_requirements"
   grep -Fxq 'libavcodec-freeworld(x86-64)' <<<"$rpm_requirements"
   grep -Fxq '/usr/lib64/gstreamer-1.0/libgstlibav.so' <<<"$rpm_requirements"
   ! grep -Eq '^ffmpeg(-free|-libs)?([[:space:]]|$)' <<<"$rpm_requirements"
-  ! rpm -qp --qf '[%{CONFLICTNAME}\n][%{OBSOLETENAME}\n]' "$rpm_path" | grep -Eiq 'ffmpeg|libavcodec'
-  rpm_scripts=$(rpm -qp --scripts "$rpm_path")
+  rpm_conflicts=$(query_rpm -qp --qf '[%{CONFLICTNAME}\n][%{OBSOLETENAME}\n]' "$rpm_path")
+  ! grep -Eiq 'ffmpeg|libavcodec' <<<"$rpm_conflicts"
+  rpm_scripts=$(query_rpm -qp --scripts "$rpm_path")
   grep -Fq 'postinstall scriptlet' <<<"$rpm_scripts"
   grep -Fq '/usr/bin/udevadm control --reload-rules' <<<"$rpm_scripts"
   grep -Fq '/usr/bin/udevadm trigger --subsystem-match=input --sysname-match=event* --property-match=ID_INPUT_KEYBOARD=1 --action=change' <<<"$rpm_scripts"
