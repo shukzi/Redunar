@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod artwork;
 mod backend;
+mod background_start;
 mod catalog;
 mod clip_export;
 mod clip_metadata;
@@ -90,8 +91,13 @@ fn persist_window_state(window: &tauri::Window) {
     let _ = backend::service().set_window_state(width, height, maximized);
 }
 
-fn tauri_context(read_only_instance: bool) -> tauri::Context<tauri::Wry> {
+fn tauri_context(read_only_instance: bool, background: bool) -> tauri::Context<tauri::Wry> {
     let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    if background {
+        if let Some(window) = context.config_mut().app.windows.first_mut() {
+            window.visible = false;
+        }
+    }
     if read_only_instance {
         // A second GTK application with the primary app ID reactivates the
         // first Tauri event loop. Tauri then runs setup twice and panics while
@@ -164,8 +170,15 @@ mod tests {
 }
 
 fn main() {
+    let background = background_start::requested(std::env::args_os().skip(1));
     if let Err(message) = backend::initialize() {
         eprintln!("{message}");
+        return;
+    }
+    // Concurrent Steam starters must never create a secondary GTK app or
+    // compete with the existing native session owner.
+    if background && backend::other_owner() {
+        backend::shutdown();
         return;
     }
     #[cfg(target_os = "linux")]
@@ -201,8 +214,11 @@ fn main() {
     let sessions = sessions::Sessions::new(backend::service(), monitor.reader())
         .expect("Could not start the session supervisor");
     let app = tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             tray::setup(app)?;
+            if background {
+                background_start::prepare_window(app.handle());
+            }
             app.state::<hotkeys::ShortcutMonitor>()
                 .set_app_handle(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
@@ -311,12 +327,12 @@ fn main() {
             runtime::save_replay,
             runtime::delete_replay_clip,
         ])
-        .build(tauri_context(backend::other_owner()))
+        .build(tauri_context(backend::other_owner(), background))
         .expect("Could not open Redunar");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
             // Keep the app visible if session cleanup needs user attention.
-            if let Err(error) = app.state::<sessions::Sessions>().end() {
+            if let Err(error) = app.state::<sessions::Sessions>().end_for_exit() {
                 api.prevent_exit();
                 tray::show_window(app);
                 if let Some(window) = app.get_webview_window("main") {
@@ -351,10 +367,13 @@ mod identity_tests {
 
     #[test]
     fn runtime_identity_matches_the_tauri_identifier() {
-        let primary = super::tauri_context(false);
+        let primary = super::tauri_context(false, false);
         assert_eq!(primary.config().identifier, APP_ID);
         assert!(primary.config().app.enable_gtk_app_id);
-        let secondary = super::tauri_context(true);
+        assert!(primary.config().app.windows[0].visible);
+        let background = super::tauri_context(false, true);
+        assert!(!background.config().app.windows[0].visible);
+        let secondary = super::tauri_context(true, false);
         assert_eq!(secondary.config().identifier, APP_ID);
         assert!(!secondary.config().app.enable_gtk_app_id);
     }

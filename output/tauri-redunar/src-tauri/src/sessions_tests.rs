@@ -65,7 +65,9 @@ impl Fixture {
         }
     }
     fn reap(&mut self) {
-        self.engine.active.as_mut().unwrap().child.wait().unwrap();
+        if let LaunchProcess::Child(child) = &mut self.engine.active.as_mut().unwrap().child {
+            child.wait().unwrap();
+        }
         self.engine.tick(&MonitorSnapshot::default());
     }
 }
@@ -73,8 +75,10 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         if let Some(active) = self.engine.active.as_mut() {
             // Only the harmless child created by this test is terminated.
-            let _ = active.child.kill();
-            let _ = active.child.wait();
+            if let LaunchProcess::Child(child) = &mut active.child {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         let _ = self.engine.service.game_session_coordinator().end();
         let _ = std::fs::remove_dir_all(&self.root);
@@ -248,13 +252,21 @@ fn end_session_does_not_kill_the_game_and_does_not_duplicate_history() {
         .as_mut()
         .unwrap()
         .child
+        .child_mut()
         .try_wait()
         .unwrap()
         .is_none());
     assert!(f.engine.launch_locked());
     assert!(!f.engine.can_end());
     assert_eq!(f.engine.service.session_history().unwrap().len(), 1);
-    f.engine.active.as_mut().unwrap().child.kill().unwrap();
+    f.engine
+        .active
+        .as_mut()
+        .unwrap()
+        .child
+        .child_mut()
+        .kill()
+        .unwrap();
     f.reap();
     assert!(!f.engine.launch_locked());
     assert_eq!(f.engine.service.session_history().unwrap().len(), 1);
@@ -288,7 +300,14 @@ fn steam_helper_exit_is_not_game_exit_and_failed_scans_keep_ownership() {
     let mut plan = f.plan("/bin/true", &[]);
     plan.ownership = GameLaunchProcessOwnership::ForwardedSteam { app_id: Some(42) };
     f.engine.start(plan).unwrap();
-    f.engine.active.as_mut().unwrap().child.wait().unwrap();
+    f.engine
+        .active
+        .as_mut()
+        .unwrap()
+        .child
+        .child_mut()
+        .wait()
+        .unwrap();
     let mut monitor = MonitorSnapshot::default();
     monitor.diagnostics.game_scans = 1;
     f.engine.tick(&monitor);
@@ -319,7 +338,7 @@ fn an_unconfirmed_steam_timeout_does_not_invent_a_completed_game() {
     plan.ownership = GameLaunchProcessOwnership::ForwardedSteam { app_id: Some(42) };
     f.engine.start(plan).unwrap();
     let active = f.engine.active.as_mut().unwrap();
-    active.child.wait().unwrap();
+    active.child.child_mut().wait().unwrap();
     active.started = Instant::now() - (super::STEAM_START_TIMEOUT + Duration::from_secs(1));
     let mut monitor = MonitorSnapshot::default();
     monitor.diagnostics.game_scans = 1;
@@ -364,6 +383,7 @@ fn a_capture_failure_does_not_release_a_still_running_direct_child() {
         .as_mut()
         .unwrap()
         .child
+        .child_mut()
         .try_wait()
         .unwrap()
         .is_none());
@@ -672,8 +692,8 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
             // Only this generated scene belongs to the fixture. Finish it
             // once the clip commits rather than depending on display cadence.
             if let Some(active) = engine.active.as_mut() {
-                let _ = active.child.kill();
-                let _ = active.child.wait();
+                let _ = active.child.child_mut().kill();
+                let _ = active.child.child_mut().wait();
             }
             engine.tick(&MonitorSnapshot::default());
         }
@@ -681,8 +701,10 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
     }
     if engine.launch_locked() {
         if let Some(active) = engine.active.as_mut() {
-            let _ = active.child.kill();
-            let _ = active.child.wait();
+            if let LaunchProcess::Child(child) = &mut active.child {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         engine.tick(&MonitorSnapshot::default());
     }
@@ -740,3 +762,90 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
 }
 
 include!("sessions_overlay_tests.rs");
+
+#[test]
+fn external_steam_uses_existing_process_and_end_retains_lock_until_exit() {
+    let mut f = Fixture::new();
+    let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let identity =
+        redunar_daemon::ProcessIdentity::capture(Path::new("/proc"), child.id()).unwrap();
+    let marker = f.root.join("unexpected-launch");
+    let mut plan = f.plan("/usr/bin/touch", &[marker.to_str().unwrap()]);
+    plan.ownership = GameLaunchProcessOwnership::ForwardedSteam { app_id: Some(42) };
+    f.engine
+        .start_with_process(plan, Some(LaunchProcess::Steam(identity)))
+        .unwrap();
+    assert!(
+        !marker.exists(),
+        "attaching must never spawn the saved Steam launch command"
+    );
+    assert!(f
+        .engine
+        .attach_steam(redunar_daemon::SteamAppId::new(43).unwrap(), child.id())
+        .is_err());
+    let mut monitor = MonitorSnapshot::default();
+    monitor.diagnostics.game_scans = 1;
+    monitor.games = vec![GameProcess {
+        pid: child.id(),
+        comm: "Fixture".into(),
+        executable: "/fixture/game".into(),
+        steam_app_id: Some(42),
+        game_mode_active: false,
+    }]
+    .into();
+    f.engine.tick(&monitor);
+    f.engine.finish().unwrap();
+    f.engine.finish().unwrap();
+    assert!(f.engine.launch_locked());
+    assert!(child.try_wait().unwrap().is_none());
+    assert_eq!(f.engine.service.session_history().unwrap().len(), 1);
+    monitor.games = vec![].into();
+    f.engine.tick(&monitor);
+    assert!(
+        f.engine.launch_locked(),
+        "cached scan cannot end a live external game"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    monitor.games = vec![].into();
+    f.engine.tick(&monitor);
+    assert!(!f.engine.launch_locked());
+    assert_eq!(f.engine.service.session_history().unwrap().len(), 1);
+}
+
+#[test]
+fn external_process_identity_rejects_reused_pid_and_treats_disappearance_as_exit() {
+    let root = TempRoot(std::env::temp_dir().join(format!(
+        "rdstmproc-{}",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )));
+    let proc = root.0.join("42");
+    std::fs::create_dir_all(&proc).unwrap();
+    let write_stat = |start| {
+        let mut fields = vec!["0".to_string(); 20];
+        fields[0] = "S".into();
+        fields[19] = format!("{start}");
+        std::fs::write(
+            proc.join("stat"),
+            format!("42 (fixture) {}", fields.join(" ")),
+        )
+        .unwrap();
+    };
+    write_stat(100);
+    let identity = redunar_daemon::ProcessIdentity::capture(&root.0, 42).unwrap();
+    let mut process = LaunchProcess::Steam(identity);
+    assert!(matches!(
+        process.observe().0,
+        CaptureLaunchProcessState::Running
+    ));
+    write_stat(101);
+    assert!(matches!(
+        process.observe().0,
+        CaptureLaunchProcessState::Exited(_)
+    ));
+    std::fs::remove_file(proc.join("stat")).unwrap();
+    assert!(matches!(
+        process.observe().0,
+        CaptureLaunchProcessState::Exited(_)
+    ));
+}

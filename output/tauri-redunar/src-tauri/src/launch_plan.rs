@@ -1,6 +1,8 @@
 //! Prepare a saved launch using production capability and profile rules.
 //! No process starts until the session owner accepts this complete plan.
-use redunar_core::{EffectiveGameProfile, GameId, GameRecord, Inheritable};
+use redunar_core::{
+    EffectiveGameProfile, GameCatalog, GameId, GameMatchRule, GameRecord, Inheritable,
+};
 use redunar_daemon::{
     CaptureSessionConfig, CaptureSessionHandle, GameLaunchProcessOwnership, GameSessionRequest,
     RedunarService, ReplayRuntimeStatus, SteamAppId, SteamBridgeSetupStatus,
@@ -21,7 +23,43 @@ pub struct PreparedLaunch {
 }
 
 pub fn prepare(service: &RedunarService, id: GameId) -> Result<PreparedLaunch, String> {
+    prepare_for_origin(service, id, None)
+}
+
+pub fn prepare_steam(service: &RedunarService, app: SteamAppId) -> Result<PreparedLaunch, String> {
     let catalog = service.load_game_catalog().map_err(|e| e.to_string())?;
+    let id = unique_steam_game(&catalog, app)?;
+    prepare_for_origin(service, id, Some(app))
+}
+
+fn unique_steam_game(catalog: &GameCatalog, app: SteamAppId) -> Result<GameId, String> {
+    let mut matches = catalog.games.iter().filter(|game| {
+        game.match_rules
+            .iter()
+            .any(|rule| *rule == GameMatchRule::SteamAppId(app.get()))
+    });
+    let game = matches
+        .next()
+        .ok_or("Import this Steam game into Redunar before enabling its launch option.")?;
+    if matches.next().is_some() {
+        return Err(
+            "This Steam game matches multiple local profiles. Review its launch matching.".into(),
+        );
+    }
+    Ok(game.id)
+}
+
+fn prepare_for_origin(
+    service: &RedunarService,
+    id: GameId,
+    steam: Option<SteamAppId>,
+) -> Result<PreparedLaunch, String> {
+    let catalog = service.load_game_catalog().map_err(|e| e.to_string())?;
+    if let Some(app) = steam {
+        if unique_steam_game(&catalog, app)? != id {
+            return Err("Steam launch matching changed during preparation. Try again.".into());
+        }
+    }
     let mut game = catalog
         .games
         .into_iter()
@@ -59,9 +97,22 @@ pub fn prepare(service: &RedunarService, id: GameId) -> Result<PreparedLaunch, S
     ) {
         return Err("This Steam launch has no identifiable game ID. Review its saved launch settings before launching here.".into());
     }
+    if steam.is_some_and(|app| {
+        ownership
+            != GameLaunchProcessOwnership::ForwardedSteam {
+                app_id: Some(app.get()),
+            }
+    }) {
+        return Err(
+            "The Steam launch does not match this game's saved native Steam launch identity."
+                .into(),
+        );
+    }
     // Visibility is not runtime installation. Prepare the supported telemetry
     // path even with all displays/recording initially off, so it can be shown
     // later without injecting anything into an already running process.
+    // A verified live wrapper proves the launch option is active. Only the
+    // app-initiated path depends on Steam's persisted configuration snapshot.
     let supported_launch = match ownership {
             GameLaunchProcessOwnership::DirectChild => {
                 service.capture_support_for_launch(&game.launch).is_supported()
@@ -69,7 +120,7 @@ pub fn prepare(service: &RedunarService, id: GameId) -> Result<PreparedLaunch, S
             GameLaunchProcessOwnership::ForwardedSteam { app_id } => app_id
                 .and_then(SteamAppId::new)
                 .is_some_and(|id| matches!(service.steam_bridge_setup_status(id),
-                    SteamBridgeSetupStatus::Available(setup) if setup.configuration_status().is_configured())),
+                    SteamBridgeSetupStatus::Available(setup) if steam.is_some() || setup.configuration_status().is_configured())),
         };
     let overlay_available = modules.in_game_overlay.allows_runtime() && supported_launch;
     // The compatibility value stored by earlier catalog formats cannot disable
@@ -95,7 +146,7 @@ pub fn prepare(service: &RedunarService, id: GameId) -> Result<PreparedLaunch, S
             let app_id = SteamAppId::new(app_id).ok_or("Invalid Steam game identifier")?;
             match service.steam_bridge_setup_status(app_id) {
                 SteamBridgeSetupStatus::Available(setup)
-                    if setup.configuration_status().is_configured() => {}
+                    if steam.is_some() || setup.configuration_status().is_configured() => {}
                 SteamBridgeSetupStatus::Available(setup) => {
                     return Err(format!(
                         "Steam launch options are missing or unconfirmed. Set this game's Steam Launch Options to: {}",
@@ -178,6 +229,33 @@ fn direct_command(game: &GameRecord) -> Command {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn steam_identity_requires_one_exact_imported_game() {
+        let app = SteamAppId::new(42).unwrap();
+        let game = |id, steam| GameRecord {
+            id: GameId::new(id).unwrap(),
+            display_name: "Fixture".into(),
+            match_rules: vec![GameMatchRule::SteamAppId(steam)],
+            launch: redunar_core::GameLaunchConfig {
+                executable: "/bin/true".into(),
+                arguments: vec![],
+                working_directory: None,
+            },
+            profile: Default::default(),
+        };
+        let mut catalog = GameCatalog::default();
+        assert!(unique_steam_game(&catalog, app).is_err());
+        catalog.games.push(game(1, 43));
+        assert!(unique_steam_game(&catalog, app).is_err());
+        catalog.games.push(game(2, 42));
+        assert_eq!(
+            unique_steam_game(&catalog, app).unwrap(),
+            GameId::new(2).unwrap()
+        );
+        catalog.games.push(game(3, 42));
+        assert!(unique_steam_game(&catalog, app).is_err());
+    }
 
     #[test]
     fn hidden_overlay_still_prepares_runtime_without_enabling_recording() {

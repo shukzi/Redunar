@@ -1,4 +1,6 @@
-use redunar_platform::{SteamAppId, resolve_steam_wrapper_environment, steam_broker_socket_path};
+use redunar_platform::{
+    SteamAppId, ensure_steam_session, resolve_steam_wrapper_environment, steam_broker_socket_path,
+};
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -16,6 +18,23 @@ fn main() -> ExitCode {
     if let (Some(app_id), Some(socket_path)) = (invocation.app_id, broker_socket_path()) {
         let inherited = env::vars_os().collect::<BTreeMap<OsString, OsString>>();
         managed = resolve_steam_wrapper_environment(app_id, &socket_path, &inherited);
+        if managed.is_empty()
+            && let Some((runtime, app)) = background_app_paths()
+        {
+            match ensure_steam_session(app_id, &runtime, &app) {
+                Ok(true) => {
+                    managed = resolve_steam_wrapper_environment(app_id, &socket_path, &inherited);
+                }
+                Ok(false) => {
+                    eprintln!(
+                        "redunar-steam-launch: session unavailable or another game is active"
+                    );
+                }
+                Err(_) => eprintln!(
+                    "redunar-steam-launch: background session unavailable; continuing game launch"
+                ),
+            }
+        }
     }
     let managed_value = |name: &str| managed.get(&OsString::from(name)).cloned();
     let use_gamescope = managed_value("REDUNAR_GAMESCOPE")
@@ -68,6 +87,14 @@ fn broker_socket_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .map(|path| steam_broker_socket_path(&path))
+}
+
+fn background_app_paths() -> Option<(PathBuf, PathBuf)> {
+    let runtime = env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())?;
+    let executable = env::current_exe().ok()?;
+    Some((runtime, executable.parent()?.join("redunar-tauri")))
 }
 
 struct Invocation {

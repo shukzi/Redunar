@@ -8,6 +8,7 @@ use redunar_daemon::{
     SessionRecord, SessionTelemetrySample,
 };
 use std::{
+    path::Path,
     process::Child,
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread::JoinHandle,
@@ -23,6 +24,7 @@ const STEAM_START_TIMEOUT: Duration = Duration::from_mins(5);
 pub struct Sessions {
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    steam: Mutex<Option<redunar_platform::SteamSessionBroker>>,
 }
 struct Shared {
     engine: Mutex<Engine>,
@@ -30,7 +32,7 @@ struct Shared {
 }
 
 struct ActiveLaunch {
-    child: Child,
+    child: LaunchProcess,
     ownership: GameLaunchProcessOwnership,
     capture: bool,
     profile: redunar_core::EffectiveGameProfile,
@@ -49,6 +51,50 @@ struct ActiveLaunch {
     monitor_revision: u64,
     exit_failure: Option<String>,
     timeline: SessionTimeline,
+}
+
+// External Steam launches exec in the authenticated wrapper PID. Track its
+// kernel start time; an exec preserves identity while PID reuse does not.
+enum LaunchProcess {
+    Child(Child),
+    Steam(redunar_daemon::ProcessIdentity),
+}
+
+impl LaunchProcess {
+    #[cfg(test)]
+    fn child_mut(&mut self) -> &mut Child {
+        match self {
+            Self::Child(child) => child,
+            Self::Steam(_) => panic!("fixture expected owned child"),
+        }
+    }
+
+    fn observe(&mut self) -> (CaptureLaunchProcessState, Option<String>) {
+        let mut failure = None;
+        let state = match self {
+            Self::Child(child) => match child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        failure = Some(format!(
+                            "Game launch process exited unsuccessfully: {status}"
+                        ));
+                    }
+                    CaptureLaunchProcessState::Exited(status.to_string())
+                }
+                Ok(None) => CaptureLaunchProcessState::Running,
+                Err(error) => CaptureLaunchProcessState::MonitorFailed(error.to_string()),
+            },
+            Self::Steam(identity) => match identity.is_alive() {
+                Ok(true) => CaptureLaunchProcessState::Running,
+                Ok(false) => CaptureLaunchProcessState::Exited("Steam launch process ended".into()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    CaptureLaunchProcessState::Exited("Steam launch process ended".into())
+                }
+                Err(error) => CaptureLaunchProcessState::MonitorFailed(error.to_string()),
+            },
+        };
+        (state, failure)
+    }
 }
 
 #[derive(Debug)]
@@ -122,6 +168,20 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn steam_wrapper_matches(pid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let expected = std::env::current_exe().ok().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join("redunar-steam-launch"))
+    });
+    expected
+        .and_then(|path| std::fs::metadata(path).ok())
+        .zip(std::fs::metadata(format!("/proc/{pid}/exe")).ok())
+        .is_some_and(|(expected, actual)| {
+            expected.dev() == actual.dev() && expected.ino() == actual.ino()
+        })
+}
+
 impl Sessions {
     pub fn new(service: RedunarService, monitor: MonitorReader) -> std::io::Result<Self> {
         let shared = Arc::new(Shared {
@@ -152,9 +212,58 @@ impl Sessions {
                     }
                 }
             })?;
+        let steam = if !lock(&shared.engine).service.is_read_only() {
+            let weak = Arc::downgrade(&shared);
+            let bind = (|| {
+                let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+                    .map(std::path::PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .ok_or_else(|| std::io::Error::other("runtime unavailable"))?;
+                let directory = runtime.join("redunar");
+                match std::fs::create_dir(&directory) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error),
+                }
+                redunar_platform::SteamSessionBroker::bind(
+                    redunar_platform::steam_session_socket_path(&runtime),
+                    move |app, pid| {
+                        let Some(shared) = weak.upgrade() else {
+                            return false;
+                        };
+                        let mut engine = lock(&shared.engine);
+                        let result = if steam_wrapper_matches(pid) {
+                            engine.attach_steam(app, pid)
+                        } else {
+                            Err("Steam launch wrapper does not match this Redunar build.".into())
+                        };
+                        if let Err(error) = &result {
+                            engine.message = Some(error.clone());
+                        }
+                        redunar_daemon::diagnostic_log::log(if result.is_ok() {
+                            "Steam launch event=session_prepared"
+                        } else {
+                            "Steam launch event=session_rejected"
+                        });
+                        shared.wake.notify_one();
+                        result.is_ok()
+                    },
+                )
+            })();
+            match bind {
+                Ok(broker) => Some(broker),
+                Err(_) => {
+                    redunar_daemon::diagnostic_log::log("Steam launch event=listener_unavailable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Ok(Self {
             shared,
             worker: Mutex::new(Some(worker)),
+            steam: Mutex::new(steam),
         })
     }
 
@@ -194,7 +303,21 @@ impl Sessions {
         engine.update_game_overlay_config(game_id)
     }
 
+    pub fn end_for_exit(&self) -> Result<(), String> {
+        let mut engine = lock(&self.shared.engine);
+        engine.shutdown = true;
+        let result = engine.finish();
+        if result.is_err() {
+            engine.shutdown = false;
+        }
+        result
+    }
+
     pub fn shutdown(&self) {
+        // Stop accepting new launches before ending the worker and backend.
+        if let Some(mut steam) = lock(&self.steam).take() {
+            steam.shutdown();
+        }
         lock(&self.shared.engine).shutdown = true;
         self.shared.wake.notify_one();
         if let Some(worker) = lock(&self.worker).take() {
@@ -264,7 +387,23 @@ impl Engine {
         }
         Ok(())
     }
-    fn start(&mut self, mut plan: PreparedLaunch) -> Result<(), String> {
+    fn attach_steam(&mut self, app: redunar_daemon::SteamAppId, pid: u32) -> Result<(), String> {
+        self.ensure_idle()?;
+        let identity = redunar_daemon::ProcessIdentity::capture(Path::new("/proc"), pid)
+            .map_err(|_| "Steam launch process is no longer available")?;
+        let plan = launch_plan::prepare_steam(&self.service, app)?;
+        self.start_with_process(plan, Some(LaunchProcess::Steam(identity)))
+    }
+
+    fn start(&mut self, plan: PreparedLaunch) -> Result<(), String> {
+        self.start_with_process(plan, None)
+    }
+
+    fn start_with_process(
+        &mut self,
+        mut plan: PreparedLaunch,
+        process: Option<LaunchProcess>,
+    ) -> Result<(), String> {
         self.ensure_idle()?;
         let session = self.service.game_session_coordinator();
         let capture = plan.capture.is_some();
@@ -277,7 +416,8 @@ impl Engine {
             .map_err(|e| e.to_string())?;
         self.capture = None;
         self.message = None;
-        let child = match plan.command.spawn() {
+        let child = match process.map_or_else(|| plan.command.spawn().map(LaunchProcess::Child), Ok)
+        {
             Ok(child) => child,
             Err(error) => {
                 let cleanup = session.end();
@@ -398,18 +538,10 @@ impl Engine {
         if active.stopped && (!active.cleanup_done || !active.history_written) {
             return;
         }
-        let process = match active.child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    active.exit_failure = Some(format!(
-                        "Game launch process exited unsuccessfully: {status}"
-                    ));
-                }
-                CaptureLaunchProcessState::Exited(status.to_string())
-            }
-            Ok(None) => CaptureLaunchProcessState::Running,
-            Err(error) => CaptureLaunchProcessState::MonitorFailed(error.to_string()),
-        };
+        let (process, failure) = active.child.observe();
+        if failure.is_some() {
+            active.exit_failure = failure;
+        }
         let session = self.service.game_session_coordinator();
         let release = if active.capture && !active.stopped {
             if monitor.revision != active.monitor_revision {
@@ -444,7 +576,7 @@ impl Engine {
                         session.stop_capture();
                         active.capture = false;
                     }
-                    forwarded_finished(active, monitor, app_id)
+                    forwarded_finished(active, monitor, app_id, &process)
                 }
             }
         } else {
@@ -453,7 +585,7 @@ impl Engine {
                     matches!(process, CaptureLaunchProcessState::Exited(_))
                 }
                 GameLaunchProcessOwnership::ForwardedSteam { app_id } => {
-                    forwarded_finished(active, monitor, app_id)
+                    forwarded_finished(active, monitor, app_id, &process)
                 }
             }
         };
@@ -556,6 +688,7 @@ fn forwarded_finished(
     active: &mut ActiveLaunch,
     monitor: &MonitorSnapshot,
     app_id: Option<u32>,
+    process: &CaptureLaunchProcessState,
 ) -> bool {
     // Failed/stale process scans are not evidence that a game exited.
     if monitor.diagnostics.game_detection_error.is_some() || monitor.diagnostics.game_scans == 0 {
@@ -570,6 +703,13 @@ fn forwarded_finished(
     if running {
         active.steam_seen = true;
         active.confirmed = true;
+        return false;
+    }
+    // The directly authenticated Steam wrapper may itself be the game after
+    // exec. Cached discovery alone must not release a still-live owner.
+    if matches!(active.child, LaunchProcess::Steam(_))
+        && matches!(process, CaptureLaunchProcessState::Running)
+    {
         return false;
     }
     active.steam_seen || active.started.elapsed() >= STEAM_START_TIMEOUT

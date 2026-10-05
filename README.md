@@ -11,6 +11,14 @@ running on Linux with AMD hardware.
 - Clip trimming and playback in Redunar
 - Steam game discovery and launch profiles
 
+For a native Steam game, import it into Library and open **Launch matching →
+Check Steam setup**. Copy the app-specific value into that game's Steam Launch
+Options, then click **Play in Steam**. Redunar prepares the saved game profile
+and starts in the background if closed. Open or Quit it from its tray icon; a
+desktop without a working tray shows the main window. Replay still depends on
+actual hardware/runtime capabilities. Flatpak Steam capture remains unsupported.
+See [architecture](ARCHITECTURE.md) and [hardware support](HARDWARE-SUPPORT.md).
+
 ## Install
 
 On a supported system, run:

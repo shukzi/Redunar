@@ -132,7 +132,8 @@ impl SteamLaunchOptionsDetector {
     /// Compare the exact persisted value for `app_id` with `expected`.
     ///
     /// `Configured` requires every detected account to contain the same exact
-    /// value and Steam to be confirmed stopped. Prefix, suffix, substring, and
+    /// value. A persisted exact match remains valid while Steam is running;
+    /// other disk states remain ambiguous. Prefix, suffix, substring, and
     /// different-app matches are deliberately rejected.
     #[must_use]
     pub fn status(&self, app_id: SteamAppId, expected: &str) -> SteamLaunchOptionsStatus {

@@ -4,6 +4,26 @@ Current Tauri and shared-backend checks, reviewed September 26, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## Steam Play entry point
+
+Ordinary private fixtures cover the real `redunar-steam-launch` binary requesting
+preparation before exec, fail-open literal argv, background startup with a fake
+app, same-user PID credentials, exact imported identity, busy-session rejection,
+PID reuse/disappearance, End retaining a live game's lock, and one history record.
+Run `tools/validate.sh full` for both Cargo workspaces and the production UI build.
+The WebKit workspace fixture checks the Steam setup instructions and captures
+`steam-play-setup.png`. See the dated [task brief](docs/verification/2026-10-05-steam-play-task.md).
+
+Live acceptance remains separate: with a matching installed app/wrapper/libraries,
+import a native Steam game and save its displayed app-specific Launch Options.
+Quit Redunar, click Play in Steam, confirm the background owner/tray (or visible
+fallback), profile, metrics, Replay readiness, save/playback and natural cleanup.
+Repeat with Redunar already open and with an unsaved-in-Steam option edit; a
+second active game must continue without taking the first session. Test End and
+Quit without killing the game. Flatpak Steam and NVIDIA success remain outside
+ordinary fixture evidence. Do not run these hardware/installation checks without
+authorization.
+
 ## Installer shell and dependency fixtures
 
 `tools/test-installer.sh` uses signed local fixture files and fake package

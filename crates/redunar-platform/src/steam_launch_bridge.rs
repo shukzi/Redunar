@@ -1016,7 +1016,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
     Ok(Some(environment))
 }
 
-fn validate_socket_parent(socket_path: &Path) -> Result<(), SteamActivationError> {
+pub(crate) fn validate_socket_parent(socket_path: &Path) -> Result<(), SteamActivationError> {
     if !socket_path.is_absolute() {
         return Err(SteamActivationError::new(
             "Steam activation socket must be absolute",
@@ -1308,13 +1308,13 @@ const fn overlay_corner_name(corner: OverlayCorner) -> &'static str {
 }
 
 #[derive(Clone, Copy)]
-struct SocketIdentity {
+pub(crate) struct SocketIdentity {
     device: u64,
     inode: u64,
 }
 
 impl SocketIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
+    pub(crate) fn from_metadata(metadata: &fs::Metadata) -> Self {
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -1322,7 +1322,7 @@ impl SocketIdentity {
     }
 }
 
-fn remove_socket_if_same(path: &Path, identity: SocketIdentity) {
+pub(crate) fn remove_socket_if_same(path: &Path, identity: SocketIdentity) {
     if fs::symlink_metadata(path)
         .is_ok_and(|metadata| metadata.dev() == identity.device && metadata.ino() == identity.inode)
     {

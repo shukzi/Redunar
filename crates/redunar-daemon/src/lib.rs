@@ -57,7 +57,7 @@ pub use capture::{
     CaptureFrameMetrics, CapturePhase, CaptureSessionModel, CaptureSnapshot, capture_gpu,
 };
 pub use capture_lifecycle::{
-    ARMED_STARTUP_GRACE, CaptureLaunchDisposition, CaptureLaunchProcessState,
+    ARMED_STARTUP_GRACE, CaptureLaunchDisposition, CaptureLaunchProcessState, ProcessIdentity,
 };
 pub use capture_session::{
     CaptureRuntimeStatus, CaptureSessionConfig, CaptureSessionError, CaptureSessionHandle,

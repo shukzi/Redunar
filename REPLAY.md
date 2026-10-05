@@ -6,9 +6,10 @@ and [PERFORMANCE.md](PERFORMANCE.md) owns resource budgets.
 
 ## Activation and settings
 
-On a supported Redunar launch, replay is requested automatically. Recording
-settings configure the buffer without a separate activation switch. Capability
-and runtime validation still apply;
+On a supported launch from Redunar or the configured native Steam
+wrapper, replay is requested automatically. Recording settings configure the
+buffer without a separate activation switch. Capability and runtime validation
+still apply;
 unsupported launches must not claim that a buffer exists.
 
 The prepared Vulkan or supported desktop-OpenGL runtime also permits
@@ -195,8 +196,8 @@ presentation-completion support before claiming unrestricted resize recovery.
 If the daemon exits, the game continues presenting; telemetry batches reset
 after failed sends and exported OpenGL slots remain bounded while release
 messages are unavailable. A restarted daemon starts a new capture session,
-so Replay requires a new Redunar game launch rather than attaching the old
-game process to a different session. Startup sweeps stale private capture
+so Replay requires a new game launch from Redunar or configured native Steam;
+the old game process cannot attach to a different session. Startup sweeps stale private capture
 socket directories.
 
 When a process presents from multiple OpenGL contexts, the largest current

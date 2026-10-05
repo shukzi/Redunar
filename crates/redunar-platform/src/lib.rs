@@ -10,6 +10,7 @@ mod process_control;
 mod steam_discovery;
 mod steam_launch_bridge;
 mod steam_launch_options;
+mod steam_session_bridge;
 
 pub use background::{BackgroundCoordinator, BackgroundLoad, observe_background_load};
 pub use desktop_discovery::DesktopGameDiscovery;
@@ -46,3 +47,8 @@ pub use steam_launch_options::{
 };
 
 mod memory;
+
+pub use steam_session_bridge::{
+    STEAM_BACKGROUND_ARGUMENT, SteamSessionBroker, ensure_steam_session, request_steam_session,
+    steam_session_socket_path,
+};

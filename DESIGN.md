@@ -69,6 +69,10 @@ Game settings and Launch matching are separate tabs. Clearly show inherited
 versus custom values and Reset to global settings. Changes retain their own
 drafts through navigation and unrelated saves. Installed-game import reviews
 local Steam/XDG entries; running helper processes are not import candidates.
+Steam capture setup explains the app-specific Launch Options value and Play in
+Steam, including automatic background startup. Import the game once to select
+its saved profile. An unavailable tray exposes the main window; temporary
+background startup does not change the saved Close to tray preference.
 Executable, literal arguments (one per line), and working directory use the
 native validation flow. Do not turn launch arguments into a shell command.
 

@@ -61,8 +61,9 @@ pub enum CaptureRuntimeStatus {
 }
 
 /// Whether the packaged Steam wrapper needed for a specific app ID is ready.
-/// `Available` describes package readiness; callers must separately inspect
-/// [`SteamBridgeSetup::configuration_status`] before arming capture.
+/// `Available` describes package readiness. App-initiated launches also check
+/// [`SteamBridgeSetup::configuration_status`]; a native Steam request verifies
+/// the running packaged wrapper instead of relying on a saved config file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SteamBridgeSetupStatus {
     Available(SteamBridgeSetup),

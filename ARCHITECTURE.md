@@ -55,7 +55,7 @@ Paths below are relative to `output/tauri-redunar/`:
 | Flow | Main files |
 | --- | --- |
 | Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs` |
-| Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs` |
+| Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
 | Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
@@ -139,13 +139,38 @@ resolution, and filename hints. No network artwork lookup is required. See nativ
 artwork/installation code for bounded paths, allowed formats, identity, and
 invalidation rules.
 
+Configured native Steam games can also start directly from Steam. The existing
+app-specific wrapper first claims an already-prepared one-shot activation; if
+none is available, it asks the app-lifetime `steam-session-v1.sock` listener to
+prepare the unique imported game's effective profile. SO_PEERCRED verifies the
+same-user PID, and the native host compares `/proc/PID/exe` with its packaged
+wrapper. That live invocation proves the option was used even before Steam
+persists an edited field. An ambiguous/missing local identity or busy session
+is rejected. The app never receives or re-executes Steam's game argv.
+
+When the listener is absent, the wrapper starts only its sibling `redunar-tauri
+--steam-background`, with game library/identity/capture overrides removed from
+that child. Startup and request I/O each have ten-second bounds and failures
+leave the original game command usable. Concurrent starters retain the existing
+backend-owner lease; a background secondary exits before GTK setup. The hidden
+owner has a temporary Open/Quit tray icon without saving Close to tray; an
+unavailable provider/registration exposes its main window. It stays available
+for subsequent games until Quit. The request listener stops on shutdown, removes
+only its own socket inode, and does not attach to already-running games.
+
+External launch supervision tracks the authenticated wrapper PID and kernel
+start time across exec, together with existing capture/Steam process evidence.
+PID reuse is exit, inaccessible process state is unavailable, and End retains
+the launch lock while the actual game remains live. The same coordinator owns
+capture, Replay, effective profiles, history, and cleanup for both entry points.
+
 ## Session lifecycle
 
 1. Validate the saved game and installation, resolve inheritance, and check
    launch/runtime capabilities.
 2. Prepare the private capture runtime for a supported launch, including when
-   metrics are initially hidden. Native Steam forwarding also requires the
-   game's local bridge launch options to be configured and verified.
+   metrics are initially hidden. App-initiated native Steam forwarding verifies
+   saved bridge options; direct Steam requests verify the running wrapper.
 3. Spawn with literal arguments or publish a bounded one-shot Steam activation.
    Do not install a global Vulkan layer or edit Steam configuration silently.
 4. Supervise the owned direct process or forwarded game identity in native code.

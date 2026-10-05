@@ -216,3 +216,11 @@ unrelated UI copy or documentation. See [TESTING.md](TESTING.md).
 
 Do not use stale implementation descriptions or a pass on an older build as
 current acceptance.
+
+The native Steam request listener has one worker and one fixed 16-byte request,
+with same-user credentials and no game argv. Idle accepts poll at 250 ms;
+untrusted input/write timeouts are 500 ms. Capture preparation runs only at
+launch, outside presentation and monitoring callbacks. The wrapper waits at
+most ten seconds for background startup plus ten seconds for the accepted
+request; denial never retries by starting another app. Existing one-shot
+activation, renderer-startup, process-scan and frame-transfer bounds still apply.

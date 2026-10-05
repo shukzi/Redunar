@@ -32,11 +32,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             gtk::gio::BusNameWatcherFlags::NONE,
             |_, _, _| {},
             move |_, _| {
-                if crate::backend::service()
-                    .app_preferences()
-                    .is_ok_and(|preferences| preferences.close_to_tray)
-                    && handle.tray_by_id(TRAY_ID).is_some()
-                {
+                if handle.tray_by_id(TRAY_ID).is_some() {
                     show_window(&handle);
                 }
             },
@@ -115,7 +111,7 @@ fn should_hide(enabled: bool, registered: bool) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn registered() -> bool {
+pub(crate) fn registered() -> bool {
     use gtk::glib::variant::ToVariant;
     let Ok(bus) = gtk::gio::bus_get_sync(gtk::gio::BusType::Session, gtk::gio::Cancellable::NONE)
     else {
@@ -161,7 +157,7 @@ fn owns_registration(items: &[String], pid: u32, bus_name: Option<&str>) -> bool
 }
 
 #[cfg(not(target_os = "linux"))]
-fn registered() -> bool {
+pub(crate) fn registered() -> bool {
     true
 }
 

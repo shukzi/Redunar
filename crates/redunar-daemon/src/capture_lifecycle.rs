@@ -216,14 +216,20 @@ pub(crate) enum LifecycleAction {
 }
 
 #[derive(Debug)]
-struct ProcessIdentity {
+/// PID and kernel start time used to supervise an existing launch without
+/// confusing an exec with exit or a recycled PID with the original process.
+pub struct ProcessIdentity {
     process_id: u32,
     start_time_ticks: u64,
     proc_root: std::path::PathBuf,
 }
 
 impl ProcessIdentity {
-    fn capture(proc_root: &Path, process_id: u32) -> io::Result<Self> {
+    /// Capture a live process identity from a bounded proc stat read.
+    ///
+    /// # Errors
+    /// Returns an error for inaccessible, malformed, or terminated processes.
+    pub fn capture(proc_root: &Path, process_id: u32) -> io::Result<Self> {
         let stat = read_process_stat(proc_root, process_id)?;
         if matches!(stat.state, 'Z' | 'X' | 'x') {
             return Err(io::Error::new(
@@ -238,7 +244,11 @@ impl ProcessIdentity {
         })
     }
 
-    fn is_alive(&self) -> io::Result<bool> {
+    /// Check the original process, including its kernel start time.
+    ///
+    /// # Errors
+    /// Returns an error when proc stat is missing, inaccessible or malformed.
+    pub fn is_alive(&self) -> io::Result<bool> {
         let stat = read_process_stat(&self.proc_root, self.process_id)?;
         Ok(
             stat.start_time_ticks == self.start_time_ticks
