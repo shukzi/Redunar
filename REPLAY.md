@@ -12,6 +12,12 @@ buffer without a separate activation switch. Capability and runtime validation
 still apply;
 unsupported launches must not claim that a buffer exists.
 
+Steam's wrapper can start a closed Redunar through the Linux user service manager.
+The background app lives outside Steam's game reaper so it can stay open after
+the game exits without holding Steam's Running status. If this startup capability
+is unavailable, launch Redunar before pressing Play; the game still launches.
+See [the bootstrap ownership contract](ARCHITECTURE.md#catalog-profiles-and-installation).
+
 The prepared Vulkan or supported desktop-OpenGL runtime also permits
 showing/hiding metrics during that game.
 Hiding metrics does not dismantle capture or disable future visibility changes.

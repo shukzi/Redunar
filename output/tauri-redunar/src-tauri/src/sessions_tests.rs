@@ -825,6 +825,52 @@ fn external_steam_uses_existing_process_and_end_retains_lock_until_exit() {
 }
 
 #[test]
+fn external_steam_natural_exit_releases_session_while_background_owner_stays_alive() {
+    let mut f = Fixture::new();
+    // These are separate test-owned processes, as with a user-manager-owned
+    // app and Steam's game reaper. No real app, Steam or renderer is launched.
+    let mut owner = Command::new("/bin/sleep").arg("3").spawn().unwrap();
+    let mut game = Command::new("/bin/cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let identity = redunar_daemon::ProcessIdentity::capture(Path::new("/proc"), game.id()).unwrap();
+    let mut plan = f.plan("/bin/true", &[]);
+    plan.ownership = GameLaunchProcessOwnership::ForwardedSteam { app_id: Some(42) };
+    f.engine
+        .start_with_process(plan, Some(LaunchProcess::Steam(identity)))
+        .unwrap();
+    let mut monitor = MonitorSnapshot::default();
+    monitor.diagnostics.game_scans = 1;
+    monitor.games = vec![GameProcess {
+        pid: game.id(),
+        comm: "Fixture".into(),
+        executable: "/fixture/game".into(),
+        steam_app_id: Some(42),
+        game_mode_active: false,
+    }]
+    .into();
+    f.engine.tick(&monitor);
+    assert!(f.engine.launch_locked());
+    drop(game.stdin.take()); // EOF gives the fake game a natural, successful exit.
+    assert!(game.wait().unwrap().success());
+    monitor.games = vec![].into();
+    monitor.diagnostics.game_scans += 1;
+    f.engine.tick(&monitor);
+    f.engine.tick(&monitor);
+    assert!(!f.engine.launch_locked());
+    assert_eq!(f.engine.service.session_history().unwrap().len(), 1);
+    assert_eq!(
+        f.engine.service.game_session_coordinator().status().phase,
+        GameSessionPhase::Ended
+    );
+    assert!(owner.try_wait().unwrap().is_none());
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+}
+
+#[test]
 fn external_process_identity_rejects_reused_pid_and_treats_disappearance_as_exit() {
     let root = TempRoot(std::env::temp_dir().join(format!(
         "rdstmproc-{}",

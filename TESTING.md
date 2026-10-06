@@ -12,7 +12,8 @@ local/unpacked shortcut-helper lookup, package checks and current AMD evidence.
 
 Ordinary private fixtures cover the real `redunar-steam-launch` binary requesting
 preparation before exec, fail-open literal argv, background startup with a fake
-app, same-user PID credentials, exact imported identity, busy-session rejection,
+app/user-manager client, sanitized literal desktop/audio environment, unavailable
+or timed-out manager cleanup, same-user PID credentials, exact imported identity, busy-session rejection,
 PID reuse/disappearance, End retaining a live game's lock, and one history record.
 Run `tools/validate.sh full` for both Cargo workspaces and the production UI build.
 The WebKit workspace fixture checks the always-visible per-game Steam setup
@@ -29,11 +30,18 @@ the typed running-Steam state and plain launch/test guidance, preserving other
 configuration errors and the unconfirmed gate.
 The [Compact follow-up](docs/verification/2026-10-06-compact-steam-setup.md)
 records the simplified panel, conditional retry and focus/draft preservation.
+The [background lifetime evidence](docs/verification/2026-10-06-steam-background-lifetime.md)
+addresses the October 6 owner-tested ARC Raiders save/playback followed by a
+stuck exit: the game/Proton exited, but Steam's reaper still owned Redunar.
 
 Live acceptance remains separate: with a matching installed app/wrapper/libraries,
 import a native Steam game and save its displayed app-specific Launch Options.
 Quit Redunar, click Play in Steam, confirm the background owner/tray (or visible
 fallback), profile, metrics, Replay readiness, save/playback and natural cleanup.
+After natural game exit, verify Steam returns to Play, Redunar releases its game
+session/launch lock, one history entry appears, and background Redunar stays
+reachable. Verify Redunar's parent is the user manager rather than the game
+reaper. Do not mistake process-group separation for independent ownership.
 Repeat with Redunar already open and with an unsaved-in-Steam option edit; a
 second active game must continue without taking the first session. Test End and
 Quit without killing the game. Flatpak Steam and NVIDIA success remain outside

@@ -7,6 +7,7 @@ mod game_process;
 mod launch;
 mod linux;
 mod process_control;
+mod steam_background;
 mod steam_discovery;
 mod steam_launch_bridge;
 mod steam_launch_options;

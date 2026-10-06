@@ -9,10 +9,8 @@ use std::{
     os::unix::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         net::{UnixListener, UnixStream},
-        process::CommandExt,
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -192,15 +190,34 @@ pub fn request_steam_session(socket: &Path, app: SteamAppId) -> io::Result<bool>
     }
 }
 
-/// Start the packaged sibling app only when no session listener exists, then
-/// request preparation. The caller always retains Steam's original argv.
+/// Start the packaged sibling app through the user service manager only when
+/// no listener exists, then request preparation. A persistent child of Steam's
+/// reaper would keep the game live after exit. Never use that as a fallback.
+/// The caller always retains Steam's original argv.
 ///
 /// # Errors
-/// Returns an error for an unavailable app, unsafe runtime, or bounded startup/I/O failure.
+/// Returns an error for an unavailable app/user manager, unsafe runtime, or
+/// bounded startup/I/O failure. Opening Redunar first needs no startup manager.
 pub fn ensure_steam_session(
     app: SteamAppId,
     runtime: &Path,
     executable: &Path,
+) -> io::Result<bool> {
+    ensure_steam_session_with_runner(
+        app,
+        runtime,
+        executable,
+        Path::new(crate::steam_background::USER_SERVICE_RUNNER),
+        START_TIMEOUT,
+    )
+}
+
+fn ensure_steam_session_with_runner(
+    app: SteamAppId,
+    runtime: &Path,
+    executable: &Path,
+    runner: &Path,
+    start_timeout: Duration,
 ) -> io::Result<bool> {
     let runtime_metadata = fs::symlink_metadata(runtime)?;
     if !runtime.is_absolute()
@@ -231,33 +248,10 @@ pub fn ensure_steam_session(
     {
         return Err(io::Error::other("background Redunar app is unavailable"));
     }
-    let mut command = Command::new(executable);
-    command
-        .arg(STEAM_BACKGROUND_ARGUMENT)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0);
-    // Steam's game libraries and identity must not leak into its host app.
-    for key in [
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "VK_LAYER_PATH",
-        "VK_INSTANCE_LAYERS",
-        "SteamAppId",
-        "SteamGameId",
-        "SteamOverlayGameId",
-        "STEAM_COMPAT_APP_ID",
-    ] {
-        command.env_remove(key);
-    }
-    for (key, _) in std::env::vars_os() {
-        if key.to_str().is_some_and(|key| key.starts_with("REDUNAR_")) {
-            command.env_remove(key);
-        }
-    }
-    let mut child = command.spawn()?;
-    let deadline = Instant::now() + START_TIMEOUT;
+    let mut command =
+        crate::steam_background::startup_command(runner, executable, std::env::vars_os().collect());
+    let mut starter = crate::steam_background::BackgroundStarter(command.spawn()?);
+    let deadline = Instant::now() + start_timeout;
     loop {
         match request_steam_session(&socket, app) {
             Ok(result) => return Ok(result),
@@ -270,7 +264,7 @@ pub fn ensure_steam_session(
         }
         // Reap a starter that lost ownership; the winning owner may still be
         // binding. Never start another app or terminate the existing one.
-        let _ = child.try_wait()?;
+        starter.check()?;
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -340,6 +334,15 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        // Fake the user-manager client, never contact the host manager in this
+        // ordinary fixture. Command construction has separate argv coverage.
+        let runner = root.join("fake-systemd-run");
+        fs::write(
+            &runner,
+            "#!/bin/sh\nwhile [ \"$1\" != '--' ]; do shift; done\nshift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&runner, fs::Permissions::from_mode(0o700)).unwrap();
         let socket = steam_session_socket_path(&root);
         let signal = marker.clone();
         let owner = thread::spawn(move || {
@@ -351,22 +354,71 @@ mod tests {
             SteamSessionBroker::bind(socket, |app, _| app.get() == 42).unwrap()
         });
         let app = SteamAppId::new(42).unwrap();
-        assert!(ensure_steam_session(app, &root, &executable).unwrap());
+        let ensure = |id, executable: &Path| {
+            ensure_steam_session_with_runner(id, &root, executable, &runner, START_TIMEOUT)
+        };
+        assert!(ensure(app, &executable).unwrap());
         assert_eq!(
             fs::read_to_string(&marker).unwrap(),
             STEAM_BACKGROUND_ARGUMENT
         );
         let mut broker = owner.join().unwrap();
         fs::remove_file(&marker).unwrap();
-        assert!(ensure_steam_session(app, &root, &root.join("missing-app")).unwrap());
-        assert!(!ensure_steam_session(SteamAppId::new(43).unwrap(), &root, &executable).unwrap());
+        assert!(ensure(app, &root.join("missing-app")).unwrap());
+        assert!(!ensure(SteamAppId::new(43).unwrap(), &executable).unwrap());
         assert!(!marker.exists(), "denial must not start another app");
         broker.shutdown();
-        assert!(ensure_steam_session(app, &root, &root.join("missing-app")).is_err());
+        assert!(ensure(app, &root.join("missing-app")).is_err());
         let link = root.join("linked-runtime");
         std::os::unix::fs::symlink(&root, &link).unwrap();
         assert!(ensure_steam_session(app, &link, &executable).is_err());
         assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_or_stalled_user_manager_is_bounded_and_its_client_is_reaped() {
+        let root = std::env::temp_dir().join(format!("rdstfail-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("redunar")).unwrap();
+        let executable = root.join("redunar-tauri");
+        let app_marker = root.join("must-not-start");
+        fs::write(
+            &executable,
+            format!("#!/bin/sh\ntouch '{}'\n", app_marker.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let runner = root.join("fake-systemd-run");
+        let pid_file = root.join("client.pid");
+        for script in [
+            "#!/bin/sh\nexit 1\n".to_owned(),
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec /bin/sleep 30\n",
+                pid_file.display()
+            ),
+        ] {
+            fs::write(&runner, script).unwrap();
+            fs::set_permissions(&runner, fs::Permissions::from_mode(0o700)).unwrap();
+            let started = Instant::now();
+            assert!(
+                ensure_steam_session_with_runner(
+                    SteamAppId::new(42).unwrap(),
+                    &root,
+                    &executable,
+                    &runner,
+                    Duration::from_millis(150),
+                )
+                .is_err()
+            );
+            assert!(started.elapsed() < Duration::from_secs(3));
+            assert!(!app_marker.exists(), "no persistent child fallback");
+        }
+        let pid = fs::read_to_string(pid_file).unwrap();
+        assert!(
+            !Path::new("/proc").join(pid).exists(),
+            "stalled client reaped"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

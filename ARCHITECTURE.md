@@ -155,14 +155,24 @@ persists an edited field. An ambiguous/missing local identity or busy session
 is rejected. The app never receives or re-executes Steam's game argv.
 
 When the listener is absent, the wrapper starts only its sibling `redunar-tauri
---steam-background`, with game library/identity/capture overrides removed from
-that child. Startup and request I/O each have ten-second bounds and failures
+--steam-background` as a same-user transient service through `/usr/bin/systemd-run
+--user`. The user manager, rather than Steam's game reaper, owns the app process.
+A process-group change alone does not prevent the reaper adopting the persistent
+app and waiting forever after the game exits. No scope or direct-child fallback
+is permitted. Only allowlisted desktop/audio environment values are forwarded literally;
+game library/identity/capture overrides are removed from the launcher and service.
+An unavailable user manager leaves the original game command usable; an already
+open Redunar can prepare capture without this startup dependency.
+Startup and request I/O each have ten-second bounds and failures
 leave the original game command usable. Concurrent starters retain the existing
 backend-owner lease; a background secondary exits before GTK setup. The hidden
 owner has a temporary Open/Quit tray icon without saving Close to tray; an
 unavailable provider/registration exposes its main window. It stays available
 for subsequent games until Quit. The request listener stops on shutdown, removes
 only its own socket inode, and does not attach to already-running games.
+Startup cleanup reaps only the short service-manager client, never the app or an
+existing owner. The transient service is collected on app exit; no unit is
+installed or enabled persistently.
 
 External launch supervision tracks the authenticated wrapper PID and kernel
 start time across exec, together with existing capture/Steam process evidence.
