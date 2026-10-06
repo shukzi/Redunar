@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.13
+Version:        0.1.14
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,11 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Tue Oct 06 2026 Redunar <local@redunar.invalid> - 0.1.14-1.local
+- Prepare capture when configured games start from Steam, including background app startup.
+- Simplify Steam setup and release game ownership after natural exit.
+- Match Replay to the game's GPU and allow identifiable NVIDIA hybrid beta systems.
+
 * Sat Oct 03 2026 Redunar <local@redunar.invalid> - 0.1.13-1.local
 - Improve Replay saving, playback timing, shortcut recovery, and producer handoff.
 - Harden NVIDIA beta capture and metrics and improve private diagnostic logging.
