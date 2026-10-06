@@ -67,7 +67,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='update_game_launch'){bridge.launchArgs=args.arguments;return structuredClone(games);}
  if(command==='save_shortcuts'){values.shortcuts=args.shortcuts;return {values:structuredClone(values)};}
  if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {close_overlay_on_outside_click:args.closeOnOutsideClick,overlay_shortcut:values.shortcuts.overlay||''};}
- if(command==='steam_setup_status')return {available:true,configured:false,app_id:42,configuration_state:'not-configured',status:'Not configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};
+ if(command==='steam_setup_status'){if(bridge.failSteamSetup)throw Error('Fixture Steam setup unavailable');return bridge.steamSetup||{available:true,configured:false,app_id:42,configuration_state:'not-configured',status:'Not configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};}
  if(command==='replay_preferences')return {initial_save_duration_seconds:30,resolved_directory:'/fixture/Videos/Redunar Replays',custom_save_parent:'/fixture',close_overlay_on_outside_click:bridge.outsideClick!==false};
  if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
  if(command==='activate_shortcuts')bridge.shortcutUnavailable=false;
@@ -101,6 +101,11 @@ def snap(name):
     def done(w,value,_):w.get_snapshot_finish(value).write_to_png(str(ARTIFACTS/(name+'.png')));loop.quit()
     view.get_snapshot(WebKit2.SnapshotRegion.VISIBLE,WebKit2.SnapshotOptions.NONE,None,done,None);loop.run()
 def route(name):js("location.hash="+json.dumps(name));pump(400)
+def wait_for(expression, timeout_ms=5000):
+    for _ in range(timeout_ms//100):
+        if js('return Boolean('+expression+')')=='true': return
+        pump(100)
+    raise AssertionError('Timed out waiting for '+expression)
 checks=[]
 def test(name,source,wait_ms=0):
     js(source);checks.append(name)
@@ -110,16 +115,40 @@ try:
     test('Startup update notice directs the user to Settings',"check(q('#toast').textContent==='A Redunar update is available. Open Settings to install it.','clear startup update action')")
     test('Real overview values and compact session footer',"check(q('#ram-used').textContent==='12.0 GiB','RAM');check(q('#session-timer').textContent==='32:18','timer');check(q('#session-captures').textContent==='3 captures saved','captures');check(q('.session-end').contains(q('[data-action=end-session]')),'timer adjacent to end');window.plot=q('#live-chart');click('[data-overview-view=fps]');check(q('#live-chart')===plot,'graph toggle does not remount page');check(q('#overview-chart-label').textContent==='Frame rate','FPS selector');")
     snap('overview')
-    test('Overview uses settings for visibility',"check(!q('[data-action=session-overlay]'),'no duplicate live button');")
+    test('Overview uses settings for visibility and points to Steam setup',"check(!q('[data-action=session-overlay]'),'no duplicate live button');check(q('#steam-capture-guide a').getAttribute('href')==='#library','setup link');check(q('#steam-capture-guide').hidden,'guide hidden during session');")
+    js('bridge.idle=true');wait_for("!q('#steam-capture-guide').hidden")
+    test('Idle Overview makes Steam capture setup discoverable',"check(q('#steam-capture-guide').textContent.includes('Set up each game once'),'setup explanation');check(q('#steam-capture-guide a').textContent==='Set up Steam capture','setup action');")
+    snap('steam-play-overview')
+    js('bridge.idle=false');wait_for("q('#steam-capture-guide').hidden")
     route('library');pump(300)
     test('Library uses independent landscape and portrait artwork',"const banner=q('.game-cover-banner img'),poster=q('.library-game img');check(banner?.naturalWidth===1200&&banner.naturalHeight===350,'wide banner received');check(poster?.naturalWidth===300&&poster.naturalHeight===450,'portrait retained in catalog');check(banner.src!==poster.src,'separate artwork caches');check(getComputedStyle(q('.game-cover-banner')).position==='absolute','banner is outside layout flow');const card=q('.game-cover').getBoundingClientRect();check(card.height<260,'image does not expand header');check(Math.abs(banner.getBoundingClientRect().width-card.width)<2,'banner spans header');")
     test('Library inheritance and readiness use the approved layout',"check(q('.inheritance-banner strong').textContent==='Uses global settings','inheritance heading');check(q('.inheritance-banner p').textContent.includes('apply to this game'),'inheritance explanation');check(document.querySelectorAll('[data-readiness-status]').length===3,'inline readiness');check(q('[data-readiness-status]').dataset.ready==='true','observed ready dot');check(!q('.override-control .pill'),'no duplicated inherited badge');check(q('.game-save-bar').hidden,'clean library has no action bar');check(!q('.detail-body .game-save-bar'),'bar outside settings panel');check(q('.game-profile-footer').getBoundingClientRect().bottom+20<=q('.game-profile-footer+.small-note').getBoundingClientRect().top,'note spacing');")
     test('Library drafts use viewport actions and discard hides them',"const select=q('[data-override=overlay]');select.value='Off';select.dispatchEvent(new Event('change',{bubbles:true}));const bar=q('.game-save-bar');check(!bar.hidden,'dirty library bar visible');check(getComputedStyle(bar).position==='fixed','viewport bar');check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'bottom aligned');check(bar.getBoundingClientRect().left>=q('.sidebar').getBoundingClientRect().right,'sidebar stays usable');click('[data-action=discard-game]');check(q('.game-save-bar').hidden,'discard hides bar');")
     snap('library-banner')
-    js("click('[data-library-tab=match]');click('[data-action=check-steam-setup]')");pump()
-    test('Steam setup directs Play in Steam and automatic background startup',"check(q('#dialog-title').textContent==='Steam capture setup','setup title');check(q('#dialog').textContent.includes('click Play in Steam'),'Steam launch instruction');check(q('#dialog').textContent.includes('starts in the background automatically'),'background instruction');check(q('textarea').value==='/usr/bin/redunar-steam-launch --app-id 42 -- %command%','existing wrapper options');")
-    snap('steam-play-setup')
-    js("click('#dialog [data-close]');click('[data-library-tab=profile]')");pump()
+    test('Steam setup is visible beside game settings without a launch or modal',"check(q('[data-library-tab=profile]').classList.contains('active'),'default game tab');check(q('.steam-setup-card').textContent.includes('Setup required'),'honest setup state');check(q('.steam-setup-card').getBoundingClientRect().bottom<=q('.tabbar').getBoundingClientRect().top+1,'setup above tabs');check(q('.steam-setup-card').textContent.includes('Properties → General → Launch Options'),'where to paste');check(q('.steam-setup-card').textContent.includes('starts in the background automatically'),'background instruction');check(q('#steam-launch-options').value==='/usr/bin/redunar-steam-launch --app-id 42 -- %command%','native option');check(q('#steam-launch-options').readOnly,'readonly option');check(!q('#dialog').open,'no setup modal');")
+    js("q('#toast').hidden=true");snap('steam-play-setup')
+    test('Steam option copy preserves the exact native value',"Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{bridge.copied=value}},configurable:true});click('[data-copy-steam-options]');")
+    pump()
+    test('Steam copy completed',"check(bridge.copied===q('#steam-launch-options').value,'literal copy');check(q('#toast').textContent==='Steam launch options copied.','copy feedback');click('[data-library-tab=match]');")
+    pump()
+    test('Steam setup remains visible on Launch matching',"check(document.querySelectorAll('.steam-setup-card').length===1,'one setup panel');check(q('#steam-launch-options'),'option still visible');click('[data-game=\"2\"]');")
+    pump()
+    test('Direct games omit Steam setup',"check(!q('.steam-setup-card'),'no Steam panel on direct game');click('[data-game=\"1\"]');click('[data-library-tab=profile]');")
+    pump()
+    js("bridge.steamSetup={available:true,configured:true,app_id:42,configuration_state:'configured',status:'Configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};click('[data-action=check-steam-setup]')");pump()
+    test('Configured Steam games retain their copyable option',"check(q('.steam-setup-status').textContent==='Launch options configured','verified setup');check(q('.steam-setup-card').textContent.includes('Click Play in Steam'),'launch instruction');check(q('#steam-launch-options'),'configured option retained');")
+    snap('steam-play-configured')
+    js("bridge.steamSetup.configuration_state='needs-attention';bridge.steamSetup.configured=false;bridge.steamSetup.status='Steam is running';click('[data-action=check-steam-setup]')");pump()
+    test('Unconfirmed Steam state does not claim success',"check(q('.steam-setup-status').textContent==='Setup unconfirmed','honest ambiguity');check(q('.steam-setup-card').textContent.includes('Steam is running'),'native explanation');check(q('#steam-launch-options'),'actionable value retained');")
+    js("bridge.steamSetup.available=false;bridge.steamSetup.status='Wrapper missing';click('[data-action=check-steam-setup]')");pump()
+    test('Unavailable Steam setup has no unusable copy action',"check(q('.steam-setup-card').textContent.includes('Wrapper missing'),'unavailable reason');check(!q('[data-copy-steam-options]'),'no copy');")
+    js("bridge.failSteamSetup=true;click('[data-action=check-steam-setup]')");pump()
+    test('Steam setup errors retain a retry action',"check(q('.steam-setup-card').textContent.includes('Fixture Steam setup unavailable'),'check error');check(!q('[data-action=check-steam-setup]').disabled,'retry available');")
+    js("bridge.failSteamSetup=false;delete bridge.steamSetup;click('[data-action=check-steam-setup]')");pump()
+    window.resize(640,950);pump()
+    test('Steam launch option fits a compact workspace',"const card=q('.steam-setup-card').getBoundingClientRect(),field=q('#steam-launch-options').getBoundingClientRect(),copy=q('[data-copy-steam-options]').getBoundingClientRect();check(field.left>=card.left&&field.right<=card.right,'field fits');check(copy.left>=card.left&&copy.right<=card.right,'copy fits');check(document.documentElement.scrollWidth<=innerWidth,'no page overflow');q('#steam-launch-options').focus();check(document.activeElement===q('#steam-launch-options'),'keyboard selection available');")
+    js("q('#toast').hidden=true;q('.steam-setup-card').scrollIntoView({block:'start'})");pump();snap('steam-play-compact')
+    window.resize(1440,1000);pump()
     js("click('[data-action=scan-games]')");pump()
     test('Discovery empty state and dialog initial focus',"check(q('#dialog-title').textContent==='Scan installed games','installed title');check(q('#dialog').textContent.includes('No installed games were found.'),'installed empty message');check(q('#discovery-form [type=submit]').disabled,'empty import disabled');check(!bridge.calls.some(c=>c.command==='running_game_candidates'),'no process discovery request');check(document.activeElement===q('#dialog-title'),'focus starts at title');check(!q('#dialog [data-close]').matches(':focus-visible'),'close not highlighted');click('#dialog [data-close]');")
     js("bridge.discovered=[{candidate_id:'steam:42',name:'Already saved game',source:'Steam',source_id:42,install_directory:'/fixture/steam/existing',launch_executable:'/usr/bin/steam',importable:true},{candidate_id:'steam:730',name:'Installed game',source:'Steam',source_id:730,install_directory:'/fixture/steam/new',launch_executable:'/usr/bin/steam',importable:true},{candidate_id:'desktop:fixture',name:'Unavailable launcher',source:'Desktop entry',install_directory:'/fixture/missing',importable:false}];click('[data-action=scan-games]')");pump()
@@ -295,7 +324,7 @@ try:
     route('replay');snap('replay-loading')
     test('Replay cards lead with the recording game',"const first=q('[data-clip]');check(first.querySelector('.clip-game').textContent===games[0].name,'game is primary label');check(first.querySelector('.clip-file').textContent.includes('redunar-replay'),'filename remains available');check(q('.native-video-caption strong').textContent===games[0].name,'selected player names game');")
     test('Obsolete replay preview controls are absent',"check(!q('[data-action=preview-replay-menu]'),'no preview action');check(!q('#replay-preview'),'no preview dialog');")
-    route('overview');js('bridge.unavailable=true');pump(1400);test('Unavailable RAM never displays stale measurements',"check(q('#ram-used').textContent==='—','RAM cleared');check(q('#ram-meter').style.width==='0%','unavailable meter cleared');bridge.unavailable=false;")
+    route('overview');js('bridge.unavailable=true');wait_for("q('#ram-used').textContent==='—'");test('Unavailable RAM never displays stale measurements',"check(q('#ram-used').textContent==='—','RAM cleared');check(q('#ram-meter').style.width==='0%','unavailable meter cleared');bridge.unavailable=false;")
     window.resize(1040,900);pump();route('history');js("q('#toast').hidden=true;q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-compact')
     test('History remains readable at compact width',"check(document.documentElement.scrollWidth<=innerWidth+1,'history overflow');check(q('.history-timeline-chart svg').getBoundingClientRect().width>200,'plot remains visible');")
     route('global');snap('global-compact')

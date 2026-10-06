@@ -69,10 +69,14 @@ Game settings and Launch matching are separate tabs. Clearly show inherited
 versus custom values and Reset to global settings. Changes retain their own
 drafts through navigation and unrelated saves. Installed-game import reviews
 local Steam/XDG entries; running helper processes are not import candidates.
-Steam capture setup explains the app-specific Launch Options value and Play in
-Steam, including automatic background startup. Import the game once to select
-its saved profile. An unavailable tray exposes the main window; temporary
-background startup does not change the saved Close to tray preference.
+Overview offers a Steam capture setup link while no game is active. Every
+selected Steam game shows a **Play from Steam** panel above both Library tabs,
+including its native setup status, the exact Launch Options value, a Copy button,
+and one-time setup instructions. Configured games retain the copyable value;
+unconfirmed and unavailable checks do not imply capture is ready. Import the
+game once to select its saved profile. Steam setup explains Play in Steam and
+automatic background startup. An unavailable tray exposes the main window;
+temporary background startup does not change the saved Close to tray preference.
 Executable, literal arguments (one per line), and working directory use the
 native validation flow. Do not turn launch arguments into a shell command.
 

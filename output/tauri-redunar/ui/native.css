@@ -140,13 +140,6 @@ textarea{width:100%;resize:vertical;background:#111114;border:1px solid #39343e;
 
 @media(max-width:980px){.history-catalog #session-list{height:auto;max-height:none;overflow:visible}.history-row{height:auto;min-height:82px;overflow:visible}}
 
-.steam-setup-card{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:20px}
-.steam-setup-card strong{font-size:12px}.steam-setup-card p{font-size:10px;margin-top:5px}
-.steam-setup-card .button{font-size:10px;white-space:nowrap}
-.steam-setup-steps{display:grid;gap:9px;margin:18px 0 20px;padding-left:21px;color:#c2b7c8;font-size:11px;line-height:1.55}
-.steam-setup-steps strong{color:#f0e6f0;font-weight:500}
-.steam-options-field{display:grid;gap:9px}.steam-options-field .button{justify-self:start;font-size:10px}
-
 .diagnostics-panel{margin-top:18px}.diagnostics-panel .section-heading{margin-bottom:14px}.diagnostics-panel .section-heading .button{min-height:28px;padding:6px 10px;font-size:10px}.diagnostics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin:14px 0}.diagnostics-grid>div{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #29272e;padding-bottom:8px;font-size:10px;color:#aaa1ad}.diagnostics-grid b{font:10px Plex;color:#e2d8e3;text-align:right;overflow-wrap:anywhere}.diagnostics-readiness{border-top:1px solid #29272e;margin-top:5px;padding-top:14px}.diagnostics-subheading{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:4px}.diagnostics-subheading h3{font-size:11px;font-weight:500}.diagnostics-subheading span{font-size:9px;color:#8f8796}.diagnostics-readiness-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #29272e;color:#aaa1ad;font-size:10px}.diagnostics-readiness-row .pill{font-size:9px}.diagnostics-error{margin-top:12px;padding:9px 10px;border:1px solid #633139;border-radius:5px;background:#2d1b1e;color:#f2a5aa;font-size:10px;overflow-wrap:anywhere}
 .frame-rate-control{display:grid;gap:7px;justify-items:end}.frame-rate-control .small-note{max-width:230px;text-align:right;font-size:9px}
 

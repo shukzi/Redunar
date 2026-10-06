@@ -15,8 +15,14 @@ preparation before exec, fail-open literal argv, background startup with a fake
 app, same-user PID credentials, exact imported identity, busy-session rejection,
 PID reuse/disappearance, End retaining a live game's lock, and one history record.
 Run `tools/validate.sh full` for both Cargo workspaces and the production UI build.
-The WebKit workspace fixture checks the Steam setup instructions and captures
-`steam-play-setup.png`. See the dated [task brief](docs/verification/2026-10-05-steam-play-task.md).
+The WebKit workspace fixture checks the always-visible per-game Steam setup
+panel, exact option copying, both Library tabs, direct-game omission, configured
+and unconfirmed status, unavailable/error retries, and compact layout. It captures
+`steam-play-setup.png`, `steam-play-configured.png`, and `steam-play-compact.png`.
+The focused `steam-setup.test.mjs` suite covers detached panels and overlapping
+checks without touching a real Steam configuration. See the original
+[Steam Play task brief](docs/verification/2026-10-05-steam-play-task.md) and the
+[October 6 setup discovery evidence](docs/verification/2026-10-06-steam-setup.md).
 
 Live acceptance remains separate: with a matching installed app/wrapper/libraries,
 import a native Steam game and save its displayed app-specific Launch Options.

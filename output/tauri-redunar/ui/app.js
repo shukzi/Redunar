@@ -15,6 +15,7 @@ import { enhancePrecisionSelects, focusPrecisionSelect, closePrecisionSelect } f
 import { updatePrecisionSliders, updatePrecisionSlider } from './precision-sliders.js';
 import { loadGameArtwork } from './game-artwork.js';
 import { gameInstallation } from './game-installation.js';
+import { steamSetupPanel, refreshSteamSetup } from './steam-setup.mjs';
 import { historyMetrics, historyTimeline, historyDuration, historySelection, historySeries, historyScale, historyX, historyY, historyTime, historyKeyboardTime } from './history-timeline.mjs';
 const $ = (selector, root = document) => root.querySelector(selector);
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -204,6 +205,7 @@ function overview() {
  return heading('Overview','Current session, frame pacing, and system measurements.')+`
  <section class="session-banner status-footer"><div class="session-main"><div class="session-game"><span class="game-mark">${icon('play')}</span><div><small id="session-phase">Connecting</small><h2 id="session-name">No active game</h2></div></div><div class="session-end"><div class="session-time"><small>Time played</small><time id="session-timer" aria-label="Session elapsed time">—</time></div>${button('End session','end-session',true,active()?'':'hidden')}</div></div><div class="session-footer"><span id="session-profile">Profile unavailable</span><span id="session-captures">— captures saved</span><span id="session-features">Waiting for session status</span></div></section>
  <div class="session-feedback"><p id="session-note"></p></div>
+ <div id="steam-capture-guide" class="steam-capture-guide" ${active()?'hidden':''}><div><strong>Play your games from Steam</strong><p>Set up each game once in Library to use the overlay and Instant Replay from Steam.</p></div><a class="button" href="#library">Set up Steam capture</a></div>
  <div class="overview-grid"><section class="panel pacing-panel"><div class="section-heading"><div><h2>Frame pacing</h2><p>Recorded frame intervals across the session.</p></div><div class="history-view-toggle overview-view-toggle">${[['frame','Frame time'],['fps','FPS']].map(([id,label])=>`<button data-overview-view="${id}" class="${overviewMetric===id?'active':''}" aria-pressed="${overviewMetric===id}">${label}</button>`).join('')}</div></div><p class="live-status" id="live-phase">Awaiting telemetry</p><div class="telemetry-row">${stat('Average frame rate','—','FPS','','live-fps')}${stat('1% low','—','FPS','','live-low')}${stat('0.1% low','—','FPS','','live-lowest')}${stat('Average frame time','—','ms','','live-frame-time')}</div><div id="live-chart">${chart()}</div><div class="panel-footer"><span><i class="legend"></i><span id="overview-chart-label">Frame time</span></span><a href="#history">View session history ${icon('arrow')}</a></div></section>
  <section class="panel system-panel"><h2>System metrics</h2><p>Live hardware readings</p>${meter('GPU')}${meter('CPU')}${['ram','vram'].map(name=>`<div class="memory-block"><div><span>${name.toUpperCase()}</span><b id="${name}-used">—</b></div><div class="meter"><i id="${name}-meter"></i></div><p id="${name}-total">Capacity unavailable</p><p id="${name}-available"></p></div>`).join('')}<p class="temperature-scale">Temperature scale: 0–100°C</p></section></div><div class="overview-links"><a href="#history">Session history ${icon('arrow')}</a><a href="#global">Configure global defaults ${icon('arrow')}</a></div>
  <section class="recent-captures"><div class="section-heading"><div><h2>Recent captures</h2><p id="overview-replay-status">Waiting for replay status</p></div><a href="#replay">View all ${icon('arrow')}</a></div><div class="recent-capture-grid">${clips.slice(0,3).map(c=>`<a href="#replay" data-recent-clip="${escape(c.id)}"><span class="recent-thumbnail">${c.thumbnail?`<img src="${c.thumbnail}" alt="">`:icon('play')}<span data-clip-duration>${time(c.duration)}</span></span><span><strong>${escape(c.game_name||'Game not recorded')}</strong><small class="recent-clip-file" title="${escape(c.file_name)}">${escape(c.file_name)}</small><small>${escape(c.date)} · ${escape(c.size)}</small></span></a>`).join('')||'<p class="empty">Saved replays will appear here.</p>'}</div></section>`;
@@ -217,7 +219,7 @@ function library() {
  const header=heading('Library','Games, launch options, and individual profiles.',`<div class="heading-actions">${button('Scan installed games','scan-games')}${button('Reload library','reload-games')}${button(`${icon('plus')} Add game`,'add-game',true)}</div>`);
  if(!g)return header+emptyPanel(errors.catalog?'Library unavailable':'Your game library starts here.',errors.catalog||'Add a local executable to the production catalog.');
  return header+
- `<div class="library-workspace"><aside class="game-catalog"><label class="search">${icon('search')}<input id="game-search" type="search" placeholder="Find a game" aria-label="Find a game"></label><div class="catalog-label">${games.length} local games</div><div id="library-list">${libraryRows()}</div><div class="catalog-note">${icon('folder')}<p>Detected locally or added by you.</p></div></aside><section class="game-detail"><div class="game-cover ${g.color}"><div class="game-cover-banner" data-banner="${escape(g.id)}"></div><div class="cover-art" aria-hidden="true">${icon('library')}</div><div>${pill(escape(g.launcher))}<h2>${escape(g.name)}</h2><p>Local game profile</p></div><div class="game-cover-actions"><div class="game-launch-action">${button(`${icon('play')} Launch game`,'launch-game',true,'disabled aria-describedby="game-installation-note"')}<small id="game-installation-note" aria-live="polite"></small></div><details class="game-more"><summary class="button">More <span aria-hidden="true">⌄</span></summary><div>${button('Edit launch settings','edit-launch')}${button('Remove game','remove-game')}</div></details></div></div><div class="tabbar">${[['profile','Game settings'],['match','Launch matching']].map(([id,label])=>`<button data-library-tab="${id}" class="${libraryTab===id?'active':''}" aria-pressed="${libraryTab===id}">${label}</button>`).join('')}</div>${libraryTab==='match'?`<div class="detail-body"><h3>Identify this game</h3><p>Exact local matches connect a game to its settings.</p>${field('Executable','Local match rule',`<code>${escape(g.exe)}</code>`)}${field('Launcher','Optional metadata',`<span>${escape(g.launcher)}</span>`)}${g.steam_app_id?`<div class="steam-setup-card"><div><strong>Steam bridge</strong><p>Check the exact launch options required for this game.</p></div>${button('Check Steam setup','check-steam-setup')}</div>`:''}<div class="info-note">Ambiguous matches must be reviewed before a profile can activate.</div></div>`:libraryProfile(g)}</section></div>${gameSaveBar(g)}`;
+ `<div class="library-workspace"><aside class="game-catalog"><label class="search">${icon('search')}<input id="game-search" type="search" placeholder="Find a game" aria-label="Find a game"></label><div class="catalog-label">${games.length} local games</div><div id="library-list">${libraryRows()}</div><div class="catalog-note">${icon('folder')}<p>Detected locally or added by you.</p></div></aside><section class="game-detail"><div class="game-cover ${g.color}"><div class="game-cover-banner" data-banner="${escape(g.id)}"></div><div class="cover-art" aria-hidden="true">${icon('library')}</div><div>${pill(escape(g.launcher))}<h2>${escape(g.name)}</h2><p>Local game profile</p></div><div class="game-cover-actions"><div class="game-launch-action">${button(`${icon('play')} Launch game`,'launch-game',true,'disabled aria-describedby="game-installation-note"')}<small id="game-installation-note" aria-live="polite"></small></div><details class="game-more"><summary class="button">More <span aria-hidden="true">⌄</span></summary><div>${button('Edit launch settings','edit-launch')}${button('Remove game','remove-game')}</div></details></div></div>${g.steam_app_id?steamSetupPanel():''}<div class="tabbar">${[['profile','Game settings'],['match','Launch matching']].map(([id,label])=>`<button data-library-tab="${id}" class="${libraryTab===id?'active':''}" aria-pressed="${libraryTab===id}">${label}</button>`).join('')}</div>${libraryTab==='match'?`<div class="detail-body"><h3>Identify this game</h3><p>Exact local matches connect a game to its settings.</p>${field('Executable','Local match rule',`<code>${escape(g.exe)}</code>`)}${field('Launcher','Optional metadata',`<span>${escape(g.launcher)}</span>`)}<div class="info-note">Ambiguous matches must be reviewed before a profile can activate.</div></div>`:libraryProfile(g)}</section></div>${gameSaveBar(g)}`;
 }
 function gameSaveBar(g) {
  return `<div class="game-save-bar change-save-bar" ${gameProfileChanged(g)?'':'hidden'}><span id="game-save-state">${gameProfileChanged(g)?'Unsaved changes':'All changes saved'}</span><div class="heading-actions">${button('Discard changes','discard-game',false,gameProfileChanged(g)?'':'disabled')}${button('Save changes','save-game',true,gameProfileChanged(g)?'':'disabled')}</div></div>`;
@@ -419,7 +421,7 @@ function render() {
  for(const [id,value] of filters){const input=document.getElementById(id);if(input){input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}}
  for(const [selector,top] of rails){const rail=$(selector);if(rail)rail.scrollTop=top;}
  enhancePrecisionSelects(workspace);updatePrecisionSliders(workspace);
- if(valid==='library'){loadGameArtwork(workspace,call);if(native&&loaded.catalog)installation.refresh();}
+ if(valid==='library'){loadGameArtwork(workspace,call);if(native&&loaded.catalog){installation.refresh();refreshSteamSetup($('.steam-setup-card'),game()?.id,call);}}
  if(valid==='global'&&!loaded.global)workspace.insertAdjacentHTML('afterbegin',`<p class="connection-warning">${escape(errors.global||'Loading your saved defaults…')}</p>`);
 }
 function notify(text) {
@@ -738,6 +740,7 @@ function updateDirtyActionButtons() {
  document.body.dataset.unsaved=String(!!$('.change-save-bar:not([hidden])'));
 }
 function updateObservedElements() {
+ const steamGuide=$('#steam-capture-guide');if(steamGuide)steamGuide.hidden=Boolean(active());
  updateDirtyActionButtons();
  for(const el of document.querySelectorAll('[data-module-status]')){
   const value=modules?.[el.dataset.moduleStatus],label=el.dataset.moduleLabel;
@@ -784,7 +787,7 @@ function updateObservedElements() {
   'GPU-clock':hardware?.gpu_clock_mhz==null?'Clock —':`${measurement(hardware.gpu_clock_mhz)} MHz`,
   'CPU-clock':'Clock —',
   'vram-used':hardware?.vram_used_bytes==null?'—':(hardware.vram_used_bytes/1073741824).toFixed(1)+' GiB',
-  'session-note':activeSession?.message||(active()?'':'Launch a saved game from Library to begin a session.'),
+  'session-note':activeSession?.message||(active()?'':'Launch a saved game from Library or a configured game from Steam to begin a session.'),
   'live-phase':activeSession?.phase==='Ended'?'Session ended':activeSession?.measurements?.phase||'Awaiting telemetry',
   'session-name':activeSession?.game||'No active game', 'session-phase':activeSession?.phase||'Unavailable',
   'replay-status-title':replayStatusCopy(runtime).title, 'replay-phase':runtime?.can_save?'':replayStatusCopy(runtime).detail, 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—',
@@ -969,8 +972,8 @@ document.addEventListener('click',event=>{
   const copy=async()=>{
    if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(value);return;}
    const helper=document.createElement('textarea');helper.value=value;helper.setAttribute('readonly','');helper.style.position='fixed';helper.style.opacity='0';document.body.appendChild(helper);helper.select();
-   if(!document.execCommand('copy'))throw new Error('Clipboard access was unavailable. Select the value and copy it manually.');
-   helper.remove();
+   try{if(!document.execCommand('copy'))throw new Error('Clipboard access was unavailable. Select the value and copy it manually.');}
+   finally{helper.remove();}
   };
   copy().then(()=>notify('Steam launch options copied.')).catch(error=>notify(message(error)));
   return;
@@ -1024,8 +1027,7 @@ document.addEventListener('click',event=>{
   modal('Remove game from library',`<p>Remove <strong>${escape(g.name)}</strong> from the local catalog?</p><p class="small-note">This removes its saved profile and launch match. Existing clips and session history remain untouched.</p><form id="remove-game-form"><input type="hidden" name="gameId" value="${escape(g.id)}"><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Remove game</button></div></form>`);return;
  }
  if(action==='check-steam-setup'){
-  const g=game(); if(!g)return;
-  perform(async()=>{const setup=await call('steam_setup_status',{gameId:g.id});const options=setup.launch_options||'';const body=setup.configured?`<p>Steam launch options are configured for app ${setup.app_id}.</p><p class="small-note">Click Play in Steam. Redunar starts in the background and uses this game's saved settings.</p>`:setup.available?`<p>Steam bridge package is available. Current Launch Options state: <strong>${escape(setup.status)}</strong>.</p>${setup.configuration_state==='not-configured'?`<ol class="steam-setup-steps"><li>Open Steam and open this game's <strong>Properties</strong>.</li><li>In <strong>General → Launch Options</strong>, replace the field with the value below.</li><li>Save the field, then click Play in Steam. Redunar starts in the background automatically.</li></ol>`:`<p class="small-note">Use the launch option below and click Play in Steam. The game can request capture even before Steam saves the updated field.</p>`}${options?`<label class="form-label">Required Steam Launch Options<div class="steam-options-field"><textarea rows="4" readonly>${escape(options)}</textarea><button class="button" type="button" data-copy-steam-options="${escape(options)}">Copy value</button></div></label><p class="small-note">This value connects the game to Redunar's capture bridge.</p>`:''}`:`<p>Steam setup is unavailable for this game.</p><p class="small-note">${escape(setup.status)}</p>`;modal('Steam capture setup',`${body}<div class="dialog-actions"><button class="button" type="button" data-close>Close</button>${setup.available&&!setup.configured?button('Check again','check-steam-setup'):''}</div>`);});return;
+  if(!native)return;refreshSteamSetup($('.steam-setup-card'),game()?.id,call);return;
  }
  if(action==='scan-games'){
   perform(async()=>{discoveryModal(await call('discover_games'));});return;
@@ -1216,7 +1218,7 @@ document.addEventListener('submit',event=>{
 });
 $('#dialog').addEventListener('cancel',event=>{if(exporting)event.preventDefault();});
 window.addEventListener('native-error',event=>notify(event.detail));
-window.addEventListener('focus',()=>{if(native&&route()==='library'&&loaded.catalog)installation.refresh();});
+window.addEventListener('focus',()=>{if(native&&route()==='library'&&loaded.catalog){installation.refresh();refreshSteamSetup($('.steam-setup-card'),game()?.id,call);}});
 window.addEventListener('hashchange',()=>{render();workspace.focus({preventScroll:true});scrollRoot.scrollTo(0,0);});
 
 render();
