@@ -98,6 +98,9 @@ fn steam_configuration_state(status: &redunar_daemon::SteamLaunchOptionsStatus) 
     match status {
         redunar_daemon::SteamLaunchOptionsStatus::Configured => "configured",
         redunar_daemon::SteamLaunchOptionsStatus::NotConfigured => "not-configured",
+        redunar_daemon::SteamLaunchOptionsStatus::Ambiguous(
+            redunar_daemon::SteamLaunchOptionsReason::SteamRunning,
+        ) => "steam-running",
         redunar_daemon::SteamLaunchOptionsStatus::Ambiguous(_) => "needs-attention",
         redunar_daemon::SteamLaunchOptionsStatus::Unavailable(_) => "unavailable",
     }
@@ -485,6 +488,12 @@ mod tests {
         assert_eq!(
             steam_configuration_state(&SteamLaunchOptionsStatus::Ambiguous(
                 SteamLaunchOptionsReason::SteamRunning
+            )),
+            "steam-running"
+        );
+        assert_eq!(
+            steam_configuration_state(&SteamLaunchOptionsStatus::Ambiguous(
+                SteamLaunchOptionsReason::MultipleAccountsDisagree
             )),
             "needs-attention"
         );

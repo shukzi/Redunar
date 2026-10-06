@@ -8,12 +8,13 @@ export function steamSetupPanel() {
 function setupContent(setup) {
   if (!setup.available) return `<p class="steam-setup-status">Steam capture setup unavailable</p><p>${escape(setup.status)}</p>`;
   const configured = setup.configured === true;
-  const status = configured ? 'Launch options configured' : setup.configuration_state === 'not-configured' ? 'Setup required' : 'Setup unconfirmed';
+  const steamRunning = !configured && setup.configuration_state === 'steam-running';
+  const status = configured ? 'Launch options configured' : steamRunning ? 'Launch option not yet confirmed' : setup.configuration_state === 'not-configured' ? 'Setup required' : 'Setup unconfirmed';
   const options = setup.launch_options || '';
   return `<p class="steam-setup-status">${status}</p>${configured
     ? '<p>Click Play in Steam. Redunar starts in the background automatically and uses this game’s saved settings.</p>'
     : '<p>Set up this game once to use Redunar’s overlay and Instant Replay when you click Play in Steam.</p><ol class="steam-setup-steps"><li>In Steam, open this game’s <strong>Properties → General → Launch Options</strong>.</li><li>Copy the value below into that field, then click <strong>Play</strong>. Redunar starts in the background automatically.</li></ol>'}
-    ${!configured && setup.configuration_state !== 'not-configured' ? `<p class="small-note">${escape(setup.status)} Check again after Steam saves the field. The updated option can also prepare capture before it is saved.</p>` : ''}
+    ${steamRunning ? '<p class="small-note">Steam is open, so Redunar can’t confirm recent edits here. If you’ve pasted this value, click Play in Steam to test the connection.</p>' : !configured && setup.configuration_state !== 'not-configured' ? `<p class="small-note">${escape(setup.status)}</p>` : ''}
     ${options ? `<label class="form-label" for="steam-launch-options">Required Steam Launch Options</label><div class="steam-options-field"><textarea id="steam-launch-options" rows="2" readonly spellcheck="false">${escape(options)}</textarea><button class="button" type="button" data-copy-steam-options="${escape(options)}">Copy launch option</button></div>` : ''}`;
 }
 

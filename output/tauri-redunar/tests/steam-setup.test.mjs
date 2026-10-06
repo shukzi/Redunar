@@ -55,6 +55,23 @@ test('unavailable setup never offers an unusable launch option', async () => {
   assert.doesNotMatch(view.content.innerHTML,/textarea|data-copy-steam-options/);
 });
 
+test('running Steam gives a launch step without turning ambiguity into success', async () => {
+  const view=panel();
+  await refreshSteamSetup(view,'1',async()=>({...setup,configuration_state:'steam-running',status:'Needs attention: Steam is running, so its in-memory Launch Options may differ from the saved file'}));
+  assert.match(view.content.innerHTML,/Launch option not yet confirmed/);
+  assert.match(view.content.innerHTML,/click Play in Steam to test the connection/);
+  assert.match(view.content.innerHTML,/data-copy-steam-options/);
+  assert.doesNotMatch(view.content.innerHTML,/Needs attention|in-memory|saved file|before it is saved|Launch options configured/);
+});
+
+test('other ambiguous configuration reasons keep their explanation', async () => {
+  const view=panel();
+  await refreshSteamSetup(view,'1',async()=>({...setup,configuration_state:'needs-attention',status:'Steam user accounts do not agree on this game’s Launch Options'}));
+  assert.match(view.content.innerHTML,/Setup unconfirmed/);
+  assert.match(view.content.innerHTML,/Steam user accounts do not agree/);
+  assert.doesNotMatch(view.content.innerHTML,/Steam is open|test the connection|before it is saved/);
+});
+
 test('unchanged setup evidence preserves the existing option field', async () => {
   const view=panel();
   await refreshSteamSetup(view,'1',async()=>setup);

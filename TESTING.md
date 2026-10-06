@@ -23,6 +23,9 @@ The focused `steam-setup.test.mjs` suite covers detached panels and overlapping
 checks without touching a real Steam configuration. See the original
 [Steam Play task brief](docs/verification/2026-10-05-steam-play-task.md) and the
 [October 6 setup discovery evidence](docs/verification/2026-10-06-steam-setup.md).
+The [wording follow-up](docs/verification/2026-10-06-steam-setup-copy.md) records
+the typed running-Steam state and plain launch/test guidance, preserving other
+configuration errors and the unconfirmed gate.
 
 Live acceptance remains separate: with a matching installed app/wrapper/libraries,
 import a native Steam game and save its displayed app-specific Launch Options.
