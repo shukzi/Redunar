@@ -2,20 +2,22 @@ const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 const requests = new WeakMap();
 
 export function steamSetupPanel() {
-  return `<section class="steam-setup-card" aria-labelledby="steam-setup-title"><div class="steam-setup-heading"><h3 id="steam-setup-title">Play from Steam</h3><button class="button" data-action="check-steam-setup">Check again</button></div><div data-steam-setup-content><p>Checking Steam capture setup…</p></div></section>`;
+  return `<section class="steam-setup-card" aria-labelledby="steam-setup-title"><h3 id="steam-setup-title">Play from Steam</h3><div data-steam-setup-content><p>Checking Steam capture setup…</p></div></section>`;
 }
 
+const retry = '<button class="button steam-setup-retry" type="button" data-action="check-steam-setup">Check again</button>';
+
 function setupContent(setup) {
-  if (!setup.available) return `<p class="steam-setup-status">Steam capture setup unavailable</p><p>${escape(setup.status)}</p>`;
+  if (!setup.available) return `<p class="steam-setup-status">Steam capture setup unavailable</p><p>${escape(setup.status)}</p>${retry}`;
   const configured = setup.configured === true;
-  const steamRunning = !configured && setup.configuration_state === 'steam-running';
-  const status = configured ? 'Launch options configured' : steamRunning ? 'Launch option not yet confirmed' : setup.configuration_state === 'not-configured' ? 'Setup required' : 'Setup unconfirmed';
+  const needsAttention = !configured && !['not-configured', 'steam-running'].includes(setup.configuration_state);
   const options = setup.launch_options || '';
-  return `<p class="steam-setup-status">${status}</p>${configured
-    ? '<p>Click Play in Steam. Redunar starts in the background automatically and uses this game’s saved settings.</p>'
-    : '<p>Set up this game once to use Redunar’s overlay and Instant Replay when you click Play in Steam.</p><ol class="steam-setup-steps"><li>In Steam, open this game’s <strong>Properties → General → Launch Options</strong>.</li><li>Copy the value below into that field, then click <strong>Play</strong>. Redunar starts in the background automatically.</li></ol>'}
-    ${steamRunning ? '<p class="small-note">Steam is open, so Redunar can’t confirm recent edits here. If you’ve pasted this value, click Play in Steam to test the connection.</p>' : !configured && setup.configuration_state !== 'not-configured' ? `<p class="small-note">${escape(setup.status)}</p>` : ''}
-    ${options ? `<label class="form-label" for="steam-launch-options">Required Steam Launch Options</label><div class="steam-options-field"><textarea id="steam-launch-options" rows="2" readonly spellcheck="false">${escape(options)}</textarea><button class="button" type="button" data-copy-steam-options="${escape(options)}">Copy launch option</button></div>` : ''}`;
+  return `${configured ? '<p class="steam-setup-status">Launch option configured</p>' : ''}<p>${configured
+    ? 'Press Play in Steam. Redunar starts automatically.'
+    : 'Paste this into Steam’s Launch Options, then press Play.'}</p>
+    ${options ? `<div class="steam-options-field"><textarea id="steam-launch-options" aria-label="Steam Launch Options" rows="2" readonly spellcheck="false">${escape(options)}</textarea><button class="button primary" type="button" data-copy-steam-options="${escape(options)}">Copy</button></div>` : ''}
+    ${!configured ? '<p class="steam-setup-caption">Set up once. Redunar starts automatically with the game.</p>' : ''}
+    ${needsAttention ? `<div class="steam-setup-notice"><p class="steam-setup-status">Setup unconfirmed</p><p>${escape(setup.status)}</p>${retry}</div>` : ''}`;
 }
 
 // Keep late checks scoped to the panel that requested them. Never replace the
@@ -31,14 +33,17 @@ export async function refreshSteamSetup(panel, gameId, call) {
     content.innerHTML = markup;
     request.markup = markup;
   };
-  button.disabled = true;
+  if (button) button.disabled = true;
   try {
     const setup = await call('steam_setup_status', {gameId});
     update(setupContent(setup));
   } catch (error) {
     const note = error instanceof Error ? error.message : String(error);
-    update(`<p class="steam-setup-status">Steam setup could not be checked</p><p>${escape(note)}</p>`);
+    update(`<p class="steam-setup-status">Steam setup could not be checked</p><p>${escape(note)}</p>${retry}`);
   } finally {
-    if (panel.isConnected && requests.get(panel) === request) button.disabled = false;
+    if (panel.isConnected && requests.get(panel) === request) {
+      const retryButton = panel.querySelector('[data-action="check-steam-setup"]');
+      if (retryButton) retryButton.disabled = false;
+    }
   }
 }

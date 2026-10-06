@@ -12,7 +12,7 @@ running on Linux with AMD hardware.
 - Steam game discovery and launch profiles
 
 For a native Steam game, import it into Library. Its **Play from Steam** panel
-shows the required app-specific Launch Options and a **Copy launch option**
+shows the required app-specific Launch Options and a **Copy**
 button above Game settings. Paste the value into that game's Steam
 **Properties → General → Launch Options**, then click **Play in Steam**. Redunar
 prepares the saved game profile and starts in the background if closed. Open or Quit it from its tray icon; a

@@ -71,13 +71,13 @@ drafts through navigation and unrelated saves. Installed-game import reviews
 local Steam/XDG entries; running helper processes are not import candidates.
 Overview offers a Steam capture setup link while no game is active. Every
 selected Steam game shows a **Play from Steam** panel above both Library tabs,
-including its native setup status, the exact Launch Options value, a Copy button,
-and one-time setup instructions. Configured games retain the copyable value;
-unconfirmed and unavailable checks do not imply capture is ready.
-Steam being open uses a plain “Launch option not yet confirmed” status and tells
-users to test an already-pasted value by clicking Play in Steam. It does not
-present the saved-file inspection limit as a setup failure or require restarting
-Steam. Other ambiguous reasons retain their own explanations. Import the
+with one paste instruction, the exact Launch Options value, **Copy**, and a short
+automatic startup note. Routine unconfigured and running-Steam states use this
+same compact setup; no permanent retry button or technical inspection warning.
+Verified configured games retain the copyable value with a quiet “Launch option
+configured” and a Play instruction. Other ambiguous reasons, unavailable setup
+and failed checks retain explanations and Check again. Setup confirmation never
+implies capture is ready, and no Steam restart is required. Import the
 game once to select its saved profile. Steam setup explains Play in Steam and
 automatic background startup. An unavailable tray exposes the main window;
 temporary background startup does not change the saved Close to tray preference.

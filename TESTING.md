@@ -17,7 +17,8 @@ PID reuse/disappearance, End retaining a live game's lock, and one history recor
 Run `tools/validate.sh full` for both Cargo workspaces and the production UI build.
 The WebKit workspace fixture checks the always-visible per-game Steam setup
 panel, exact option copying, both Library tabs, direct-game omission, configured
-and unconfirmed status, unavailable/error retries, and compact layout. It captures
+confirmation only from native evidence, other ambiguous reasons,
+unavailable/error retries, selection preservation and compact layout. It captures
 `steam-play-setup.png`, `steam-play-configured.png`, and `steam-play-compact.png`.
 The focused `steam-setup.test.mjs` suite covers detached panels and overlapping
 checks without touching a real Steam configuration. See the original
@@ -26,6 +27,8 @@ checks without touching a real Steam configuration. See the original
 The [wording follow-up](docs/verification/2026-10-06-steam-setup-copy.md) records
 the typed running-Steam state and plain launch/test guidance, preserving other
 configuration errors and the unconfirmed gate.
+The [Compact follow-up](docs/verification/2026-10-06-compact-steam-setup.md)
+records the simplified panel, conditional retry and focus/draft preservation.
 
 Live acceptance remains separate: with a matching installed app/wrapper/libraries,
 import a native Steam game and save its displayed app-specific Launch Options.
