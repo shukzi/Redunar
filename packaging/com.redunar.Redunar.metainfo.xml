@@ -27,7 +27,7 @@
     <category>Game</category>
   </categories>
   <releases>
-    <release version="0.1.15" date="2026-10-09">
+    <release version="0.1.16" date="2026-10-09">
       <description>
         <p>Uses a native desktop tray without AppIndicator, accepts ultrawide Replay sources within the existing recording budget, reads Intel CPU package temperatures, and preserves privately loaded GLX provider calls.</p>
       </description>
