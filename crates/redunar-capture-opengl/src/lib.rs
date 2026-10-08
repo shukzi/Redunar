@@ -9,6 +9,7 @@
 //! metadata-only.
 
 mod fd_transport;
+mod glx_lookup;
 mod gpu_identity;
 mod overlay;
 mod replay_export;
@@ -438,9 +439,9 @@ unsafe extern "C" fn interposed_dlsym(handle: *mut c_void, symbol: *const c_char
             );
             sdl_render_present as *const () as *mut c_void
         }
-        b"glXSwapBuffers" => glx_swap_buffers as *const () as *mut c_void,
+        b"glXSwapBuffers" => glx_lookup::swap_target(resolved),
         b"eglSwapBuffers" => egl_swap_buffers as *const () as *mut c_void,
-        b"glXDestroyContext" => glx_destroy_context as *const () as *mut c_void,
+        b"glXDestroyContext" => glx_lookup::destroy_target(resolved),
         b"eglDestroyContext" => egl_destroy_context as *const () as *mut c_void,
         _ => resolved,
     }

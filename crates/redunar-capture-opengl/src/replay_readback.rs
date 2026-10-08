@@ -6,8 +6,8 @@
 
 use super::overlay::ApiFlavor;
 use redunar_capture::{
-    MAX_REPLAY_SOURCE_HEIGHT, MAX_REPLAY_SOURCE_WIDTH, ReplayPixelFormat, ReplaySourceCandidate,
-    ReplaySourceRejection,
+    ReplayPixelFormat, ReplaySourceCandidate, ReplaySourceRejection,
+    replay_source_dimensions_supported,
 };
 use std::env;
 use std::ffi::{c_int, c_uint, c_void};
@@ -389,15 +389,14 @@ fn restore_pack_buffer(functions: &Functions, binding: i32) {
 fn source_candidate(width: u32, height: u32) -> Option<ReplaySourceCandidate> {
     (width >= MIN_WIDTH
         && height >= MIN_HEIGHT
-        && width <= MAX_REPLAY_SOURCE_WIDTH
-        && height <= MAX_REPLAY_SOURCE_HEIGHT)
-        .then_some(ReplaySourceCandidate {
-            gpu_identity: None,
-            width,
-            height,
-            pixel_format: ReplayPixelFormat::Rgba8Unorm,
-            target_frames_per_second: target_frames_per_second(),
-        })
+        && replay_source_dimensions_supported(width, height))
+    .then_some(ReplaySourceCandidate {
+        gpu_identity: None,
+        width,
+        height,
+        pixel_format: ReplayPixelFormat::Rgba8Unorm,
+        target_frames_per_second: target_frames_per_second(),
+    })
 }
 
 fn current_source(functions: &Functions) -> Option<ReplaySourceCandidate> {
@@ -534,7 +533,7 @@ mod tests {
         assert_eq!(source.height, 480);
         assert_eq!(source.pixel_format, ReplayPixelFormat::Rgba8Unorm);
         assert!(source_candidate(319, 480).is_none());
-        assert!(source_candidate(640, MAX_REPLAY_SOURCE_HEIGHT + 1).is_none());
+        assert!(source_candidate(640, redunar_capture::MAX_REPLAY_SOURCE_HEIGHT + 1).is_none());
     }
 
     #[test]

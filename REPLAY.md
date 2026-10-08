@@ -126,6 +126,15 @@ six-slot pool of linear GBM RGBA8 buffers per bounded context, imported through
 fence-ready descriptors pass to the same daemon-owned GPU conversion and
 hardware H.264 worker. EGL/OpenGL ES Replay remains unsupported. Every route
 still depends on format, dimensions, device, queue, driver, and encoder gates.
+Source shapes are bounded to 8,192 pixels on either axis and 8,294,400 total
+pixels (the existing 3840×2160 budget), including 5120×1440 ultrawide and
+2160×3840 portrait sources. These are software admission limits, not a hardware
+support guarantee. The selected encoder must still accept the exact coded
+extent and H.264 level. Fixed 120 FPS retains its 1080p surface limit; Variable
+FPS uses the resolution-dependent macroblock ceiling, including 72 FPS at
+5120×1440 and 64 FPS at 3840×2160. Larger pixel counts remain unavailable;
+recording does not downscale the game. A resolution rejection refers to game
+resolution and recording rate, independently of fullscreen/windowed mode.
 With Beta access enabled at startup, one identifiable NVIDIA render GPU may
 attempt the same Vulkan Video H.264 path, including alongside known Intel/AMD
 render GPUs. The driver must expose the required Vulkan Video encode,

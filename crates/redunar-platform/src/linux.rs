@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 mod drm;
 pub use drm::{DrmRenderDevice, unique_render_device};
 
+#[path = "linux_cpu_temperature.rs"]
+mod cpu_temperature;
+
 #[derive(Clone, Debug)]
 pub struct LinuxHardwareProbe {
     proc_root: PathBuf,
@@ -462,12 +465,7 @@ fn parse_cpu_times(stat: &str) -> Option<CpuTimes> {
 }
 
 fn find_cpu_temperature_path(sys_root: &Path) -> Option<PathBuf> {
-    sorted_directories(&sys_root.join("class/hwmon"))
-        .into_iter()
-        .find_map(|directory| {
-            let name = read_trimmed(directory.join("name"))?;
-            matches!(name.as_str(), "k10temp" | "zenpower").then(|| directory.join("temp1_input"))
-        })
+    cpu_temperature::discover(sys_root)
 }
 
 fn discover_gpu_telemetry_paths(sys_root: &Path, card: &str) -> GpuTelemetryPaths {
@@ -814,6 +812,50 @@ mod tests {
         let mut sampler = LinuxCpuUtilizationSampler::new(fixture.root.join("proc"));
         assert_eq!(sampler.sample(), None);
         assert_eq!(sampler.sample(), None);
+    }
+
+    #[test]
+    fn intel_package_temperature_is_discovered_and_cached() {
+        let fixture = amd_fixture();
+        fixture.write(
+            "proc/cpuinfo",
+            "processor : 0\nvendor_id : GenuineIntel\nmodel name : 12th Gen Intel Core i9-12900K\n",
+        );
+        fixture.write("sys/class/hwmon/hwmon4/name", "coretemp\n");
+        fixture.write("sys/class/hwmon/hwmon4/temp1_label", "Core 0\n");
+        fixture.write("sys/class/hwmon/hwmon4/temp2_label", "Package id 0\n");
+        fixture.write("sys/class/hwmon/hwmon4/temp2_input", "54000\n");
+        fixture.write("sys/class/hwmon/hwmon0/name", "acpitz\n");
+        fixture.write("sys/class/hwmon/hwmon0/temp1_input", "90000\n");
+        let snapshot = fixture.probe().snapshot().unwrap();
+        assert_eq!(snapshot.cpu.temperature_celsius, Some(54.0));
+        let mut sampler = fixture.telemetry_sampler();
+        fixture.write("sys/class/hwmon/hwmon4/temp2_input", "61000\n");
+        fixture.write("sys/class/hwmon/hwmon1/name", "coretemp\n");
+        fixture.write("sys/class/hwmon/hwmon1/temp1_label", "Package id 1\n");
+        fixture.write("sys/class/hwmon/hwmon1/temp1_input", "99000\n");
+        assert_eq!(sampler.sample().cpu.temperature_celsius, Some(61.0));
+        fixture.remove("sys/class/hwmon/hwmon4/temp2_input");
+        assert_eq!(sampler.sample().cpu.temperature_celsius, None);
+    }
+
+    #[test]
+    fn intel_missing_or_invalid_package_sensor_remains_unavailable() {
+        let fixture = amd_fixture();
+        fixture.write("sys/class/hwmon/hwmon4/name", "coretemp\n");
+        fixture.write("sys/class/hwmon/hwmon4/temp1_label", "Core 0\n");
+        assert_eq!(
+            fixture.probe().snapshot().unwrap().cpu.temperature_celsius,
+            None
+        );
+        fixture.write("sys/class/hwmon/hwmon4/temp2_label", "Package id 0\n");
+        for value in ["not-a-temperature\n", "NaN\n", "inf\n"] {
+            fixture.write("sys/class/hwmon/hwmon4/temp2_input", value);
+            assert_eq!(
+                fixture.probe().snapshot().unwrap().cpu.temperature_celsius,
+                None
+            );
+        }
     }
 
     #[test]

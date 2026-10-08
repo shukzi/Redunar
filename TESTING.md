@@ -4,6 +4,22 @@ Current Tauri and shared-backend checks, reviewed September 26, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## Ultrawide Replay and CPU sensors
+
+Ordinary fixtures also cover the shared pixel budget through Vulkan/OpenGL
+source selection, protocol exported/copied messages, daemon DMA-BUF/stream
+validation and encoder requests at 5120×1440. They exercise Variable FPS's
+72 FPS encoder ceiling, reject oversized/over-budget and short backing buffers,
+and retain existing failed-ownership/resize cleanup tests. Intel sensor fixtures
+cover package labels, unrelated/core-only sensors, cached paths, missing and
+invalid readings. `tools/validate.sh full` runs these without GPU access.
+The production WebKit workspace fixture includes the resolution/rate rejection
+copy. Hardware save/decode, driver coded-extent limits and sustained performance
+at these source shapes require separate acceptance.
+
+See the [October 8 verification](docs/verification/2026-10-08-ultrawide.md) for
+the current build, checks and remaining hardware acceptance.
+
 ## Steam Play entry point
 
 The [October 5 combined live check](docs/verification/2026-10-05-combined-live-check.md)
@@ -48,12 +64,30 @@ Quit without killing the game. Flatpak Steam and NVIDIA success remain outside
 ordinary fixture evidence. Do not run these hardware/installation checks without
 authorization.
 
+## GLX loader forwarding fixtures
+
+The focused command exercises the actual Cargo-built preload sidecar with C
+fixture providers:
+
+```sh
+cargo test --locked --offline -p redunar-capture-opengl --test glx_loader --target-dir .redunar-build/checks/root
+```
+
+The fixture needs `cc` and GNU `timeout`, with no display,
+Steam, real game or GPU. Cases cover local/global visibility, a different local
+provider after the global hook is used, promotion to global visibility, cached
+missing forwarding targets, original call counts and loader errors. Each fixture
+process has a ten-second deadline. Full validation runs this test automatically.
+See the [X11 GLX task](docs/verification/2026-10-08-x11-glx-task.md) and
+[October 8 evidence](docs/verification/2026-10-08-x11-glx.md).
+
 ## Installer shell and dependency fixtures
 
 `tools/test-installer.sh` uses signed local fixture files and fake package
 managers; it performs no installation or network download. It covers the
 rendered Debian installer and the Arch dependency path with PipeWire, PulseAudio,
-or neither already installed, preserving exact package argument boundaries.
+or neither already installed, including CachyOS detection through `ID_LIKE=arch`,
+preserving exact package argument boundaries.
 Corrupted packages and invalid signatures must fail before installation.
 
 All `tools/validate.sh` modes check the source installer with `sh -n` before
@@ -678,8 +712,8 @@ Synthetic and isolated diagnostics are safe for routine development:
 cargo run --release --offline -p redunar-daemon --example replay_foundation_self_test
 cargo run --release --offline -p redunar-daemon --example replay_profile
 cargo run --release --offline -p redunar-daemon --example replay_store_profile
-cargo build --release --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --example desktop_controls_probe
-dbus-run-session -- xvfb-run -a output/tauri-redunar/src-tauri/target/release/examples/desktop_controls_probe
+cargo build --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --example desktop_controls_probe --target-dir .redunar-build/checks/tauri
+dbus-run-session -- xvfb-run -a .redunar-build/checks/tauri/debug/examples/desktop_controls_probe
 ```
 
 `replay_foundation_self_test` uses temporary state and deliberately reports that
@@ -688,7 +722,15 @@ bounded in-memory ring insertion with synthetic packets. `replay_store_profile`
 writes and removes one synthetic 16 MiB container under the temporary directory.
 `desktop_controls_probe` uses an isolated D-Bus/Xvfb session, fixture preferences,
 and a pipe-only shortcut helper; it does not open input devices or change host
-settings.
+settings. The native tray unit fixtures create private D-Bus daemons and fake
+watchers, covering exported icon/menu properties, typed actions, denied or absent
+registration, another app's item, host/bus loss, owner replacement with delayed
+replies, repeated connection cleanup and malformed requests. They require
+`dbus-daemon`, no desktop tray provider or input device. Full validation runs them.
+
+The explicit `native_tray_probe --desktop` example briefly registers a temporary
+icon with the real session host without changing preferences or opening games.
+It is separate from ordinary tests; observe the icon/menu and confirm cleanup.
 
 These live probes require an explicit, scoped hardware run:
 

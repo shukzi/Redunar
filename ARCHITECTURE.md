@@ -66,7 +66,7 @@ Paths below are relative to `output/tauri-redunar/`:
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
 | Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
 | Replay menu and shortcuts | `src-tauri/src/hotkeys.rs`; `crates/redunar-hotkeys` (pointer capture); `crates/redunar-capture-vulkan/src/overlay.rs` (in-game menu render); `ui/replay-menu-view.mjs` (app preview) |
-| Tray preference/lifecycle | `src-tauri/src/tray.rs`, `main.rs` |
+| Tray preference/lifecycle | `src-tauri/src/tray.rs`, `tray_native/`, `main.rs` |
 | Signed updates and installer state | `src-tauri/src/updates.rs`, `runtime.rs`; `ui/app.js` |
 | Application preferences and Beta access opt-in | `crates/redunar-daemon/src/app_preferences.rs`, `src-tauri/src/runtime.rs`; `ui/app.js` |
 | NVIDIA beta GPU metrics | `crates/redunar-nvidia-nvml`, `crates/redunar-platform/src/linux.rs`, `crates/redunar-daemon/src/monitor.rs` |
@@ -235,6 +235,13 @@ the same bounded one-shot wrapper protocol; the OpenGL library is copied into
 the session directory already shared with the Steam Linux runtime. Flatpak
 Steam remains a separate unsupported sandbox boundary by owner decision.
 
+Handle-specific GLX swap/context-destruction lookups retain their exact original
+target when the interposer cannot forward to that same provider through
+`RTLD_NEXT`, including privately loaded libraries. These calls bypass optional
+capture instead of being dropped or redirected to another GLX provider. Matching
+global targets retain the hooks. Failed lookup probes do not cache a missing
+provider or leave an internal loader error on a successful application lookup.
+
 The capture receiver validates export ordering per selected/provisional process
 and translates each accepted wire sequence into a session-unique internal token.
 `capture_session/replay_release.rs` retains the original reply endpoint and wire
@@ -315,6 +322,15 @@ not expose a desktop preview of this game-rendered menu. The versioned menu
 telemetry carries bounded display labels for the current menu chord and the
 selected duration's save chord. Menu format clicks are daemon-owned preference
 writes and update the active replay runtime before the next save.
+The native tray exports StatusNotifierItem and DBusMenu objects through the GTK
+GIO session-bus APIs already used by the host; it does not load AppIndicator.
+One private connection owns the item, menu and worker while enabled. Disable and
+shutdown close that connection and remove the registration. Watcher ownership
+changes invalidate pending replies; host/item loss restores the window.
+Registration requires this connection's exact unique name/path in the current
+watcher's item list, a registered host and a successful registration reply.
+Open/Quit actions are scheduled on the main thread; shutdown never waits for GTK
+from the bus worker. Bounded registration checks only run for reachability.
 Close to tray controls icon visibility immediately. Closing hides only when the
 preference and usable tray registration allow reopening; otherwise it exits.
 Loss of the tray host must not strand a hidden main window. Native hotkey

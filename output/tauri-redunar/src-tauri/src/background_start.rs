@@ -21,7 +21,7 @@ pub fn prepare_window(app: &tauri::AppHandle) {
     {
         let app = app.clone();
         gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(1), move || {
-            if !crate::tray::registered() {
+            if !crate::tray::registered(&app) {
                 crate::tray::show_window(&app);
             }
         });

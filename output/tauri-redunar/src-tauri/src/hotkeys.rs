@@ -277,10 +277,10 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
                 state.last_action = Some(format!("Saved replay · {seconds}s"));
                 state.message = None;
                 if let Some(app_handle) = app_handle {
-                    if let Some(tray) = app_handle.tray_by_id("redunar") {
-                        let _ =
-                            tray.set_tooltip(Some(format!("Redunar · Replay saved ({seconds}s)")));
-                    }
+                    crate::tray::set_tooltip(
+                        app_handle,
+                        &format!("Redunar · Replay saved ({seconds}s)"),
+                    );
                 }
             }
             HelperEvent::Stopped => {

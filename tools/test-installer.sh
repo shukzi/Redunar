@@ -24,6 +24,7 @@ write_os_release fedora fedora 44
 write_os_release ubuntu ubuntu 24.04 debian
 write_os_release debian-old debian 12
 write_os_release arch arch rolling
+write_os_release cachyos cachyos rolling arch
 write_os_release opensuse opensuse-tumbleweed 20260914 'suse opensuse'
 write_os_release bazzite bazzite 44 fedora
 write_os_release alpine alpine 3.23
@@ -161,17 +162,20 @@ grep -Fxq update "$command_log"
 grep -Eq '^install -y .*/redunar-app-linux-amd64\.deb$' "$command_log"
 grep -Fq 'Redunar installed successfully.' "$test_root/install-output.log"
 
-for provider in pipewire-pulse pulseaudio missing; do
-  arch_command_log="$test_root/arch-$provider"
+for scenario in arch:pipewire-pulse arch:pulseaudio arch:missing \
+                cachyos:pipewire-pulse cachyos:pulseaudio cachyos:missing; do
+  distribution=${scenario%%:*}
+  provider=${scenario#*:}
+  arch_command_log="$test_root/$distribution-$provider"
   PATH="$fake_bin:$PATH" TMPDIR="$installer_tmp" \
   REDUNAR_TEST_COMMAND_LOG="$arch_command_log" \
   REDUNAR_TEST_AUDIO_PROVIDER="$provider" \
   REDUNAR_RELEASE_BASE_URL="file://$download_root" REDUNAR_ALLOW_INSECURE_URL=1 \
-  REDUNAR_OS_RELEASE_FILE="$test_root/arch" REDUNAR_ARCHITECTURE=x86_64 \
+  REDUNAR_OS_RELEASE_FILE="$test_root/$distribution" REDUNAR_ARCHITECTURE=x86_64 \
   REDUNAR_GLIBC_VERSION=2.41 \
     "$test_root/rendered-install.sh" \
-    >"$test_root/arch-$provider-output.log" 2>"$test_root/arch-$provider-error.log"
-  test ! -s "$test_root/arch-$provider-error.log"
+    >"$test_root/$distribution-$provider-output.log" 2>"$test_root/$distribution-$provider-error.log"
+  test ! -s "$test_root/$distribution-$provider-error.log"
   python3 - "$arch_command_log" "$provider" "$installer_tmp" <<'PY'
 from pathlib import Path
 import sys
@@ -188,7 +192,7 @@ asset = Path(install[3])
 assert asset.name == "redunar-app-linux-x86_64.pkg.tar.zst"
 assert asset.parent.parent == Path(temporary_root)
 PY
-  grep -Fq 'Redunar installed successfully.' "$test_root/arch-$provider-output.log"
+  grep -Fq 'Redunar installed successfully.' "$test_root/$distribution-$provider-output.log"
 done
 
 printf '%s\n' 'corrupted DEB fixture' >"$download_root/redunar-app-linux-amd64.deb"

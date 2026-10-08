@@ -5,6 +5,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import json
+import re
 import threading
 from webkit_fixture import configure_webkit
 configure_webkit()
@@ -38,6 +39,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='daemon_status')return bridge.unavailable?{available:false}:{available:true,diagnostic_log_status:bridge.logStatus||'off',revision:++bridge.revision,cpu_model:'Fixture CPU',cpu_utilization_percent:32,cpu_temperature_celsius:61,gpu_model:'Fixture GPU',gpu_utilization_percent:81,gpu_temperature_celsius:67,ram_used_bytes:12884901888,ram_total_bytes:34359738368,vram_used_bytes:5368709120,vram_total_bytes:12884901888};
  if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
  if(command==='session_status')return {phase:'Running',game:games[0].name,can_end:true,launch_locked:true,elapsed_seconds:1938,captures_saved:3,profile_label:'Session profile',feature_summary:'Metrics enabled · replay enabled',restoration:'NotRequired',history_revision:1,measurements:{revision:bridge.revision,average_fps:141,frame_time_ms:7.1,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000+Math.round(Math.sin(bridge.revision)*700000)],phase:'Live'}};
+ if(command==='replay_runtime_status'&&bridge.replayUnavailable)return {phase:'Unavailable',can_save:false,buffered_seconds:0,unavailable_reason:fixtureResolutionRejection};
  if(command==='replay_runtime_status'&&bridge.replayInactive)return {phase:'Inactive',can_save:false,buffered_seconds:0};
  if(command==='replay_runtime_status')return {phase:'Buffering',can_save:true,buffered_seconds:30,received_frame_count:600,encoded_packet_count:600,audio_packet_count:1500,audio_byte_count:4500,audio_active:true,completed_save_revision:1};
  if(command==='module_statuses')return structuredClone(bridge.modules);
@@ -80,6 +82,8 @@ window.check=(condition,message)=>{if(!condition)throw new Error(message)};
 window.q=s=>document.querySelector(s);
 window.click=s=>{const el=q(s);check(!!el,'Missing '+s);check(!el.disabled,'Disabled '+s);el.click();};
 """
+resolution_copy = re.search(r'Some\(ReplaySourceRejection::DimensionsUnsupported\) =>\s*"([^"]+)"', (NATIVE/'src-tauri/src/runtime.rs').read_text()).group(1)
+fixture = "const fixtureResolutionRejection=" + json.dumps(resolution_copy) + ";" + fixture
 fixture = "window.fixturePalettes=" + (NATIVE / "ui/overlay-palettes.json").read_text() + ";" + fixture
 manager.add_script(WebKit2.UserScript.new(fixture,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
 view=WebKit2.WebView.new_with_user_content_manager(manager)
@@ -115,6 +119,12 @@ try:
     test('Startup update notice directs the user to Settings',"check(q('#toast').textContent==='A Redunar update is available. Open Settings to install it.','clear startup update action')")
     test('Real overview values and compact session footer',"check(q('#ram-used').textContent==='12.0 GiB','RAM');check(q('#session-timer').textContent==='32:18','timer');check(q('#session-captures').textContent==='3 captures saved','captures');check(q('.session-end').contains(q('[data-action=end-session]')),'timer adjacent to end');window.plot=q('#live-chart');click('[data-overview-view=fps]');check(q('#live-chart')===plot,'graph toggle does not remount page');check(q('#overview-chart-label').textContent==='Frame rate','FPS selector');")
     snap('overview')
+    route('replay')
+    js('bridge.replayUnavailable=true');wait_for("q('#replay-phase')?.textContent===fixtureResolutionRejection")
+    test('Resolution rejection explains game resolution and recording rate',"check(q('#replay-phase').textContent.includes(\"Lower the game's resolution or recording frame rate\"),'actionable resolution/rate');check(!q('#replay-phase').textContent.includes('window size'),'fullscreen-independent copy');check(document.documentElement.scrollWidth<=innerWidth,'no page overflow');")
+    snap('ultrawide-resolution-rejection')
+    js('bridge.replayUnavailable=false');wait_for("q('#replay-status-title').textContent==='Ready to save'")
+    route('overview')
     test('Overview uses settings for visibility and points to Steam setup',"check(!q('[data-action=session-overlay]'),'no duplicate live button');check(q('#steam-capture-guide a').getAttribute('href')==='#library','setup link');check(q('#steam-capture-guide').hidden,'guide hidden during session');")
     js('bridge.idle=true');wait_for("!q('#steam-capture-guide').hidden")
     test('Idle Overview makes Steam capture setup discoverable',"check(q('#steam-capture-guide').textContent.includes('Set up each game once'),'setup explanation');check(q('#steam-capture-guide a').textContent==='Set up Steam capture','setup action');")

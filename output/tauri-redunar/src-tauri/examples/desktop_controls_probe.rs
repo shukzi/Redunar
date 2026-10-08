@@ -5,6 +5,8 @@
 mod hotkeys;
 #[path = "../src/tray.rs"]
 mod tray;
+#[path = "../src/tray_native/mod.rs"]
+mod tray_native;
 
 use std::{
     os::unix::fs::PermissionsExt,
@@ -49,7 +51,7 @@ fn main() {
         .setup(|app| {
             tray::setup(app)?;
             assert!(
-                app.tray_by_id("redunar").is_none(),
+                !tray::has_item(app.handle()),
                 "disabled startup has no icon"
             );
             let monitor = app.state::<hotkeys::ShortcutMonitor>();
@@ -67,11 +69,14 @@ fn main() {
                 for _ in 0..3 {
                     tray::set_enabled(&handle, true).unwrap();
                     tray::set_enabled(&handle, true).unwrap();
-                    assert_eq!(indicator_status(), "Active");
+                    assert!(tray::has_item(&handle));
                     main.hide().unwrap();
                     wait_for(|| !main.is_visible().unwrap());
                     tray::set_enabled(&handle, false).unwrap();
-                    assert_eq!(indicator_status(), "Passive", "native icon must be hidden");
+                    assert!(
+                        !tray::has_item(&handle),
+                        "disabled icon must be unregistered"
+                    );
                     wait_for(|| main.is_visible().unwrap());
                 }
                 // The in-game menu is owned by the helper and the Vulkan layer;
@@ -97,7 +102,7 @@ fn main() {
         "native probe did not complete"
     );
     std::fs::remove_dir_all(directory).unwrap();
-    println!("PASS: hidden native shortcut dispatch, no legacy menu window, empty shortcuts, tray startup and three native Active/Passive cycles");
+    println!("PASS: hidden native shortcut dispatch, no legacy menu window, empty shortcuts, tray startup and three native register/unregister cycles");
 }
 
 fn wait_for(mut condition: impl FnMut() -> bool) {
@@ -108,31 +113,4 @@ fn wait_for(mut condition: impl FnMut() -> bool) {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("native condition did not settle");
-}
-
-/// Read the actual Linux indicator property on a worker so the UI thread can
-/// answer the D-Bus request. A retained handle alone is not visibility evidence.
-fn indicator_status() -> String {
-    use gtk::glib::variant::ToVariant;
-    let bus =
-        gtk::gio::bus_get_sync(gtk::gio::BusType::Session, gtk::gio::Cancellable::NONE).unwrap();
-    let reply = bus
-        .call_sync(
-            bus.unique_name().as_deref(),
-            "/org/ayatana/NotificationItem/tray_icon_tray_app_redunar",
-            "org.freedesktop.DBus.Properties",
-            "Get",
-            Some(&("org.kde.StatusNotifierItem", "Status").to_variant()),
-            None,
-            gtk::gio::DBusCallFlags::NONE,
-            1000,
-            gtk::gio::Cancellable::NONE,
-        )
-        .unwrap();
-    reply
-        .get::<(gtk::glib::Variant,)>()
-        .unwrap()
-        .0
-        .get::<String>()
-        .unwrap()
 }

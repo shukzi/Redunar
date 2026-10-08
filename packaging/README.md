@@ -74,7 +74,7 @@ The current spec explicitly requires GTK3, WebKitGTK 4.1, libdrm, PulseAudio
 client utilities (`pactl` and `parec`), Opus, the `/usr/bin/ffmpeg` and
 `/usr/bin/ffprobe` files, and the architecture-specific
 `libavcodec-freeworld` capability, and the GStreamer `libgstlibav.so` plugin used
-by WebKit, in addition to discovered binary dependencies. A tray provider is optional; missing registration must leave normal window closing usable.
+by WebKit, in addition to discovered binary dependencies. The native tray uses existing GTK/GIO dependencies and does not require AppIndicator. KDE and DMS need an active StatusNotifier host; GNOME needs a compatible tray extension. Missing registration must leave normal window closing usable.
 
 Replay capture uses the hardware Vulkan Video path. An FFmpeg encoder name is
 not evidence that live hardware recording is supported. Audio prefers native

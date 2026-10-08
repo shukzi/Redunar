@@ -201,10 +201,7 @@ impl VulkanVideoDmaBufFrame {
         timestamp_ns: u64,
         duration_ns: u64,
     ) -> Result<Self, VulkanVideoDeviceError> {
-        if width == 0
-            || height == 0
-            || width > 3_840
-            || height > 2_160
+        if !redunar_capture::replay_source_dimensions_supported(width, height)
             || !width.is_multiple_of(2)
             || !height.is_multiple_of(2)
             || !offset.is_multiple_of(4)
@@ -297,14 +294,11 @@ impl VulkanVideoDmaBufFrame {
 impl VulkanVideoH264Request {
     #[must_use]
     pub fn is_valid(self) -> bool {
-        self.width > 0
-            && self.height > 0
-            && self.width <= 3_840
-            && self.height <= 2_160
+        redunar_capture::replay_source_dimensions_supported(self.width, self.height)
             && self.width.is_multiple_of(2)
             && self.height.is_multiple_of(2)
             && if self.variable_rate {
-                (120..=240).contains(&self.frames_per_second)
+                (1..=240).contains(&self.frames_per_second)
                     && self.frames_per_second
                         == maximum_variable_frame_rate(self.width, self.height)
             } else {
@@ -2708,6 +2702,8 @@ fn required_h264_level(request: VulkanVideoH264Request) -> i32 {
     .into_iter()
     .find(|(_, max_frame, max_rate, max_bitrate)| {
         frame_macroblocks <= *max_frame
+            && macroblock_width.saturating_mul(macroblock_width) <= 8 * max_frame
+            && macroblock_height.saturating_mul(macroblock_height) <= 8 * max_frame
             && macroblocks_per_second <= *max_rate
             && bitrate <= *max_bitrate
     })
@@ -3116,6 +3112,75 @@ mod tests {
     use super::*;
 
     fn assert_send<T: Send>() {}
+
+    #[test]
+    fn h264_level_accounts_for_extreme_aspect_ratio_on_both_axes() {
+        for (width, height) in [(8192, 320), (320, 8192)] {
+            let request = VulkanVideoH264Request {
+                width,
+                height,
+                frames_per_second: 30,
+                variable_rate: false,
+                target_megabits_per_second: 24,
+            };
+            assert!(request.is_valid());
+            assert_eq!(required_h264_level(request), 14);
+        }
+    }
+
+    #[test]
+    fn ultrawide_requests_and_import_layouts_pass_without_hardware() {
+        let mut request = VulkanVideoH264Request {
+            width: 5120,
+            height: 1440,
+            frames_per_second: 60,
+            variable_rate: false,
+            target_megabits_per_second: 24,
+        };
+        assert!(request.is_valid());
+        assert_eq!(required_h264_level(request), 15);
+        request.variable_rate = true;
+        request.frames_per_second = maximum_variable_frame_rate(5120, 1440);
+        assert_eq!(request.frames_per_second, 72);
+        assert!(request.is_valid());
+        request.frames_per_second = 73;
+        assert!(!request.is_valid());
+        request.height = 2160;
+        request.frames_per_second = 60;
+        request.variable_rate = false;
+        assert!(!request.is_valid());
+
+        // Sparse ordinary file exercises size/layout validation only, never
+        // Vulkan discovery/import or claims about real DMA-BUF support.
+        let path =
+            std::env::temp_dir().join(format!("redunar-ultrawide-layout-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        file.set_len(5120 * 1440 * 4).unwrap();
+        let make_frame = |file: File| {
+            VulkanVideoDmaBufFrame::new(
+                file.into(),
+                5120,
+                1440,
+                VulkanPackedPixelFormat::Bgra8,
+                0,
+                5120 * 4,
+                1,
+                16_666_667,
+            )
+        };
+        assert!(make_frame(file.try_clone().unwrap()).is_ok());
+        file.set_len(5120 * 1440 * 4 - 1).unwrap();
+        assert!(matches!(
+            make_frame(file),
+            Err(VulkanVideoDeviceError::InvalidDmaBufFrame)
+        ));
+    }
 
     #[test]
     fn request_limits_match_replay_product_limits() {

@@ -20,7 +20,7 @@
 use super::fd_transport;
 use super::overlay::ApiFlavor;
 use redunar_capture::{
-    MAX_REPLAY_SOURCE_HEIGHT, MAX_REPLAY_SOURCE_WIDTH, REPLAY_PRODUCER_CONTEXT_COUNT,
+    MAX_REPLAY_SOURCE_PIXELS, MAX_REPLAY_SOURCE_WIDTH, REPLAY_PRODUCER_CONTEXT_COUNT,
     ReplayPixelFormat, ReplaySourceCandidate, ReplaySourceRejection,
 };
 use std::env;
@@ -351,7 +351,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
 static NEXT_EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static FIRED_FAILURE_STAGES: AtomicU64 = AtomicU64::new(0);
 const FRAME_RATE_ENV: &str = "REDUNAR_REPLAY_FRAME_RATE";
-const MAX_SLOT_BYTES: u64 = MAX_REPLAY_SOURCE_WIDTH as u64 * 4 * MAX_REPLAY_SOURCE_HEIGHT as u64;
+const MAX_SLOT_BYTES: u64 = MAX_REPLAY_SOURCE_PIXELS * 4;
 
 /// Resolve libgbm once. Every entry point is checked: a missing symbol makes
 /// the production route unsupported rather than unsafe to call.
@@ -584,7 +584,7 @@ fn monotonic_export_timestamp(previous_ns: u64, candidate_ns: u64) -> u64 {
 }
 
 /// GBM rounds an RA24 stride up to a pixel multiple of four, so a width of
-/// 1366 yields 5632. The protocol caps a declared stride at 3840 * 4, so a
+/// 1366 yields 5632. The protocol caps a declared stride at the axis bound * 4, so a
 /// wider padding must reject the source rather than mis-describe the frame.
 fn exportable_stride(stride: u32) -> bool {
     stride != 0 && stride <= MAX_REPLAY_SOURCE_WIDTH * 4
@@ -600,8 +600,7 @@ fn source_for(
 ) -> Result<ReplaySourceCandidate, ReplaySourceRejection> {
     if width < MIN_WIDTH
         || height < MIN_HEIGHT
-        || width > MAX_REPLAY_SOURCE_WIDTH
-        || height > MAX_REPLAY_SOURCE_HEIGHT
+        || !redunar_capture::replay_source_dimensions_supported(width, height)
     {
         return Err(ReplaySourceRejection::DimensionsUnsupported);
     }
@@ -611,11 +610,12 @@ fn source_for(
     {
         return Err(ReplaySourceRejection::DimensionsUnsupported);
     }
-    if width
-        .div_ceil(16)
-        .saturating_mul(height.div_ceil(16))
-        .saturating_mul(u32::from(target_fps))
-        > MAX_ENCODE_MACROBLOCKS_PER_SECOND
+    if !variable_rate
+        && width
+            .div_ceil(16)
+            .saturating_mul(height.div_ceil(16))
+            .saturating_mul(u32::from(target_fps))
+            > MAX_ENCODE_MACROBLOCKS_PER_SECOND
     {
         return Err(ReplaySourceRejection::DimensionsUnsupported);
     }
@@ -1555,8 +1555,32 @@ mod tests {
         assert!(exportable_stride(3_840 * 4));
         assert!(exportable_stride(1_366 * 4));
         assert!(exportable_stride(5_632));
-        assert!(!exportable_stride(3_840 * 4 + 4));
+        assert!(exportable_stride(5_120 * 4));
+        assert!(!exportable_stride(MAX_REPLAY_SOURCE_WIDTH * 4 + 4));
         assert!(!exportable_stride(0));
+    }
+
+    #[test]
+    fn ultrawide_fixed_and_variable_sources_keep_slot_budget() {
+        assert_eq!(
+            source_for(60, false, 5120, 1440),
+            Ok(source_at(60, 5120, 1440))
+        );
+        assert_eq!(
+            source_for(120, true, 5120, 1440),
+            Ok(source_at(120, 5120, 1440))
+        );
+        assert_eq!(
+            source_for(120, false, 5120, 1440),
+            Err(ReplaySourceRejection::DimensionsUnsupported)
+        );
+        assert_eq!(
+            source_for(60, false, 5120, 2160),
+            Err(ReplaySourceRejection::DimensionsUnsupported)
+        );
+        let source = source_for(60, false, 5120, 1440).unwrap();
+        assert!(u64::from(source.width) * 4 * u64::from(source.height) <= MAX_SLOT_BYTES);
+        assert_eq!(MAX_SLOT_BYTES, 3840 * 4 * 2160);
     }
 
     #[test]

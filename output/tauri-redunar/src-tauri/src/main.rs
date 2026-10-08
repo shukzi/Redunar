@@ -16,6 +16,7 @@ mod profiles;
 mod runtime;
 mod sessions;
 mod tray;
+mod tray_native;
 mod updates;
 use tauri::Manager;
 
@@ -347,6 +348,7 @@ fn main() {
             }
         }
         if let tauri::RunEvent::Exit = event {
+            tray::shutdown(app);
             app.state::<sessions::Sessions>().shutdown();
             app.state::<clip_export::ClipExports>().shutdown();
             app.state::<hotkeys::ShortcutMonitor>().shutdown();

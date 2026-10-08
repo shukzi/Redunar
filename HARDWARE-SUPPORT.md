@@ -11,8 +11,8 @@ not establish support across every game or driver.
 | Area | Current behavior and limits |
 | --- | --- |
 | Desktop | Tauri using GTK3/WebKitGTK on Linux; Wayland/X11 behavior needs separate validation. |
-| CPU | Cached Linux identity/utilization and AMD-oriented sensor/CPUFreq adapters. Do not apply AMD-specific interpretation to other vendors. |
-| GPU | AMD `amdgpu`/DRM metrics where exposed: utilization, temperature, clock, VRAM, power. Beta access admits one identifiable NVIDIA render GPU using the installed driver's NVML library, keyed by PCI address, including alongside known Intel/AMD render GPUs. Game measurements select the capture vendor only when its physical GPU is unique. Missing identity/sensors stay unavailable. No NVIDIA hardware has been verified. |
+| CPU | Cached Linux identity/utilization, AMD `k10temp`/`zenpower` temperature and Intel `coretemp` package temperature where exposed. Sensor paths are discovered once; missing/unreadable package sensors stay unavailable. CPUFreq adapters remain AMD-oriented; do not apply AMD-specific interpretation to other vendors. |
+| GPU | AMD `amdgpu`/DRM metrics where exposed: utilization, temperature, clock, VRAM, power. Beta access admits one identifiable NVIDIA render GPU using the installed driver's NVML library, keyed by PCI address, including alongside known Intel/AMD render GPUs. Game measurements select the capture vendor only when its physical GPU is unique. Missing identity/sensors stay unavailable. NVIDIA detection and in-game metrics have the October 8 tester report below; NVIDIA encoding remains unverified. |
 | Memory | Linux RAM and available GPU-memory readings feed System metrics. |
 | Catalog | Local IDs, direct launch records, native/Flatpak Steam discovery, and supported direct XDG Game entries. Import reviews installed entries, not arbitrary running helpers. |
 | Native Steam launch | The app-specific wrapper prepares an imported game when Play is clicked in native Steam. Starting a closed Redunar requires a working Linux user service manager; the app must run outside Steam's game reaper. Without this capability the original game still launches; opening Redunar first avoids the startup dependency. Live requests verify the same-user wrapper and unique local identity; app-initiated launches verify saved launch options. The owner confirmed ARC Raiders save/playback with video and audio on October 6 at `163e75a`, then observed a stuck exit. Fresh-game acceptance of the corrected bootstrap remains pending. |
@@ -24,7 +24,7 @@ not establish support across every game or driver.
 | Overlay | Compact, FPS only, Detailed, Custom; four corners, bounded scale/opacity, live visibility and independent saved feedback. |
 | Replay menu | The capture backend renders the in-game menu into the game presentation. The app's overlay-appearance preview is separate; pointer grab remains subject to local input permissions. |
 | Audio | Default-output monitor through PulseAudio or PipeWire plus Opus; the mixed output can include other applications. Pure ALSA output capture is not supported. See REPLAY. |
-| Shortcuts/tray | Same-user evdev helper and optional tray provider. No permission/provider must produce a usable, honest fallback. Empty shortcuts and tray-disabled startup are supported. |
+| Shortcuts/tray | Same-user evdev helper and native StatusNotifierItem/DBusMenu tray client. A desktop tray host is required; no AppIndicator library is required. Missing input access or tray host must produce a usable fallback. Empty shortcuts and tray-disabled startup are supported. |
 | Packaging | Debian 12/glibc 2.36 baseline binaries, Fedora/openSUSE RPMs, a DEB, native Arch package, portable payload, signed checksums, and a distro-detecting installer template build locally. Installed-runtime evidence remains Fedora 44 only; no published release, verified second distribution, immutable-system package, or ARM build is implied. |
 
 The monitor caches discovery, samples hardware at 1 Hz, and performs bounded
@@ -49,6 +49,14 @@ have fake-library coverage, not NVIDIA hardware evidence. See the
 [first hardware test](TESTING.md#nvidia-beta-first-hardware-test).
 
 ## Recorded evidence and remaining gates
+
+On October 8, the owner relayed an RTX 3090 Ti / Intel Core i9-12900K tester's
+working GPU detection and in-game metrics, absent CPU temperature and Replay
+rejection at 5120×1440. The installed build/driver were not provided, and no
+recording succeeded in that report. The follow-up admits the ultrawide shape
+within the existing pixel budget and discovers Intel package temperature; see
+[Replay source limits](REPLAY.md#capture-and-encoding). This report does not
+qualify NVIDIA encoding or identify the separate KDE/X11 launch failure.
 
 The retained AMD baseline was recorded on Fedora 44, Ryzen 7 5800X, Radeon RX 6800 XT/Navi 21,
 using RADV with Vulkan Video support exposed by its installed Mesa build.
@@ -75,6 +83,12 @@ not certification of later changes. [Real-game testing](REAL-GAME-TESTING.md)
 and [ROADMAP.md](ROADMAP.md) own the remaining work.
 
 ## Outside current support
+
+GLX providers loaded with private ELF visibility, or handle-specific targets
+that differ from the interposer's forwarding provider, retain their original
+swap and context-destruction calls. Redunar bypasses those lookups, so frame
+metrics/Replay from that path are unavailable. This compatibility guard is not
+evidence that the reported CachyOS/KDE X11 ARC Raiders launch failure is fixed.
 
 - OpenGL ES/EGL Replay capture, late injection into already-running games, and
   broad real-game OpenGL Replay qualification beyond the owner acceptance set.

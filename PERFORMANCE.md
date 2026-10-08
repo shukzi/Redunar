@@ -47,6 +47,13 @@ remain below 800 MiB per process, while ordinary 1080p contexts use about
 presentation-hook, and acknowledgement progress. Encoding has no
 host-pixel/software-video fallback.
 
+Ultrawide/portrait admission keeps the same 8,294,400-pixel frame budget while
+allowing up to 8,192 pixels per axis. Shared protocol, producer and encoder
+validation enforce this before frame allocation/import. OpenGL retains its
+33,177,600-byte per-slot limit, including row padding; wider padded allocations
+that exceed it remain unavailable. Pool, pipeline, spool and packet budgets
+are unchanged. Actual encoder coded-extent and H.264 level checks still apply.
+
 Source-size generations share the four-pool process cap. A resize discards
 fence-complete local copies from the old generation and waits for daemon-owned
 exports before deleting that generation. Explicit GLX, EGL, and SDL context
@@ -116,6 +123,8 @@ allowance. It uses eight bounded Vulkan producer buffers, while fixed-rate
 capture keeps five; the encoder remains four slots. Ring and spool byte budgets
 double only in Variable mode. A source or encoder backlog drops Replay work
 without pausing game presentation.
+The same ceiling admits at most 72 FPS at 5120×1440 and 64 FPS at 3840×2160;
+Variable mode does not require a minimum of 120 FPS at higher resolutions.
 
 ## Desktop media and history
 

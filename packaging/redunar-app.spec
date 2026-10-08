@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.14
+Version:        0.1.15
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,11 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Fri Oct 09 2026 Redunar <local@redunar.invalid> - 0.1.15-1.local
+- Use a native StatusNotifier tray without AppIndicator.
+- Accept ultrawide Replay sources within the existing capture budget.
+- Read Intel package temperature and preserve private GLX provider forwarding.
+
 * Tue Oct 06 2026 Redunar <local@redunar.invalid> - 0.1.14-1.local
 - Prepare capture when configured games start from Steam, including background app startup.
 - Simplify Steam setup and release game ownership after natural exit.

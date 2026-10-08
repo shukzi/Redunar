@@ -6,8 +6,8 @@ use crate::ffi::{
     VkSwapchainCreateInfoKhr,
 };
 use redunar_capture::{
-    MAX_REPLAY_SOURCE_HEIGHT, MAX_REPLAY_SOURCE_WIDTH, ReplayPixelFormat, ReplaySourceCandidate,
-    ReplaySourceRejection,
+    ReplayPixelFormat, ReplaySourceCandidate, ReplaySourceRejection,
+    replay_source_dimensions_supported,
 };
 use std::env;
 
@@ -161,8 +161,7 @@ fn plan(
     }
     if info.image_extent.width < MIN_SOURCE_WIDTH
         || info.image_extent.height < MIN_SOURCE_HEIGHT
-        || info.image_extent.width > MAX_REPLAY_SOURCE_WIDTH
-        || info.image_extent.height > MAX_REPLAY_SOURCE_HEIGHT
+        || !replay_source_dimensions_supported(info.image_extent.width, info.image_extent.height)
     {
         return Err(ReplayTransferRejection::DimensionsUnsupported);
     }
@@ -190,13 +189,14 @@ fn plan(
     {
         return Err(ReplayTransferRejection::DimensionsUnsupported);
     }
-    if info
-        .image_extent
-        .width
-        .div_ceil(16)
-        .saturating_mul(info.image_extent.height.div_ceil(16))
-        .saturating_mul(u32::from(config.target_frames_per_second))
-        > MAX_ENCODE_MACROBLOCKS_PER_SECOND
+    if !config.variable_rate
+        && info
+            .image_extent
+            .width
+            .div_ceil(16)
+            .saturating_mul(info.image_extent.height.div_ceil(16))
+            .saturating_mul(u32::from(config.target_frames_per_second))
+            > MAX_ENCODE_MACROBLOCKS_PER_SECOND
     {
         return Err(ReplayTransferRejection::DimensionsUnsupported);
     }
@@ -400,7 +400,7 @@ mod tests {
             Err(ReplayTransferRejection::TransferSourceUsageMissing)
         );
         info = create_info();
-        info.image_extent.width = MAX_REPLAY_SOURCE_WIDTH + 1;
+        info.image_extent.width = redunar_capture::MAX_REPLAY_SOURCE_WIDTH + 1;
         assert_eq!(
             plan(config, &info),
             Err(ReplayTransferRejection::DimensionsUnsupported)
@@ -411,5 +411,28 @@ mod tests {
             plan(config, &info),
             Err(ReplayTransferRejection::PixelFormatUnsupported)
         );
+    }
+
+    #[test]
+    fn ultrawide_fixed_and_variable_sources_preserve_bounds() {
+        let mut info = create_info();
+        info.image_extent = VkExtent2d {
+            width: 5120,
+            height: 1440,
+        };
+        for (target_frames_per_second, variable_rate) in [(60, false), (120, true)] {
+            let config = ReplayTransferConfig {
+                requested: true,
+                target_frames_per_second,
+                variable_rate,
+            };
+            assert!(plan(config, &info).is_ok());
+            info.image_extent.height = 2160;
+            assert_eq!(
+                plan(config, &info),
+                Err(ReplayTransferRejection::DimensionsUnsupported)
+            );
+            info.image_extent.height = 1440;
+        }
     }
 }

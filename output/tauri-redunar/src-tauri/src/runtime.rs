@@ -208,7 +208,7 @@ fn replay_unavailable_copy(
     use redunar_daemon::ReplaySourceRejection;
     match rejection {
         Some(ReplaySourceRejection::DimensionsUnsupported) =>
-            "This game resolution cannot be recorded. Use a supported window size and relaunch the game.",
+            "This game resolution cannot be recorded at the selected frame rate. Lower the game's resolution or recording frame rate.",
         Some(ReplaySourceRejection::PixelFormatUnsupported) =>
             "This game's pixel format cannot be recorded. Try a standard 8-bit display mode.",
         Some(ReplaySourceRejection::ExternalMemoryUnsupported) =>
@@ -226,6 +226,17 @@ fn replay_unavailable_copy(
         None if active_game =>
             "Waiting for recordable game frames. Try another display mode or relaunch the game through Redunar.",
         None => "Launch a supported game through Redunar to start Replay.",
+    }
+}
+
+#[cfg(test)]
+mod replay_copy_tests {
+    #[test]
+    fn rejected_dimensions_explain_resolution_and_rate() {
+        assert_eq!(super::replay_unavailable_copy(
+            Some(redunar_daemon::ReplaySourceRejection::DimensionsUnsupported),
+            true, redunar_daemon::ReplayPhase::Unavailable,
+        ), "This game resolution cannot be recorded at the selected frame rate. Lower the game's resolution or recording frame rate.");
     }
 }
 

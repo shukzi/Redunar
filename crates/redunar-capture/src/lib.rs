@@ -22,8 +22,20 @@ use std::fmt;
 
 pub const PROTOCOL_VERSION: u16 = 7;
 pub const MAX_FRAME_INTERVALS: usize = 128;
-pub const MAX_REPLAY_SOURCE_WIDTH: u32 = 3_840;
-pub const MAX_REPLAY_SOURCE_HEIGHT: u32 = 2_160;
+pub const MAX_REPLAY_SOURCE_WIDTH: u32 = 8_192;
+pub const MAX_REPLAY_SOURCE_HEIGHT: u32 = 8_192;
+pub const MAX_REPLAY_SOURCE_PIXELS: u64 = 3_840 * 2_160;
+/// Accept ultrawide/portrait sources without increasing the 4K pixel budget.
+/// The macroblock bound also keeps padded frames within H.264 level 5.2.
+#[must_use]
+pub const fn replay_source_dimensions_supported(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_REPLAY_SOURCE_WIDTH
+        && height <= MAX_REPLAY_SOURCE_HEIGHT
+        && (width as u64) * (height as u64) <= MAX_REPLAY_SOURCE_PIXELS
+        && width.div_ceil(16) * height.div_ceil(16) <= 36_864
+}
 /// Shared bounded depth of Replay's asynchronous conversion/encode pipeline.
 pub const REPLAY_ENCODER_PIPELINE_DEPTH: usize = 4;
 /// Producer exports need one handoff beyond encoder depth so the submission
@@ -251,11 +263,7 @@ impl ReplaySourceRejection {
 
 impl ReplaySourceCandidate {
     fn validate(self) -> Result<(), ProtocolError> {
-        if self.width == 0
-            || self.height == 0
-            || self.width > MAX_REPLAY_SOURCE_WIDTH
-            || self.height > MAX_REPLAY_SOURCE_HEIGHT
-        {
+        if !replay_source_dimensions_supported(self.width, self.height) {
             return Err(ProtocolError::new("replay source dimensions are invalid"));
         }
         if !matches!(self.target_frames_per_second, 30 | 60 | 120) {
@@ -1026,6 +1034,58 @@ mod tests {
 
     fn session_id() -> CaptureSessionId {
         CaptureSessionId::new([7; 16]).expect("non-zero session")
+    }
+
+    #[test]
+    fn ultrawide_exports_round_trip_with_the_existing_pixel_budget() {
+        for (width, height) in [(5120, 1440), (7680, 1080), (2160, 3840)] {
+            let source = ReplaySourceCandidate {
+                gpu_identity: None,
+                width,
+                height,
+                pixel_format: ReplayPixelFormat::Bgra8Unorm,
+                target_frames_per_second: 60,
+            };
+            round_trip(&CaptureMessage::ReplayFrameExported {
+                session_id: session_id(),
+                sequence: 1,
+                fd_number: 3,
+                source,
+                offset: 0,
+                stride: width * 4,
+                modifier: 0,
+                timestamp_ns: 1,
+                duration_ns: 16_666_667,
+            });
+            round_trip(&CaptureMessage::ReplayFrameCopied {
+                session_id: session_id(),
+                sequence: 1,
+                source,
+                copied_bytes: width * height * 4,
+                sample_checksum: 0,
+            });
+        }
+        for (width, height) in [
+            (5120, 2160),
+            (7680, 4320),
+            (8193, 180),
+            (u32::MAX, u32::MAX),
+            (0, 1440),
+        ] {
+            assert!(!replay_source_dimensions_supported(width, height));
+        }
+        let source = ReplaySourceCandidate {
+            gpu_identity: None,
+            width: 5120,
+            height: 2160,
+            pixel_format: ReplayPixelFormat::Bgra8Unorm,
+            target_frames_per_second: 60,
+        };
+        let message = CaptureMessage::ReplaySourceCandidate {
+            session_id: session_id(),
+            candidate: source,
+        };
+        assert!(encode_message(&message, &mut [0; MAX_MESSAGE_BYTES]).is_err());
     }
 
     fn round_trip(message: &CaptureMessage) {

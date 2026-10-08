@@ -136,6 +136,10 @@ the system package manager. Cancellation keeps the verified package ready to
 retry. Settings reports completion only after the installed package version
 is confirmed and says when a restart is needed.
 Close to tray immediately controls tray icon visibility and closing behavior.
+The native StatusNotifier tray needs a desktop tray host. Closing hides only
+while Redunar can verify its own usable registration; tray loss restores the
+window. KDE and DMS provide compatible hosts; GNOME needs a compatible extension.
+No AppIndicator library installation is required.
 Keep this page limited to current user-configurable behavior and runtime
 diagnostics.
 

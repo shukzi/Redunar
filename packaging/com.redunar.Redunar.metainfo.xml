@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.15" date="2026-10-09">
+      <description>
+        <p>Uses a native desktop tray without AppIndicator, accepts ultrawide Replay sources within the existing recording budget, reads Intel CPU package temperatures, and preserves privately loaded GLX provider calls.</p>
+      </description>
+    </release>
     <release version="0.1.14" date="2026-10-06">
       <description>
         <p>Starts capture for configured Steam launches, simplifies Steam setup, fixes background app lifetime after game exit, and matches Replay to the game's GPU. Identifiable NVIDIA hybrid systems can attempt the beta path; NVIDIA hardware support remains unverified.</p>

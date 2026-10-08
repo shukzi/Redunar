@@ -79,13 +79,13 @@ impl ReplayVideoStream {
         frames_per_second: u8,
         codec_private: Vec<u8>,
     ) -> Result<Self, ReplayEncoderError> {
-        if width == 0 || height == 0 || width > 3_840 || height > 2_160 {
+        if !redunar_capture::replay_source_dimensions_supported(width, height) {
             return Err(ReplayEncoderError::InvalidStream);
         }
         // VFR H.264 initializes at a bounded ceiling; packets retain their
         // individual presentation timestamps.
         if !(matches!(frames_per_second, 30 | 60 | 120)
-            || codec == ReplayVideoCodec::H264 && (121..=240).contains(&frames_per_second))
+            || codec == ReplayVideoCodec::H264 && (1..=240).contains(&frames_per_second))
         {
             return Err(ReplayEncoderError::InvalidStream);
         }
@@ -215,10 +215,7 @@ impl DmaBufReplayFrame {
         duration_ns: u64,
         planes: Vec<DmaBufPlane>,
     ) -> Result<Self, ReplayEncoderError> {
-        if width == 0
-            || height == 0
-            || width > 3_840
-            || height > 2_160
+        if !redunar_capture::replay_source_dimensions_supported(width, height)
             || drm_fourcc == 0
             || duration_ns == 0
             || duration_ns > NANOSECONDS_PER_SECOND
@@ -277,10 +274,7 @@ impl DmaBufReplayFrame {
         planes: Vec<DmaBufImagePlane>,
     ) -> Result<Self, ReplayEncoderError> {
         const MAX_DMABUF_OBJECTS: usize = 4;
-        if width == 0
-            || height == 0
-            || width > 3_840
-            || height > 2_160
+        if !redunar_capture::replay_source_dimensions_supported(width, height)
             || drm_fourcc == 0
             || duration_ns == 0
             || duration_ns > NANOSECONDS_PER_SECOND
@@ -961,6 +955,49 @@ mod tests {
 
     fn h264_payload(nal: u8) -> Vec<u8> {
         vec![0, 0, 0, 2, nal, 0x88]
+    }
+
+    #[test]
+    fn ultrawide_frames_and_variable_stream_preserve_bounds() {
+        let stream = h264_stream(5120, 1440);
+        assert!(
+            ReplayVideoStream::new(
+                stream.codec(),
+                stream.packet_format(),
+                5120,
+                1440,
+                72,
+                stream.codec_private().to_vec(),
+            )
+            .is_ok()
+        );
+        assert!(
+            ReplayVideoStream::new(
+                stream.codec(),
+                stream.packet_format(),
+                5120,
+                2160,
+                60,
+                stream.codec_private().to_vec(),
+            )
+            .is_err()
+        );
+        for height in [1440, 2160] {
+            let frame = DmaBufReplayFrame::new(
+                std::fs::File::open("/dev/null").unwrap().into(),
+                5120,
+                height,
+                DRM_FORMAT_B8G8R8A8,
+                0,
+                1,
+                16_666_667,
+                vec![DmaBufPlane {
+                    offset: 0,
+                    stride: 5120 * 4,
+                }],
+            );
+            assert_eq!(frame.is_ok(), height == 1440);
+        }
     }
 
     #[test]
