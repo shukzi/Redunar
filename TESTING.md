@@ -20,6 +20,31 @@ at these source shapes require separate acceptance.
 See the [October 8 verification](docs/verification/2026-10-08-ultrawide.md) for
 the current build, checks and remaining hardware acceptance.
 
+## Replay menu pointer fixtures
+
+The shortcut helper's fake mouse fixtures cover queued gameplay clicks/motion
+at menu opening and reopening, fresh input after queue cleanup, failed grabs,
+failed reads and bounded cleanup under continuous input. Every acquisition or
+cleanup failure releases all mice. Private socket pairs verify that view-only
+mode sends heartbeats without reading unowned pointer input, while owned clicks
+still reach the menu and read failures request normal cleanup. Existing Escape,
+duplicate keyboard edge, inactivity and no-mouse fallback checks remain active.
+The reported Alt+Shift+Z chord also runs through the real keyboard monitor with
+composite duplicate edges and modifier releases; it refreshes mouse discovery
+only when opening, opens once, remains open through a heartbeat, and closes on
+the next complete chord. Device discovery is replaced with an empty fixture,
+so this monitor test never opens real input devices.
+
+```sh
+cargo test --locked --offline -p redunar-hotkeys --target-dir .redunar-build/checks/root
+```
+
+These tests use no input devices or game/GPU. The owner confirmed the installed
+test build's menu works on October 9; this is separate from automated fixtures
+and does not qualify broader Replay or other hardware.
+See the [October 9 verification](docs/verification/2026-10-09-replay-menu.md) for
+the exact validated source and local test package hashes.
+
 ## Native tray fixtures
 
 The Tauri test suite exports real StatusNotifierItem and DBusMenu objects on

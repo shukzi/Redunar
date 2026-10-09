@@ -11,6 +11,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod pointer_capture;
+use pointer_capture::{grab_all, release_all};
+
 const SESSION_ARGUMENT: &str = "--monitor-v1";
 const TRUSTED_PARENTS: &[&str] = &["/usr/bin/redunar-tauri"];
 const MAX_BINDINGS: usize = 9;
@@ -97,6 +100,7 @@ impl PendingMotion {
 
 struct MenuCapture {
     open: bool,
+    pointer_grabbed: bool,
     control: Option<UnixStream>,
     pending_motion: PendingMotion,
     last_motion_sent: Instant,
@@ -108,6 +112,7 @@ impl MenuCapture {
     fn closed(now: Instant) -> Self {
         Self {
             open: false,
+            pointer_grabbed: false,
             control: None,
             pending_motion: PendingMotion::default(),
             last_motion_sent: now,
@@ -116,8 +121,9 @@ impl MenuCapture {
         }
     }
 
-    fn opened(&mut self, control: UnixStream, now: Instant) {
+    fn opened(&mut self, control: UnixStream, now: Instant, pointer_grabbed: bool) {
         self.open = true;
+        self.pointer_grabbed = pointer_grabbed;
         self.control = Some(control);
         self.pending_motion = PendingMotion::default();
         self.last_motion_sent = now;
@@ -127,6 +133,7 @@ impl MenuCapture {
 
     fn closed_by_release(&mut self) {
         self.open = false;
+        self.pointer_grabbed = false;
         self.control = None;
         self.pending_motion = PendingMotion::default();
     }
@@ -162,7 +169,7 @@ fn run() -> Result<(), String> {
     if devices.is_empty() {
         return Err("no readable keyboard input device was found".to_owned());
     }
-    let mut mice = open_mouse_devices(&mouse_devices());
+    let mut mice = Vec::new();
 
     let stop = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = mpsc::sync_channel(128);
@@ -185,7 +192,14 @@ fn run() -> Result<(), String> {
     println!("READY {}", workers.len());
     io::stdout().flush().map_err(|error| error.to_string())?;
     let control_path = PathBuf::from(format!("/run/user/{uid}/redunar/replay-control-v1.sock"));
-    monitor_events(&receiver, &stop, &bindings, &control_path, &mut mice)?;
+    monitor_events(
+        &receiver,
+        &stop,
+        &bindings,
+        &control_path,
+        &mut mice,
+        || open_mouse_devices(&mouse_devices()),
+    )?;
     release_all(&mut mice);
     stop.store(true, Ordering::Release);
     drop(workers);
@@ -519,7 +533,8 @@ fn monitor_events(
     stop: &AtomicBool,
     bindings: &[KeyChord],
     control_path: &Path,
-    mice: &mut [Device],
+    mice: &mut Vec<Device>,
+    mut refresh_mice: impl FnMut() -> Vec<Device>,
 ) -> Result<(), String> {
     let mut pressed = HashSet::new();
     let mut menu = MenuCapture::closed(Instant::now());
@@ -576,6 +591,14 @@ fn monitor_events(
                             if let Some(action) = action {
                                 match action {
                                     HotkeyAction::ToggleOverlay => {
+                                        if !menu.open {
+                                            // Input nodes can disappear while
+                                            // a wireless mouse reconnects.
+                                            // Replace ungrabbed handles at
+                                            // each opening, so a dead startup
+                                            // handle cannot cancel the menu.
+                                            *mice = refresh_mice();
+                                        }
                                         // The helper owns the whole in-game
                                         // menu session: it asks the daemon to
                                         // toggle, grabs every mouse on success
@@ -675,12 +698,12 @@ fn toggle_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture)
                 // in-game status surface and the configured save shortcut
                 // remains available, so lack of pointer access must not turn
                 // a valid Shift+F8 press into a no-op.
-                menu.opened(control, Instant::now());
+                menu.opened(control, Instant::now(), false);
                 println!("MENU OPENED VIEW ONLY");
             } else {
                 match grab_all(mice) {
                     Ok(()) => {
-                        menu.opened(control, Instant::now());
+                        menu.opened(control, Instant::now(), true);
                         // Report the transition so the app can show honest
                         // shortcut activity. The menu itself is rendered into
                         // the captured game by the Vulkan layer; no desktop
@@ -688,12 +711,11 @@ fn toggle_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture)
                         println!("MENU OPENED");
                     }
                     Err(error) => {
-                        release_all(mice);
                         // Pointer ownership is optional; the menu itself is
                         // rendered independently in the game's swapchain. A
                         // transient EVIOCGRAB failure must not erase a valid
                         // hotkey action or make the panel flash closed.
-                        menu.opened(control, Instant::now());
+                        menu.opened(control, Instant::now(), false);
                         println!("MENU OPENED VIEW ONLY");
                         eprintln!("Replay menu pointer capture unavailable: {error}");
                     }
@@ -748,36 +770,36 @@ fn close_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture, 
     println!("MENU CLOSED");
 }
 
-fn grab_all(devices: &mut [Device]) -> Result<(), String> {
-    for grabbed in 0..devices.len() {
-        let device = &mut devices[grabbed];
-        if let Err(error) = device.grab() {
-            for rollback in devices.iter_mut().take(grabbed) {
-                let _ = rollback.ungrab();
-            }
-            return Err(error.to_string());
-        }
-    }
-    Ok(())
-}
-
-fn release_all(devices: &mut [Device]) {
-    for device in devices {
-        let _ = device.ungrab();
-    }
-}
-
 fn process_mouse_events(mice: &mut [Device], menu: &mut MenuCapture) -> bool {
-    let mut pointer_events = Vec::new();
-    for mouse in mice {
-        match mouse.fetch_events() {
-            Ok(events) => pointer_events.extend(events.filter_map(|event| {
-                parse_pointer_event(event.event_type().0, event.code(), event.value())
-            })),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+    process_pointer_input(menu, || {
+        let mut pointer_events = Vec::new();
+        for mouse in mice {
+            match mouse.fetch_events() {
+                Ok(events) => pointer_events.extend(events.filter_map(|event| {
+                    parse_pointer_event(event.event_type().0, event.code(), event.value())
+                })),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(pointer_events)
+    })
+}
+
+fn process_pointer_input(
+    menu: &mut MenuCapture,
+    read_events: impl FnOnce() -> io::Result<Vec<PointerEvent>>,
+) -> bool {
+    // View-only sessions retain heartbeats, but never forward gameplay input
+    // from mice that the helper does not own (including failed-grab fallback).
+    let pointer_events = if menu.pointer_grabbed {
+        match read_events() {
+            Ok(events) => events,
             Err(_) => return false,
         }
-    }
+    } else {
+        Vec::new()
+    };
     for event in pointer_events {
         menu.last_input = Instant::now();
         match event {
@@ -1059,11 +1081,60 @@ mod tests {
         let now = Instant::now();
         let mut menu = MenuCapture::closed(now);
         let (control, _peer) = UnixStream::pair().expect("local control pair");
-        menu.opened(control, now);
+        menu.opened(control, now, true);
         menu.pending_motion.add(PointerEvent::MotionX(4));
         menu.closed_by_release();
         assert!(!menu.open);
+        assert!(!menu.pointer_grabbed);
         assert_eq!(menu.pending_motion.take(), None);
+    }
+
+    #[test]
+    fn view_only_session_pings_without_reading_unowned_pointer_input() {
+        let now = Instant::now();
+        let (control, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(CONTROL_TIMEOUT)).unwrap();
+        let server = thread::spawn(move || {
+            let mut request = String::new();
+            BufReader::new(&mut peer).read_line(&mut request).unwrap();
+            assert_eq!(request, "MENU PING\n");
+            peer.write_all(b"OK GRAB\n").unwrap();
+        });
+        let mut menu = MenuCapture::closed(now);
+        menu.opened(control, now.checked_sub(MENU_PING_INTERVAL).unwrap(), false);
+        assert!(process_pointer_input(&mut menu, || {
+            panic!("view-only fallback must not read or forward gameplay clicks")
+        }));
+        assert!(menu.open);
+        assert!(!menu.pointer_grabbed);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn owned_pointer_input_is_forwarded_and_failures_request_cleanup() {
+        let now = Instant::now();
+        let (control, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(CONTROL_TIMEOUT)).unwrap();
+        let server = thread::spawn(move || {
+            let mut reader = BufReader::new(&mut peer);
+            for expected in ["MENU BUTTON 1\n", "MENU BUTTON 0\n"] {
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                assert_eq!(request, expected);
+                reader.get_mut().write_all(b"OK GRAB\n").unwrap();
+            }
+        });
+        let mut menu = MenuCapture::closed(now);
+        menu.opened(control, now, true);
+        assert!(process_pointer_input(&mut menu, || Ok(vec![
+            PointerEvent::LeftButton(true),
+            PointerEvent::LeftButton(false),
+        ])));
+        assert!(menu.open);
+        server.join().unwrap();
+        assert!(!process_pointer_input(&mut menu, || Err(
+            io::ErrorKind::NotConnected.into()
+        )));
     }
 
     #[test]
@@ -1105,6 +1176,84 @@ mod tests {
     }
 
     #[test]
+    fn alt_shift_z_opens_once_survives_key_release_and_toggles_closed() {
+        let directory = std::env::temp_dir().join(format!("rd-menu-chord-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let (sender, receiver) = mpsc::sync_channel(16);
+        let chord = parse_chord("Alt+Shift+Z").unwrap();
+        let send_chord = move |sender: &mpsc::SyncSender<KeyEvent>| {
+            // Include duplicate Z edges from a composite keyboard, and release
+            // both modifiers. None of these may immediately dismiss the menu.
+            for value in [1, 0] {
+                for (device, code) in [
+                    (0, KEY_LEFTALT),
+                    (1, KEY_LEFTSHIFT),
+                    (0, chord.key),
+                    (1, chord.key),
+                ] {
+                    sender
+                        .send(KeyEvent {
+                            device,
+                            code,
+                            value,
+                        })
+                        .unwrap();
+                }
+            }
+        };
+        send_chord(&sender);
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "menu shortcut did not open");
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("menu fixture accept failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            for (expected, response) in [
+                ("MENU TOGGLE\n", &b"OK GRAB\n"[..]),
+                ("MENU PING\n", &b"OK GRAB\n"[..]),
+                ("MENU TOGGLE\n", &b"OK RELEASE\n"[..]),
+            ] {
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                assert_eq!(request, expected);
+                reader.get_mut().write_all(response).unwrap();
+                if expected == "MENU PING\n" {
+                    send_chord(&sender);
+                }
+            }
+            server_stop.store(true, Ordering::Release);
+        });
+        let mut refreshes = 0;
+        let result = monitor_events(&receiver, &stop, &[chord], &path, &mut Vec::new(), || {
+            refreshes += 1;
+            Vec::new()
+        });
+        let server_result = server.join();
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+        server_result.unwrap();
+        assert_eq!(
+            refreshes, 1,
+            "refresh on opening, never during an owned menu"
+        );
+    }
+
+    #[test]
     fn watchdog_closes_only_an_open_inactive_menu() {
         let now = Instant::now();
         let mut menu = MenuCapture::closed(now);
@@ -1113,7 +1262,7 @@ mod tests {
             WatchdogAction::None
         );
         let (control, _peer) = UnixStream::pair().expect("local control pair");
-        menu.opened(control, now);
+        menu.opened(control, now, false);
         assert_eq!(
             watchdog_action(
                 &menu,

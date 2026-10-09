@@ -83,7 +83,13 @@ behind the game window. There is no
 desktop menu window. The helper owns the pointer: while the menu is open it
 grabs every mouse through the kernel so the game receives no pointer input, and
 streams coalesced `MENU MOVE`/`MENU BUTTON` events over the replay control
-socket; the daemon hit-tests them and answers `OK GRAB`/`OK RELEASE`. Escape,
+socket. Each opening refreshes the readable mouse devices, replacing handles
+whose input nodes disappeared (for example after a mouse reconnects). After
+grabbing all mice, the helper discards queued gameplay input
+before forwarding menu events, so an earlier click cannot dismiss or activate
+the newly opened menu. Queue cleanup is bounded; a read failure or queue that
+does not become empty releases all mice and uses view-only mode. The daemon
+hit-tests menu events and answers `OK GRAB`/`OK RELEASE`. Escape,
 any unrelated key (so Alt+Tab is never stranded), the helper's inactivity
 timeout, and the daemon's command watchdog all release the mice and close the
 menu. Capture teardown also closes the menu, and a subsequent pointer ping
@@ -94,8 +100,9 @@ shortcuts remain active, and the shortcuts panel reports that pointer control
 is unavailable; a transient kernel mouse-grab failure uses the same fallback
 instead of cancelling the menu. Composite keyboard interfaces are evaluated in
 one bounded chord window so modifier and function-key reader scheduling cannot
-drop a configured chord. Pressing the assigned menu chord again or any unrelated
-key closes it. The menu renders even
+drop a configured chord. View-only mode sends menu heartbeats but does not
+forward input from unowned mice. Pressing the assigned menu chord again or any
+unrelated key closes it. The menu renders even
 when the metrics overlay is hidden. Its bounded game-rendered surface and control
 outlines use rounded corners, and measured labels are centered within their
 cells so scaling cannot push shortcut or status text across a divider. The menu

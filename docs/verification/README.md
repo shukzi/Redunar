@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 9 Replay menu pointer lifecycle](2026-10-09-replay-menu.md): removed
+  mouse handles, stale input and view-only polling fixes; local packages built,
+  owner-confirmed installed-game menu check on CachyOS.
+
 - [October 8 ultrawide Replay and Intel temperature](2026-10-08-ultrawide.md):
   shared pixel-budget admission, Variable ceilings, package sensor discovery and
   current private-fixture/build evidence; hardware encoding remains unverified.

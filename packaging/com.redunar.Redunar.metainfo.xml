@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.18" date="2026-10-09">
+      <description>
+        <p>Fixes the in-game Replay menu disappearing immediately after opening and refreshes mouse devices when opening the menu after a reconnect.</p>
+      </description>
+    </release>
     <release version="0.1.17" date="2026-10-09">
       <description>
         <p>Uses a native desktop tray without AppIndicator, accepts ultrawide Replay sources within the existing recording budget, reads Intel CPU package temperatures, and preserves privately loaded GLX provider calls.</p>
