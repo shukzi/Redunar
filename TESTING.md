@@ -94,14 +94,64 @@ import a native Steam game and save its displayed app-specific Launch Options.
 Quit Redunar, click Play in Steam, confirm the background owner/tray (or visible
 fallback), profile, metrics, Replay readiness, save/playback and natural cleanup.
 After natural game exit, verify Steam returns to Play, Redunar releases its game
-session/launch lock, one history entry appears, and background Redunar stays
-reachable. Verify Redunar's parent is the user manager rather than the game
+session/launch lock and one history entry appears. With Close to tray disabled,
+automatic startup must keep the main window hidden and create a temporary tray
+icon without changing the preference; game exit must quit that automatic owner
+and remove the icon after successful cleanup. Open Redunar from the temporary
+tray: the window must appear, the icon must disappear and the app must remain
+running after game exit. Manually started Redunar with Close to tray disabled
+must create no icon.
+While a game is live, open Redunar, then close its window with Close to tray
+disabled. The app must return to a temporary tray entry without ending Replay
+or the session, then quit/remove the icon after natural game exit and cleanup.
+Repeat after reopening: the temporary icon must disappear and the app stay
+running; closing again must restore exit after the game. Repeat with Redunar
+started manually before Steam. Idle close with the setting off must still quit.
+If tray registration is unavailable, live-game close must keep the window
+reachable and show an error. Explicit tray Quit retains its existing End/cleanup
+path and must not kill the game.
+Repeat after restoring and clicking or typing in the window: Redunar must remain
+running. Automatic compositor focus at startup or after game exit must not
+prevent exit when the window was otherwise unused.
+Enabled Close to tray keeps the hidden/tray owner available after game exit;
+a missing tray host uses the unfocused taskbar fallback. Verify Redunar's parent
+is the user manager rather than the game
 reaper. Do not mistake process-group separation for independent ownership.
 Repeat with Redunar already open and with an unsaved-in-Steam option edit; a
 second active game must continue without taking the first session. Test End and
 Quit without killing the game. Flatpak Steam and NVIDIA success remain outside
 ordinary fixture evidence. Do not run these hardware/installation checks without
 authorization.
+
+Native lifecycle fixtures cover completion before GTK attachment, callback
+dispatch without webview polling or ownership locks, stale/duplicate completion,
+new-launch/shutdown arbitration, End while the game remains live, current tray
+preferences, corrupt preference reads, failed history recording and explicit
+retry. These use fake snapshots and test-owned processes/state. The isolated
+startup probe exercises the production Tauri/GTK calls with no desktop tray host:
+
+```sh
+cargo build --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --example steam_background_probe --target-dir .redunar-build/checks/tauri
+python3 tools/check-steam-background.py
+```
+
+The runner uses a private bus without host service activation, private runtime
+and temporary directories, and allocates displays sequentially. Fake-host cases
+check hidden startup with either preference, temporary-icon removal on Open,
+unchanged preferences and retention. Missing-host cases check fallback reachability,
+no startup focus request/actual focus and removal of a disabled preference's
+temporary icon after the window becomes reachable. Additional cases force native focus without input, then
+send real X11 key/button events through GTK to the webview using the fixture-only
+system XTest library: focus alone must leave exit
+eligible, while input must retain the app. Passive focus/map/pointer events are
+covered by the native event classification test. Native parking cases exercise
+Close/Open/Close, both preferences, a manual owner, unavailable registration and
+canceled pending close with a simulated live-game service callback; no game or
+capture process is created. The supervisor fixtures distinguish live ownership
+after End from completion with failed history. Xvfb without a window manager
+does not establish a compositor's minimize/taskbar behavior; the live matrix above
+remains separate acceptance. See the [October 9 task](docs/verification/2026-10-09-steam-auto-exit-task.md)
+and [verification evidence](docs/verification/2026-10-09-steam-auto-exit.md).
 
 ## GLX loader forwarding fixtures
 

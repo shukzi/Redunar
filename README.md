@@ -17,8 +17,15 @@ button above Game settings. Paste the value into that game's Steam
 **Properties → General → Launch Options**, then click **Play in Steam**. Redunar
 prepares the saved game profile and starts in the background if closed, using the
 Linux user service manager. If that manager is unavailable, open Redunar before
-pressing Play. Open or Quit it from its tray icon; a
-desktop without a working tray shows the main window. Replay still depends on
+pressing Play. Automatic startup stays in the tray. With Close to tray disabled,
+its temporary icon disappears when the game closes and session cleanup succeeds.
+Opening Redunar removes the temporary icon and keeps its window available.
+With Close to tray enabled, it remains in the tray after game exit. A desktop
+without a working tray uses a window fallback without requesting focus.
+Closing Redunar's window during a running game also keeps it in the tray until
+the game ends. With Close to tray disabled, it then quits unless reopened.
+See [DESIGN](DESIGN.md) for the complete lifetime rules.
+Replay still depends on
 actual hardware/runtime capabilities. Flatpak Steam capture remains unsupported.
 See [architecture](ARCHITECTURE.md) and [hardware support](HARDWARE-SUPPORT.md).
 

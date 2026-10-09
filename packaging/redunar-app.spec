@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.18
+Version:        0.1.19
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,11 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Fri Oct 09 2026 Redunar <local@redunar.invalid> - 0.1.19-1.local
+- Use a temporary tray icon for automatic Steam startup and live-game window close.
+- Quit background owners after game cleanup when Close to tray is disabled.
+- Ignore compositor focus when retaining an automatic owner.
+
 * Fri Oct 09 2026 Redunar <local@redunar.invalid> - 0.1.18-1.local
 - Fix the in-game Replay menu closing immediately after opening.
 - Refresh mouse devices and discard stale input before menu interaction.

@@ -60,8 +60,8 @@ Paths below are relative to `output/tauri-redunar/`:
 
 | Flow | Main files |
 | --- | --- |
-| Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs` |
-| Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
+| Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs`, `window_lifecycle.rs` |
+| Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `session_lifecycle.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
 | Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
@@ -165,10 +165,36 @@ An unavailable user manager leaves the original game command usable; an already
 open Redunar can prepare capture without this startup dependency.
 Startup and request I/O each have ten-second bounds and failures
 leave the original game command usable. Concurrent starters retain the existing
-backend-owner lease; a background secondary exits before GTK setup. The hidden
-owner has a temporary Open/Quit tray icon without saving Close to tray; an
-unavailable provider/registration exposes its main window. It stays available
-for subsequent games until Quit. The request listener stops on shutdown, removes
+backend-owner lease; a background secondary exits before GTK setup. Automatic
+Steam startup keeps the main window hidden and provides Open/Quit in the tray,
+including a temporary icon when Close to tray is disabled. This exception does
+not change the saved preference. Opening Redunar removes the temporary icon and
+retains the app; enabled Close to tray retains its normal icon. An unavailable
+tray provider/registration requests a minimized window without activation, then
+removes a disabled preference's temporary icon once that fallback is reachable.
+After a game exits, successful session cleanup and history recording emit a native
+completion edge. An automatic owner exits when Close to tray is disabled and the
+user has not used its main window or chosen Open. Native button/key/touch/scroll
+input and explicit Open actions retain the owner; compositor focus and passive
+pointer movement do not. Manually started owners, retained windows and enabled
+Close to tray remain running unless the user closes their foreground window
+during a live owned game. That close creates/restores the tray entry and hides
+only after verifying usable registration, without ending the session or Replay.
+Closing relinquishes foreground ownership, including manual startup: disabled
+Close to tray quits after successful natural completion; enabled keeps the tray
+owner. Open cancels the pending close/exit and restores saved icon visibility.
+An unavailable tray keeps the window reachable with an error. Duplicate close
+tickets supersede older requests, and input/Open cancels pending parking.
+Cleanup/history or preference
+read failures reveal the window for attention. Completion carries a session
+generation; shutdown claims the session lock before quitting so stale completion
+cannot terminate a newer game. No extra polling worker or persisted flag is added.
+Manual startup creates an icon only when Close to tray is enabled. Input
+observation covers the native fallback window and webview without consuming events
+or retaining an AppHandle cycle. If observation setup fails, automatic exit is
+disabled. Startup neither changes Close to tray nor counts its own map or focus
+as user interaction; actual minimize/focus policy belongs to the compositor.
+The request listener stops on shutdown, removes
 only its own socket inode, and does not attach to already-running games.
 Startup cleanup reaps only the short service-manager client, never the app or an
 existing owner. The transient service is collected on app exit; no unit is

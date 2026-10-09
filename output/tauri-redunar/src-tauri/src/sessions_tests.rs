@@ -1,4 +1,6 @@
 use super::*;
+#[path = "sessions_background_tests.rs"]
+mod background;
 use redunar_core::{
     CpuSnapshot, GameProcess, GlobalGameProfile, GpuSnapshot, PerGameProfile, SystemSnapshot,
 };
@@ -825,7 +827,7 @@ fn external_steam_uses_existing_process_and_end_retains_lock_until_exit() {
 }
 
 #[test]
-fn external_steam_natural_exit_releases_session_while_background_owner_stays_alive() {
+fn external_steam_natural_exit_releases_session_and_notifies_background_owner() {
     let mut f = Fixture::new();
     // These are separate test-owned processes, as with a user-manager-owned
     // app and Steam's game reaper. No real app, Steam or renderer is launched.
@@ -864,6 +866,10 @@ fn external_steam_natural_exit_releases_session_while_background_owner_stays_ali
     assert_eq!(
         f.engine.service.game_session_coordinator().status().phase,
         GameSessionPhase::Ended
+    );
+    assert_eq!(
+        f.engine.lifecycle.pending.take().unwrap().outcome,
+        crate::session_lifecycle::Outcome::Finished
     );
     assert!(owner.try_wait().unwrap().is_none());
     owner.kill().unwrap();

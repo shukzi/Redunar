@@ -1,6 +1,8 @@
 //! Native regressions in an isolated D-Bus/Xvfb session. Uses fixture preferences
 //! and a pipe-only helper; never opens input devices or changes host settings.
 #![allow(dead_code)]
+#[path = "../src/background_start.rs"]
+mod background_start;
 #[path = "../src/hotkeys.rs"]
 mod hotkeys;
 #[path = "../src/tray.rs"]

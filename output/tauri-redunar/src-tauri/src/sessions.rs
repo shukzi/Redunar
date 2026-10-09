@@ -26,9 +26,12 @@ pub struct Sessions {
     worker: Mutex<Option<JoinHandle<()>>>,
     steam: Mutex<Option<redunar_platform::SteamSessionBroker>>,
 }
+type LifecycleHandler = Arc<dyn Fn(crate::session_lifecycle::Event) + Send + Sync>;
+
 struct Shared {
     engine: Mutex<Engine>,
     wake: Condvar,
+    lifecycle_handler: Mutex<Option<LifecycleHandler>>,
 }
 
 struct ActiveLaunch {
@@ -160,6 +163,7 @@ pub(crate) struct Engine {
     pub message: Option<String>,
     pub history_revision: u64,
     shutdown: bool,
+    pub(crate) lifecycle: crate::session_lifecycle::Lifecycle,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -187,31 +191,9 @@ impl Sessions {
         let shared = Arc::new(Shared {
             engine: Mutex::new(Engine::new(service)),
             wake: Condvar::new(),
+            lifecycle_handler: Mutex::new(None),
         });
-        let work = shared.clone();
-        let worker = std::thread::Builder::new()
-            .name("redunar-sessions".into())
-            .spawn(move || {
-                let mut engine = lock(&work.engine);
-                loop {
-                    if engine.shutdown {
-                        break;
-                    }
-                    if engine.active.is_some() {
-                        engine.tick(&monitor.snapshot());
-                        engine = work
-                            .wake
-                            .wait_timeout(engine, POLL_INTERVAL)
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .0;
-                    } else {
-                        engine = work
-                            .wake
-                            .wait(engine)
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    }
-                }
-            })?;
+        let worker = start_worker(shared.clone(), move || monitor.snapshot())?;
         let steam = if !lock(&shared.engine).service.is_read_only() {
             let weak = Arc::downgrade(&shared);
             let bind = (|| {
@@ -271,6 +253,20 @@ impl Sessions {
         read(&lock(&self.shared.engine))
     }
 
+    pub(crate) fn set_lifecycle_handler(
+        &self,
+        handler: impl Fn(crate::session_lifecycle::Event) + Send + Sync + 'static,
+    ) {
+        *lock(&self.shared.lifecycle_handler) = Some(Arc::new(handler));
+        // Hold the engine lock so a completion during setup cannot lose this wake.
+        let _engine = lock(&self.shared.engine);
+        self.shared.wake.notify_one();
+    }
+
+    pub(crate) fn prepare_background_exit(&self, generation: u64) -> Result<bool, String> {
+        lock(&self.shared.engine).prepare_background_exit(generation)
+    }
+
     pub fn launch(&self, game_id: &str) -> Result<(), String> {
         let mut engine = lock(&self.shared.engine);
         engine.ensure_idle()?;
@@ -314,6 +310,9 @@ impl Sessions {
     }
 
     pub fn shutdown(&self) {
+        // The desktop callback captures its AppHandle. Clear it explicitly so
+        // managed session state cannot keep the exited app alive through a cycle.
+        lock(&self.shared.lifecycle_handler).take();
         // Stop accepting new launches before ending the worker and backend.
         if let Some(mut steam) = lock(&self.steam).take() {
             steam.shutdown();
@@ -326,6 +325,46 @@ impl Sessions {
     }
 }
 
+fn start_worker(
+    work: Arc<Shared>,
+    monitor: impl Fn() -> Arc<MonitorSnapshot> + Send + 'static,
+) -> std::io::Result<JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("redunar-sessions".into())
+        .spawn(move || {
+            let mut engine = lock(&work.engine);
+            loop {
+                if engine.shutdown {
+                    break;
+                }
+                if engine.active.is_some() {
+                    engine.tick(&monitor());
+                }
+                let handler = lock(&work.lifecycle_handler).clone();
+                if let Some(handler) = handler {
+                    if let Some(event) = engine.lifecycle.pending.take() {
+                        // Handlers can read session state or request shutdown;
+                        // neither callback nor GTK scheduling owns these locks.
+                        drop(engine);
+                        handler(event);
+                        engine = lock(&work.engine);
+                        continue;
+                    }
+                }
+                engine = if engine.active.is_some() {
+                    work.wake
+                        .wait_timeout(engine, POLL_INTERVAL)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .0
+                } else {
+                    work.wake
+                        .wait(engine)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                };
+            }
+        })
+}
+
 impl Engine {
     fn new(service: RedunarService) -> Self {
         Self {
@@ -335,10 +374,32 @@ impl Engine {
             message: None,
             history_revision: 0,
             shutdown: false,
+            lifecycle: crate::session_lifecycle::Lifecycle::default(),
         }
+    }
+
+    fn prepare_background_exit(&mut self, generation: u64) -> Result<bool, String> {
+        if self.launch_locked() || !self.lifecycle.can_exit(generation) {
+            return Ok(false);
+        }
+        if self
+            .service
+            .app_preferences()
+            .map_err(|error| format!("Could not check Close to tray: {error}"))?
+            .close_to_tray
+        {
+            return Ok(false);
+        }
+        // Claim shutdown while holding the same lock as Steam attachment. A
+        // newer launch either wins this lock or is rejected before capture starts.
+        self.shutdown = true;
+        Ok(true)
     }
     pub fn launch_locked(&self) -> bool {
         self.active.is_some() || self.shutdown
+    }
+    pub(crate) fn has_live_game(&self) -> bool {
+        self.active.as_ref().is_some_and(|active| !active.completed)
     }
     pub fn can_end(&self) -> bool {
         self.active
@@ -445,6 +506,7 @@ impl Engine {
         if capture {
             let _ = session.update_overlay_config(&plan.profile);
         }
+        self.lifecycle.started();
         self.active = Some(ActiveLaunch {
             child,
             ownership: plan.ownership,
@@ -610,6 +672,7 @@ impl Engine {
                 .is_some_and(|a| a.cleanup_done && a.history_written)
             {
                 self.active = None;
+                self.lifecycle.finished();
             }
         }
     }
@@ -666,11 +729,14 @@ impl Engine {
             self.message = Some(format!(
                 "Session ended with pending work: {error}. Use End session to retry."
             ));
+            self.lifecycle
+                .needs_attention(self.message.clone().expect("cleanup failure message"));
         } else {
             self.message = active.exit_failure.clone().or_else(|| Some(if !active.confirmed { "Steam launch was not confirmed. Redunar released its session resources; the game may still start." } else if active.completed { "Game session ended." } else { "Redunar's session ended. The game can keep running." }.into()));
         }
         if result.is_ok() && active.completed {
             self.active = None;
+            self.lifecycle.finished();
         }
         result
     }

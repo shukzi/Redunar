@@ -14,10 +14,12 @@ mod media_tools;
 mod playback;
 mod profiles;
 mod runtime;
+mod session_lifecycle;
 mod sessions;
 mod tray;
 mod tray_native;
 mod updates;
+mod window_lifecycle;
 use tauri::Manager;
 
 const APP_ID: &str = "com.redunar.Redunar";
@@ -97,6 +99,7 @@ fn tauri_context(read_only_instance: bool, background: bool) -> tauri::Context<t
     if background {
         if let Some(window) = context.config_mut().app.windows.first_mut() {
             window.visible = false;
+            window.focus = false;
         }
     }
     if read_only_instance {
@@ -217,9 +220,6 @@ fn main() {
     let app = tauri::Builder::default()
         .setup(move |app| {
             tray::setup(app)?;
-            if background {
-                background_start::prepare_window(app.handle());
-            }
             app.state::<hotkeys::ShortcutMonitor>()
                 .set_app_handle(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
@@ -241,6 +241,13 @@ fn main() {
                     }
                 }
             }
+            if background {
+                // Restore geometry before hidden Steam/tray startup.
+                background_start::prepare_window(app.handle());
+            } else {
+                background_start::track_window_input(app.handle());
+            }
+            session_lifecycle::install(app.handle());
             // Shortcut monitoring is native and app-lifetime scoped. If the
             // user's evdev permissions are unavailable, the rest of the app
             // remains usable and the UI reports the monitor as unavailable.
@@ -258,11 +265,20 @@ fn main() {
                 // Capture the final usable geometry once when the window is
                 // actually closing instead.
                 persist_window_state(window);
-                // Only intercept close when the user explicitly enabled
-                // close-to-tray. Otherwise let Tauri perform its normal close
-                // and ExitRequested/Exit lifecycle so WebKit can shut down
-                // in order.
-                if tray::close_to_tray(window.app_handle()) {
+                // A live game keeps its session and Replay owner even when the
+                // foreground window closes. Idle close still follows preference.
+                if window.label() == "main"
+                    && window
+                        .app_handle()
+                        .state::<sessions::Sessions>()
+                        .read(|engine| engine.has_live_game())
+                {
+                    api.prevent_close();
+                    window_lifecycle::close_for_game(
+                        window.app_handle(),
+                        session_lifecycle::settle_closed_game,
+                    );
+                } else if tray::close_to_tray(window.app_handle()) {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -273,6 +289,7 @@ fn main() {
         .manage(playback::Playback::default())
         .manage(backend::Monitor(std::sync::Mutex::new(monitor)))
         .manage(sessions)
+        .manage(background_start::State::new(background))
         .invoke_handler(tauri::generate_handler![
             backend::daemon_status,
             backend::diagnostics_snapshot,
@@ -375,6 +392,7 @@ mod identity_tests {
         assert!(primary.config().app.windows[0].visible);
         let background = super::tauri_context(false, true);
         assert!(!background.config().app.windows[0].visible);
+        assert!(!background.config().app.windows[0].focus);
         let secondary = super::tauri_context(true, false);
         assert_eq!(secondary.config().identifier, APP_ID);
         assert!(!secondary.config().app.enable_gtk_app_id);

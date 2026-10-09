@@ -373,7 +373,7 @@ function settings() {
  return heading('Settings','Desktop preferences and software updates.')+
 `<div class="settings-grid settings-page">
  <section class="panel settings-preferences"><div class="settings-card-heading"><h2>Preferences</h2><p>Choose how Redunar runs on this device.</p></div>
-  ${preferenceRow('Close to tray','Keep Redunar running when you close the window.','Use the tray menu to reopen or quit Redunar. The tray icon is removed immediately when this is off.','tray',preferences.tray===true)}
+  ${preferenceRow('Close to tray','Keep Redunar running when you close the window.','Use the tray menu to reopen or quit Redunar. When this is off, Steam startup and closing the window during a game use a temporary tray icon. Redunar quits when the game ends unless you reopen it.','tray',preferences.tray===true)}
   ${preferenceRow('Beta access','Try early features included in this build.','Changes take effect after restarting Redunar.','beta-access',preferences.betaAccess===true)}
   ${preferenceRow('Debug log','Record operational messages for support.',`Logs can include game names and session details. <span id="diagnostic-log-status">${escape(diagnosticStatus(preferences.diagnosticLogStatus,preferences.diagnosticLog))}</span>`,'diagnostic-log',preferences.diagnosticLog===true,preferences.diagnosticLogPath?`<button class="button settings-log-action" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:'')}
  </section>

@@ -79,8 +79,25 @@ configured” and a Play instruction. Other ambiguous reasons, unavailable setup
 and failed checks retain explanations and Check again. Setup confirmation never
 implies capture is ready, and no Steam restart is required. Import the
 game once to select its saved profile. Steam setup explains Play in Steam and
-automatic background startup. An unavailable tray exposes the main window;
-temporary background startup does not change the saved Close to tray preference.
+automatic background startup. An automatically started app stays hidden in the
+tray, with a temporary icon even when Close to tray is disabled. Opening Redunar
+removes that temporary icon and keeps the app available; the saved preference
+is unchanged. An unavailable tray uses a minimized window fallback without
+requesting focus. Manual startup shows a tray icon only when Close to tray is enabled.
+An automatically started app exits after game exit and successful session/history
+cleanup when Close to tray is disabled and the user never used its window.
+Clicking, typing, touching or scrolling in Redunar, or choosing Open from its tray,
+keeps it available. Focus alone does not: a tiling desktop can focus the window
+automatically at startup or game exit. An already running app also stays running.
+Cleanup failures show the window for attention. Startup never
+changes the saved Close to tray preference.
+Closing Redunar's window during a live game returns it to the tray and keeps
+Replay/session ownership active, including with Close to tray disabled. With
+that setting disabled, the closed-window owner quits after the game ends and
+cleanup succeeds. Reopening keeps it available; closing again restores automatic
+exit. An unavailable tray keeps the window visible. When no game is owned,
+closing follows the saved preference normally. Explicit Quit remains available
+in the tray and ends Redunar's session without killing the game.
 Executable, literal arguments (one per line), and working directory use the
 native validation flow. Do not turn launch arguments into a shell command.
 
@@ -136,6 +153,8 @@ the system package manager. Cancellation keeps the verified package ready to
 retry. Settings reports completion only after the installed package version
 is confirmed and says when a restart is needed.
 Close to tray immediately controls tray icon visibility and closing behavior.
+Steam automatic startup and live-game window close have the temporary-icon
+exceptions described above.
 The native StatusNotifier tray needs a desktop tray host. Closing hides only
 while Redunar can verify its own usable registration; tray loss restores the
 window. KDE and DMS provide compatible hosts; GNOME needs a compatible extension.

@@ -1,5 +1,12 @@
 # Verification evidence
 
+- [October 9 temporary tray and live-game window close](2026-10-09-steam-temporary-tray.md):
+  revised startup and close policy, compositor-focus regression, current private
+  fixtures and production build; installed-game acceptance remains separate.
+
+- [October 9 initial Steam automatic exit](2026-10-09-steam-auto-exit.md):
+  historical first implementation and installation, superseded after owner testing.
+
 - [October 9 Replay menu pointer lifecycle](2026-10-09-replay-menu.md): removed
   mouse handles, stale input and view-only polling fixes; local packages built,
   owner-confirmed installed-game menu check on CachyOS.
