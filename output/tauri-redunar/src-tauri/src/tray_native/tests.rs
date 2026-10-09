@@ -330,6 +330,32 @@ fn request(
     )
 }
 
+fn assert_connection_removed(peer: &gio::DBusConnection, connection: &gio::DBusConnection) {
+    // GIO closes the transport synchronously, but its connection-closed flag and
+    // the bus's name removal can arrive later on their separate workers. Require
+    // the socket closed immediately, then bounded confirmation from both instead
+    // of assuming the first NameHasOwner reply has observed the disconnect.
+    assert!(
+        connection.stream().is_closed(),
+        "tray shutdown left its transport open"
+    );
+    let name = connection.unique_name().unwrap();
+    settle(|| {
+        connection.is_closed()
+            && request(
+                peer,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "NameHasOwner",
+                &(name.as_str(),).to_variant(),
+            )
+            .unwrap()
+            .get::<(bool,)>()
+                == Some((false,))
+    });
+}
+
 #[test]
 fn real_objects_export_icon_menu_and_typed_actions_without_indicator_library() {
     let bus = Bus::new();
@@ -429,20 +455,9 @@ fn real_objects_export_icon_menu_and_typed_actions_without_indicator_library() {
     );
     assert_eq!(host.state.lock().unwrap().registrations, 1);
     assert_eq!(host.state.lock().unwrap().observed.len(), 1);
+    let connection = tray.bus.clone();
     drop(tray);
-    assert_eq!(
-        request(
-            &peer,
-            "org.freedesktop.DBus",
-            "/org/freedesktop/DBus",
-            "org.freedesktop.DBus",
-            "NameHasOwner",
-            &(name.as_str(),).to_variant()
-        )
-        .unwrap()
-        .get::<(bool,)>(),
-        Some((false,))
-    );
+    assert_connection_removed(&peer, &connection);
 }
 
 #[test]
@@ -505,21 +520,9 @@ fn repeated_connections_remove_the_previous_item_and_bus_loss_recovers() {
     for _ in 0..3 {
         let (tray, _) = client(&bus);
         settle(|| tray.registered());
-        let name = tray.bus.unique_name().unwrap();
+        let connection = tray.bus.clone();
         drop(tray);
-        assert_eq!(
-            request(
-                &peer,
-                "org.freedesktop.DBus",
-                "/org/freedesktop/DBus",
-                "org.freedesktop.DBus",
-                "NameHasOwner",
-                &(name.as_str(),).to_variant()
-            )
-            .unwrap()
-            .get::<(bool,)>(),
-            Some((false,))
-        );
+        assert_connection_removed(&peer, &connection);
     }
     let (tray, actions) = client(&bus);
     settle(|| tray.registered());

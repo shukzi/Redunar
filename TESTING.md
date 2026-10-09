@@ -20,6 +20,20 @@ at these source shapes require separate acceptance.
 See the [October 8 verification](docs/verification/2026-10-08-ultrawide.md) for
 the current build, checks and remaining hardware acceptance.
 
+## Native tray fixtures
+
+The Tauri test suite exports real StatusNotifierItem and DBusMenu objects on
+private D-Bus instances with fake watchers and hosts. It covers registration,
+menu actions, host/owner/bus loss, delayed replies, repeated connections and
+failed startup without changing the desktop tray or app preferences.
+
+Cleanup checks require the connection's transport to be closed immediately after
+tray shutdown. The existing three-second fixture deadline then requires GIO's
+closed notification and the bus's removal of that unique name. Disconnect
+notifications and requests from a different connection run on separate workers;
+the first NameHasOwner reply does not establish failed cleanup. A socket left
+open or a name retained beyond the deadline still fails acceptance.
+
 ## Steam Play entry point
 
 The [October 5 combined live check](docs/verification/2026-10-05-combined-live-check.md)
