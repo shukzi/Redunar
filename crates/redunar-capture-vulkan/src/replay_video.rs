@@ -15,6 +15,7 @@ static ENCODER_TEARDOWN_INCOMPLETE: std::sync::atomic::AtomicBool =
 
 pub use conversion::VulkanVideoH264Encoder;
 
+use crate::device_extensions::{EnumerateDeviceExtensionProperties, VkExtensionProperties};
 use crate::ffi::{
     PfnVoidFunction, VK_SUCCESS, VkAllocationCallbacks, VkBuffer, VkBufferCreateInfo, VkDevice,
     VkDeviceCreateInfo, VkDeviceMemory, VkDeviceQueueCreateInfo, VkExtent2d, VkExtent3d,
@@ -36,7 +37,6 @@ const DRM_FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
 const DRM_FORMAT_XBGR8888: u32 = u32::from_le_bytes(*b"XB24");
 const DRM_FORMAT_ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
 const MAX_PHYSICAL_DEVICES: usize = 16;
-const MAX_DEVICE_EXTENSIONS: usize = 256;
 const MAX_QUEUE_FAMILIES: usize = 64;
 const VK_STRUCTURE_TYPE_APPLICATION_INFO: i32 = 0;
 const VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO: i32 = 1;
@@ -897,21 +897,6 @@ struct VkPhysicalDeviceFeatures2 {
 }
 
 #[repr(C)]
-struct VkExtensionProperties {
-    extension_name: [c_char; 256],
-    spec_version: u32,
-}
-
-impl Default for VkExtensionProperties {
-    fn default() -> Self {
-        Self {
-            extension_name: [0; 256],
-            spec_version: 0,
-        }
-    }
-}
-
-#[repr(C)]
 struct VkQueueFamilyProperties2 {
     s_type: i32,
     p_next: *mut c_void,
@@ -1359,12 +1344,6 @@ type EnumeratePhysicalDevices =
     unsafe extern "system" fn(VkInstance, *mut u32, *mut VkPhysicalDevice) -> VkResult;
 type GetPhysicalDeviceFeatures2 =
     unsafe extern "system" fn(VkPhysicalDevice, *mut VkPhysicalDeviceFeatures2);
-type EnumerateDeviceExtensionProperties = unsafe extern "system" fn(
-    VkPhysicalDevice,
-    *const c_char,
-    *mut u32,
-    *mut VkExtensionProperties,
-) -> VkResult;
 type GetQueueFamilyProperties2 =
     unsafe extern "system" fn(VkPhysicalDevice, *mut u32, *mut VkQueueFamilyProperties2);
 type GetPhysicalDeviceVideoCapabilities = unsafe extern "system" fn(
@@ -2777,43 +2756,12 @@ unsafe fn device_extensions(
     device: VkPhysicalDevice,
     enumerate: EnumerateDeviceExtensionProperties,
 ) -> Result<Vec<String>, i32> {
-    let mut count = 0_u32;
-    // SAFETY: count storage is valid and no layer name requests global device extensions.
-    let result = unsafe { enumerate(device, ptr::null(), &raw mut count, ptr::null_mut()) };
-    if result != VK_SUCCESS {
-        return Err(result);
-    }
-    let count = usize::try_from(count)
-        .unwrap_or(MAX_DEVICE_EXTENSIONS + 1)
-        .min(MAX_DEVICE_EXTENSIONS);
-    let mut properties: Vec<VkExtensionProperties> =
-        std::iter::repeat_with(VkExtensionProperties::default)
-            .take(count)
-            .collect();
-    let mut output_count = u32::try_from(count).unwrap_or(0);
-    // SAFETY: the bounded vector provides storage for `output_count` records.
-    let result = unsafe {
-        enumerate(
-            device,
-            ptr::null(),
-            &raw mut output_count,
-            properties.as_mut_ptr(),
-        )
-    };
-    if result != VK_SUCCESS {
-        return Err(result);
-    }
-    properties.truncate(
-        usize::try_from(output_count)
-            .unwrap_or(0)
-            .min(properties.len()),
-    );
+    // SAFETY: the caller supplies the live device and its dispatch function.
+    let properties = unsafe { crate::device_extensions::enumerate(device, enumerate) }?;
     Ok(properties
         .iter()
         .filter_map(|property| {
-            // SAFETY: Vulkan guarantees a terminated extensionName array.
-            unsafe { CStr::from_ptr(property.extension_name.as_ptr()) }
-                .to_str()
+            std::str::from_utf8(property.name_bytes())
                 .ok()
                 .map(str::to_owned)
         })

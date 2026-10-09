@@ -38,6 +38,11 @@ Record process scope, host, driver, build, workload, duration, and method.
 
 ## Replay bounds
 
+Vulkan device-extension discovery allocates at most 1,024 fixed 260-byte records
+per attempt, with four count/fill attempts for an unstable list. Queries run at
+device preparation or encoder startup, outside presentation and UI polling.
+See [capture and encoding](REPLAY.md#capture-and-encoding) for capability policy.
+
 The current capture/encode pipeline has four conversion/encode slots. Vulkan
 uses a fifth export handoff context. OpenGL uses six release-gated slots per
 context: one handoff for encoder completion and a second for SDL swap dispatch.

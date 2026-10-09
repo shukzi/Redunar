@@ -20,6 +20,20 @@ at these source shapes require separate acceptance.
 See the [October 8 verification](docs/verification/2026-10-08-ultrawide.md) for
 the current build, checks and remaining hardware acceptance.
 
+## Replay save layout and extension discovery
+
+Fake Vulkan driver fixtures cover complete lists above the old 256-entry encoder
+limit, count/fill growth (`VK_INCOMPLETE`), shrinkage, empty lists, oversized or
+persistently unstable lists, invalid written counts and preserved driver errors.
+Both capture export and encoder discovery use the shared helper. Native/Node
+fixtures distinguish pending frames from explicit failures and source rejection.
+The production WebKit fixture compares save-control positions across all eight
+durations at wide and compact widths, including assigned/unassigned and cleared
+shortcuts; saves remain disabled for pending or failed recording.
+
+See the [October 9 follow-up](docs/verification/2026-10-09-replay-save-nvidia.md)
+for dated checks and remaining NVIDIA hardware acceptance.
+
 ## Replay menu pointer fixtures
 
 The shortcut helper's fake mouse fixtures cover queued gameplay clicks/motion

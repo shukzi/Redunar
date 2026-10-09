@@ -58,6 +58,13 @@ within the existing pixel budget and discovers Intel package temperature; see
 [Replay source limits](REPLAY.md#capture-and-encoding). This report does not
 qualify NVIDIA encoding or identify the separate KDE/X11 launch failure.
 
+On October 9, the supplied 0.1.19 debug log confirmed an NVIDIA Vulkan producer
+and first source frame, followed by repeated device-extension enumeration result
+`5` (`VK_INCOMPLETE`) before encoder creation. No encoded packet was recorded.
+The extension query fix removes the encoder's smaller 256-entry limit and adds
+bounded retries; fake-driver checks do not establish successful NVIDIA encoding.
+See the [October 9 Replay follow-up](docs/verification/2026-10-09-replay-save-nvidia.md).
+
 The retained AMD baseline was recorded on Fedora 44, Ryzen 7 5800X, Radeon RX 6800 XT/Navi 21,
 using RADV with Vulkan Video support exposed by its installed Mesa build.
 Historical controlled probes cover native Wayland/XCB presentation, packed

@@ -56,6 +56,7 @@ pub struct ReplayRuntimeDto {
     can_save: bool,
     failure: Option<String>,
     unavailable_reason: Option<String>,
+    pending_reason: Option<String>,
     received_frame_count: u64,
     encoded_packet_count: u64,
     audio_packet_count: u64,
@@ -156,6 +157,7 @@ pub fn replay_runtime_status() -> Result<ReplayRuntimeDto, String> {
         coordinator.status().phase,
         redunar_daemon::GameSessionPhase::Launching | redunar_daemon::GameSessionPhase::Running
     );
+    let reasons = replay_status_reasons(rejection, active_game, status.phase);
     Ok(ReplayRuntimeDto {
         phase: format!("{:?}", status.phase),
         capability: format!("{:?}", status.capability),
@@ -167,11 +169,8 @@ pub fn replay_runtime_status() -> Result<ReplayRuntimeDto, String> {
             && status.recorder_health == redunar_daemon::ReplayRecorderHealth::Healthy
             && status.buffered_duration_ns >= 1_000_000_000,
         failure: status.last_failure.map(replay_failure_copy),
-        unavailable_reason: matches!(
-            status.phase,
-            redunar_daemon::ReplayPhase::Unavailable | redunar_daemon::ReplayPhase::Inactive
-        )
-        .then(|| replay_unavailable_copy(rejection, active_game, status.phase).to_owned()),
+        unavailable_reason: reasons.unavailable.map(str::to_owned),
+        pending_reason: reasons.pending.map(str::to_owned),
         received_frame_count: status.received_frame_count,
         encoded_packet_count: status.encoded_packet_count,
         audio_packet_count: status.audio_packet_count,
@@ -186,8 +185,12 @@ fn replay_failure_copy(failure: redunar_daemon::ReplayFailure) -> String {
         ReplayFailure::FrameSourceLost => {
             "The game stopped sending Replay frames. Restart the game through Redunar.".into()
         }
-        ReplayFailure::EncoderFailed | ReplayFailure::ContainerFailed => {
-            "The video encoder stopped. Check Replay hardware support, then relaunch the game."
+        ReplayFailure::EncoderFailed => {
+            "The video encoder failed. Check Replay hardware support, then relaunch the game."
+                .into()
+        }
+        ReplayFailure::ContainerFailed => {
+            "Replay could not package the recorded video. Relaunch the game to restart recording."
                 .into()
         }
         ReplayFailure::StorageFailed => {
@@ -197,6 +200,32 @@ fn replay_failure_copy(failure: redunar_daemon::ReplayFailure) -> String {
             "Replay exceeded its resource limit. Lower the recording resolution or frame rate."
                 .into()
         }
+    }
+}
+
+struct ReplayStatusReasons {
+    unavailable: Option<&'static str>,
+    pending: Option<&'static str>,
+}
+
+fn replay_status_reasons(
+    rejection: Option<redunar_daemon::ReplaySourceRejection>,
+    active_game: bool,
+    phase: redunar_daemon::ReplayPhase,
+) -> ReplayStatusReasons {
+    use redunar_daemon::ReplayPhase;
+    // A missing first frame is pending, not proof of incompatible hardware.
+    // Explicit source rejection remains an error even with an inactive recorder.
+    let unavailable = (phase == ReplayPhase::Unavailable
+        || (phase == ReplayPhase::Inactive && rejection.is_some()))
+    .then(|| replay_unavailable_copy(rejection, active_game, phase));
+    let pending = (phase == ReplayPhase::Inactive && active_game && unavailable.is_none())
+        .then_some(
+        "Waiting for recordable game frames. Game startup or a display change can pause Replay.",
+    );
+    ReplayStatusReasons {
+        unavailable,
+        pending,
     }
 }
 
@@ -223,14 +252,53 @@ fn replay_unavailable_copy(
             "This game's graphics surface cannot be recorded. Try another display mode.",
         None if active_game && phase == redunar_daemon::ReplayPhase::Unavailable =>
             "Replay hardware is unavailable for this session. Check GPU and driver support; metrics remain available.",
-        None if active_game =>
-            "Waiting for recordable game frames. Try another display mode or relaunch the game through Redunar.",
         None => "Launch a supported game through Redunar to start Replay.",
     }
 }
 
 #[cfg(test)]
 mod replay_copy_tests {
+    use redunar_daemon::{ReplayFailure, ReplayPhase, ReplaySourceRejection};
+
+    #[test]
+    fn awaiting_frames_is_pending_but_source_rejection_remains_unavailable() {
+        let waiting = super::replay_status_reasons(None, true, ReplayPhase::Inactive);
+        assert!(waiting.pending.is_some());
+        assert!(waiting.unavailable.is_none());
+        let idle = super::replay_status_reasons(None, false, ReplayPhase::Inactive);
+        assert!(idle.pending.is_none());
+        assert!(idle.unavailable.is_none());
+        for phase in [ReplayPhase::Inactive, ReplayPhase::Unavailable] {
+            let rejected = super::replay_status_reasons(
+                Some(ReplaySourceRejection::DimensionsUnsupported),
+                true,
+                phase,
+            );
+            assert!(rejected.pending.is_none());
+            assert!(rejected.unavailable.unwrap().contains("resolution"));
+        }
+        let unsupported = super::replay_status_reasons(None, true, ReplayPhase::Unavailable);
+        assert!(unsupported.pending.is_none());
+        assert!(unsupported.unavailable.unwrap().contains("hardware"));
+        for phase in [
+            ReplayPhase::Buffering,
+            ReplayPhase::Saving,
+            ReplayPhase::Failed,
+        ] {
+            let status = super::replay_status_reasons(None, true, phase);
+            assert!(status.pending.is_none());
+            assert!(status.unavailable.is_none());
+        }
+    }
+
+    #[test]
+    fn container_failure_is_not_reported_as_an_encoder_failure() {
+        assert!(super::replay_failure_copy(ReplayFailure::EncoderFailed).contains("encoder failed"));
+        let packaging = super::replay_failure_copy(ReplayFailure::ContainerFailed);
+        assert!(packaging.contains("package the recorded video"));
+        assert!(!packaging.contains("encoder"));
+    }
+
     #[test]
     fn rejected_dimensions_explain_resolution_and_rate() {
         assert_eq!(super::replay_unavailable_copy(

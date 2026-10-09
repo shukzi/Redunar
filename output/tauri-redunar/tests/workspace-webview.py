@@ -40,6 +40,8 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
  if(command==='session_status')return {phase:'Running',game:games[0].name,can_end:true,launch_locked:true,elapsed_seconds:1938,captures_saved:3,profile_label:'Session profile',feature_summary:'Metrics enabled · replay enabled',restoration:'NotRequired',history_revision:1,measurements:{revision:bridge.revision,average_fps:141,frame_time_ms:7.1,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000+Math.round(Math.sin(bridge.revision)*700000)],phase:'Live'}};
  if(command==='replay_runtime_status'&&bridge.replayUnavailable)return {phase:'Unavailable',can_save:false,buffered_seconds:0,unavailable_reason:fixtureResolutionRejection};
+ if(command==='replay_runtime_status'&&bridge.replayFailure)return {phase:'Failed',can_save:false,buffered_seconds:0,failure:'The video encoder failed. Check Replay hardware support, then relaunch the game.'};
+ if(command==='replay_runtime_status'&&bridge.replayWaiting)return {phase:'Inactive',can_save:false,buffered_seconds:0,pending_reason:'Waiting for recordable game frames. Game startup or a display change can pause Replay.'};
  if(command==='replay_runtime_status'&&bridge.replayInactive)return {phase:'Inactive',can_save:false,buffered_seconds:0};
  if(command==='replay_runtime_status')return {phase:'Buffering',can_save:true,buffered_seconds:30,received_frame_count:600,encoded_packet_count:600,audio_packet_count:1500,audio_byte_count:4500,audio_active:true,completed_save_revision:1};
  if(command==='module_statuses')return structuredClone(bridge.modules);
@@ -124,6 +126,20 @@ try:
     test('Resolution rejection explains game resolution and recording rate',"check(q('#replay-phase').textContent.includes(\"Lower the game's resolution or recording frame rate\"),'actionable resolution/rate');check(!q('#replay-phase').textContent.includes('window size'),'fullscreen-independent copy');check(document.documentElement.scrollWidth<=innerWidth,'no page overflow');")
     snap('ultrawide-resolution-rejection')
     js('bridge.replayUnavailable=false');wait_for("q('#replay-status-title').textContent==='Ready to save'")
+    test('Save duration changes keep controls beside the shortcut at wide widths',"window.saveRow=q('.replay-save-row');window.saveButton=q('[data-action=save-replay]');window.saveSelect=q('#save-duration');window.saveButtonX=saveButton.getBoundingClientRect().left;window.saveSelectX=saveSelect.nextElementSibling.getBoundingClientRect().left;for(const option of saveSelect.options){saveSelect.value=option.value;saveSelect.dispatchEvent(new Event('change',{bubbles:true}));check(q('.replay-save-row')===saveRow&&q('[data-action=save-replay]')===saveButton,'controls stay mounted');check(Math.abs(saveButton.getBoundingClientRect().left-saveButtonX)<1,'save position stable');check(Math.abs(saveSelect.nextElementSibling.getBoundingClientRect().left-saveSelectX)<1,'duration position stable');check(q('#save-replay-shortcut').hidden===(option.value!=='30'),'only assigned duration shows shortcut');}saveSelect.value='30';saveSelect.dispatchEvent(new Event('change',{bubbles:true}));")
+    js("q('#toast').hidden=true;q('.replay-save-row').scrollIntoView({block:'center'})");pump();snap('replay-save-assigned')
+    js("q('#save-duration').value='120';q('#save-duration').dispatchEvent(new Event('change',{bubbles:true}))");snap('replay-save-unassigned')
+    window.resize(640,950);pump()
+    test('Compact save controls stay inside the card across durations',"const row=q('.replay-save-row').getBoundingClientRect(),button=q('[data-action=save-replay]'),select=q('#save-duration');const before=button.getBoundingClientRect();for(const option of select.options){select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));const rect=button.getBoundingClientRect();check(Math.abs(rect.left-before.left)<1&&Math.abs(rect.top-before.top)<1,'compact controls do not move');check(rect.left>=row.left&&rect.right<=row.right,'save button fits');check(q('.replay-shortcut-slot').getBoundingClientRect().right<=row.right,'shortcut fits');}check(document.documentElement.scrollWidth<=innerWidth,'no horizontal overflow');q('.replay-save-row').scrollIntoView({block:'center'});")
+    pump();snap('replay-save-compact')
+    window.resize(1440,1000);pump()
+    js("bridge.replayWaiting=true");wait_for("q('#replay-status-title').textContent==='Waiting for Replay frames'")
+    test('Waiting frame source uses pending styling and disables save',"check(q('#replay-status-dot').dataset.status==='pending','not a hardware error');check(q('[data-action=save-replay]').disabled,'no save without frames');")
+    js("q('.window-content').scrollTo(0,0)");pump();snap('replay-waiting')
+    js('bridge.replayFailure=true');wait_for("q('#replay-status-dot').dataset.status==='error'")
+    test('Encoder failure remains visible over pending status',"check(q('#replay-phase').textContent.includes('video encoder failed'),'encoder error preserved');check(q('[data-action=save-replay]').disabled,'failed encoder cannot save');")
+    snap('replay-encoder-failure')
+    js('bridge.replayFailure=false;bridge.replayWaiting=false');wait_for("q('#replay-status-title').textContent==='Ready to save'")
     route('overview')
     test('Overview uses settings for visibility and points to Steam setup',"check(!q('[data-action=session-overlay]'),'no duplicate live button');check(q('#steam-capture-guide a').getAttribute('href')==='#library','setup link');check(q('#steam-capture-guide').hidden,'guide hidden during session');")
     js('bridge.idle=true');wait_for("!q('#steam-capture-guide').hidden")
@@ -230,6 +246,10 @@ try:
     test('Clear all removes every shortcut without changing replay settings',"click('[data-action=clear-shortcuts]');check([...document.querySelectorAll('[data-shortcut]')].every(i=>i.value===''),'all fields blank');click('[data-action=save-global]');",350)
     test('Empty shortcut set saves and disables keyboard activation',"const saved=bridge.calls.findLast(c=>c.command==='save_shortcuts');check(Object.values(saved.args.shortcuts).every(v=>!v),'empty assignments submitted');check(q('#toast').textContent.includes('All shortcuts cleared'),'clear feedback');check(!q('[data-action=save-global]')||q('[data-action=save-global]').disabled,'saved shortcuts clean');")
     snap('shortcuts-cleared')
+    route('replay')
+    test('Cleared save shortcuts leave no empty badge column',"check(q('.replay-shortcut-slot').hidden,'no reserved space without save bindings');check(q('#save-replay-shortcut').hidden,'no blank shortcut');check(!q('[data-action=save-replay]').disabled,'app save remains available');q('.replay-save-row').scrollIntoView({block:'center'});")
+    pump();snap('replay-save-cleared')
+    route('global');js("click('[data-global-tab=shortcuts]')");pump()
     test('Save shortcut works without a menu shortcut',"const input=document.querySelectorAll('[data-shortcut]')[1];input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'F8',bubbles:true}));click('[data-action=save-global]');",350)
     test('Menu can be reassigned after clearing all shortcuts',"const saved=bridge.calls.findLast(c=>c.command==='save_shortcuts');check(saved.args.shortcuts['15']==='F8'&&!saved.args.shortcuts.overlay,'save-only binding');const input=q('[data-shortcut]');input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'T',ctrlKey:true,shiftKey:true,bubbles:true}));click('[data-action=save-global]');",350)
     js("click('[data-global-tab=replay]')");pump()

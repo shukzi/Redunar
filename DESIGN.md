@@ -208,6 +208,12 @@ Successful in-game saves use the bottom-left Moment saved pill with saved length
 and Local library, even when the metrics display is hidden.
 An unavailable Replay state uses one stable, actionable reason from native
 capture or encoder status; an inactive recorder never implies a populated buffer.
+Waiting for the first recordable frames during an active game is pending, rather
+than a hardware error. Explicit source rejection or recorder failure remains an
+error and saving stays disabled until a healthy buffer is available.
+The app's Save recent gameplay row keeps the duration, Save replay button and
+optional shortcut together. Duration changes preserve control positions; reserve
+the longest saved duration shortcut's width only while save bindings exist.
 
 The in-game metrics overlay and Replay menu follow the approved modern
 reference: soft rounded panels, quiet letter-spaced labels above bright

@@ -5,6 +5,7 @@
 //! work to the next Vulkan layer or driver. It does not draw, tune, upload, or
 //! alter swapchains.
 
+mod device_extensions;
 mod dispatch;
 pub mod fd_transport;
 mod ffi;
@@ -53,7 +54,6 @@ const QUEUE_PRESENT: &[u8] = b"vkQueuePresentKHR\0";
 const GET_INSTANCE_PROC_ADDR: &[u8] = b"vkGetInstanceProcAddr\0";
 const GET_DEVICE_PROC_ADDR: &[u8] = b"vkGetDeviceProcAddr\0";
 const NEGOTIATE_INTERFACE: &[u8] = b"vkNegotiateLoaderLayerInterfaceVersion\0";
-const MAX_DEVICE_EXTENSIONS: usize = 1_024;
 const VULKAN_API_VERSION_1_1: u32 = (1 << 22) | (1 << 12);
 const FOREIGN_QUEUE_EXTENSION: &[u8] = c"VK_EXT_queue_family_foreign".to_bytes_with_nul();
 const QUEUE_WAIT_IDLE: &[u8] = c"vkQueueWaitIdle".to_bytes_with_nul();
@@ -61,27 +61,7 @@ const DEVICE_WAIT_IDLE: &[u8] = c"vkDeviceWaitIdle".to_bytes_with_nul();
 const ACQUIRE_NEXT_IMAGE: &[u8] = c"vkAcquireNextImageKHR".to_bytes_with_nul();
 const ACQUIRE_NEXT_IMAGE_2: &[u8] = c"vkAcquireNextImage2KHR".to_bytes_with_nul();
 
-#[repr(C)]
-struct VkExtensionProperties {
-    extension_name: [c_char; 256],
-    spec_version: u32,
-}
-
-impl Default for VkExtensionProperties {
-    fn default() -> Self {
-        Self {
-            extension_name: [0; 256],
-            spec_version: 0,
-        }
-    }
-}
-
-type PfnEnumerateDeviceExtensionProperties = unsafe extern "system" fn(
-    VkPhysicalDevice,
-    *const c_char,
-    *mut u32,
-    *mut VkExtensionProperties,
-) -> VkResult;
+use crate::device_extensions::EnumerateDeviceExtensionProperties as PfnEnumerateDeviceExtensionProperties;
 
 #[unsafe(export_name = "vkNegotiateLoaderLayerInterfaceVersion")]
 unsafe extern "system" fn negotiate_loader_layer_interface_version(
@@ -562,46 +542,12 @@ unsafe fn enumerate_device_extensions(
     physical_device: VkPhysicalDevice,
     enumerate: PfnEnumerateDeviceExtensionProperties,
 ) -> Option<Vec<Vec<u8>>> {
-    let mut count = 0_u32;
-    if unsafe {
-        enumerate(
-            physical_device,
-            std::ptr::null(),
-            &raw mut count,
-            std::ptr::null_mut(),
-        )
-    } != VK_SUCCESS
-    {
-        return None;
-    }
-    let count = usize::try_from(count).ok()?.min(MAX_DEVICE_EXTENSIONS);
-    let mut properties: Vec<VkExtensionProperties> = std::iter::repeat_with(Default::default)
-        .take(count)
-        .collect();
-    let mut written = u32::try_from(count).ok()?;
-    if unsafe {
-        enumerate(
-            physical_device,
-            std::ptr::null(),
-            &raw mut written,
-            properties.as_mut_ptr(),
-        )
-    } != VK_SUCCESS
-    {
-        return None;
-    }
-    properties.truncate(usize::try_from(written).ok()?.min(properties.len()));
+    // SAFETY: the caller supplies the live device and its dispatch function.
+    let properties = unsafe { device_extensions::enumerate(physical_device, enumerate) }.ok()?;
     Some(
         properties
-            .into_iter()
-            .map(|property| {
-                let bytes = property.extension_name.map(i8::cast_unsigned);
-                let end = bytes
-                    .iter()
-                    .position(|&byte| byte == 0)
-                    .unwrap_or(bytes.len());
-                bytes[..end].to_vec()
-            })
+            .iter()
+            .map(|property| property.name_bytes().to_vec())
             .collect(),
     )
 }

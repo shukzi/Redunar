@@ -152,6 +152,11 @@ match never selects another GPU. OpenGL additionally needs one physical render
 GPU for its context's vendor to select the GBM allocator. Unknown topology and
 multiple NVIDIA GPUs remain withheld. This is an unverified beta path, not an
 NVIDIA recording guarantee.
+Capture export and encoder discovery share a complete device-extension query:
+up to 1,024 entries and four count/fill attempts when Vulkan returns
+`VK_INCOMPLETE`. A larger or persistently changing list fails closed; a partial
+list never establishes support. Required extensions and device identity still
+gate encoder creation.
 When Debug log was enabled before launch, NVIDIA encoder startup reports
 allowlisted stages, readiness, bounded capability rejection reasons, exact known
 missing extension names, source identity availability/match, and numeric Vulkan

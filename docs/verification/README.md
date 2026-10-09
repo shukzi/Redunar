@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 9 Replay save layout and NVIDIA extension discovery](2026-10-09-replay-save-nvidia.md):
+  stable duration controls, pending/error status and bounded complete Vulkan
+  extension queries; successful NVIDIA encoding still needs hardware acceptance.
+
 - [October 9 temporary tray and live-game window close](2026-10-09-steam-temporary-tray.md):
   revised startup and close policy, compositor-focus regression, current private
   fixtures and production build; installed-game acceptance remains separate.

@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.20" date="2026-10-09">
+      <description>
+        <p>Keeps Replay save controls aligned when changing duration, distinguishes pending frames from errors, and fixes incomplete Vulkan extension discovery for the NVIDIA beta encoder.</p>
+      </description>
+    </release>
     <release version="0.1.19" date="2026-10-09">
       <description>
         <p>Uses a temporary tray icon for automatic Steam startup and closing Redunar during a game. With Close to tray disabled, Redunar quits after the game ends unless reopened.</p>

@@ -305,6 +305,12 @@ omits GPU measurements. UUIDs are private, never persisted in session history
 or printed in diagnostics. The app and both capture sidecars must be rebuilt
 together; older wire versions are rejected. Profile/history formats are unchanged.
 
+`crates/redunar-capture-vulkan/src/device_extensions.rs` owns bounded, complete
+extension discovery for both the producer and Vulkan Video encoder. The native
+Replay DTO distinguishes pending first frames from explicit source rejection;
+the UI keeps recorder failures ahead of pending copy and enables saving only
+from native recorder health.
+
 The UI plots retained timestamps without smoothing or synthetic endpoints.
 History keeps the existing v1 format and filename. Readers cap the file at
 64 MiB and retain at most the newest 64 records; writes use unique private
