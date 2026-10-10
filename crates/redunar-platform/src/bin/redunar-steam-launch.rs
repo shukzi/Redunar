@@ -4,6 +4,7 @@ use redunar_platform::{
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -36,7 +37,8 @@ fn main() -> ExitCode {
             }
         }
     }
-    if is_proton_invocation(&invocation) {
+    let is_proton = is_proton_invocation(&invocation);
+    if is_proton {
         remove_opengl_preload(&mut managed);
     }
     let managed_value = |name: &str| managed.get(&OsString::from(name)).cloned();
@@ -73,9 +75,7 @@ fn main() -> ExitCode {
         command
     };
 
-    for (name, value) in managed {
-        command.env(name, value);
-    }
+    apply_managed_environment(&mut command, managed, is_proton);
     let error = command.exec();
     eprintln!("redunar-steam-launch could not start the original game command: {error}");
     ExitCode::from(if error.kind() == std::io::ErrorKind::NotFound {
@@ -88,13 +88,15 @@ fn main() -> ExitCode {
 fn is_proton_invocation(invocation: &Invocation) -> bool {
     std::iter::once(&invocation.command)
         .chain(invocation.arguments.iter())
-        .filter_map(|value| value.to_str())
-        .map(str::to_ascii_lowercase)
         .any(|value| {
-            value == "proton"
-                || value.ends_with("/proton")
-                || value.contains("/pressure-vessel")
-                || value.contains("/steam-runtime")
+            let lower = value
+                .as_bytes()
+                .iter()
+                .map(|byte| byte.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            lower
+                .split(|byte| *byte == b'/')
+                .any(|component| component == b"proton")
         })
 }
 
@@ -112,6 +114,19 @@ fn remove_opengl_preload(managed: &mut BTreeMap<OsString, OsString>) {
         _ => {
             managed.remove(OsStr::new("LD_PRELOAD"));
         }
+    }
+}
+
+fn apply_managed_environment(
+    command: &mut Command,
+    managed: BTreeMap<OsString, OsString>,
+    clear_inherited_preload: bool,
+) {
+    if clear_inherited_preload {
+        command.env_remove("LD_PRELOAD");
+    }
+    for (name, value) in managed {
+        command.env(name, value);
     }
 }
 
@@ -236,6 +251,42 @@ mod tests {
             managed.get(OsStr::new("LD_PRELOAD")),
             Some(&OsString::from("/usr/lib/game.so"))
         );
+    }
+
+    #[test]
+    fn native_pressure_vessel_invocation_keeps_opengl_capture() {
+        let invocation = Invocation {
+            app_id: None,
+            command: OsString::from("/usr/bin/pressure-vessel-wrap"),
+            arguments: vec![
+                OsString::from("--runtime=/home/user/.steam/steam-runtime"),
+                OsString::from("/games/native-game"),
+            ],
+        };
+
+        assert!(!is_proton_invocation(&invocation));
+    }
+
+    #[test]
+    fn non_utf8_proton_path_is_detected() {
+        let invocation = Invocation {
+            app_id: None,
+            command: OsString::from("/usr/bin/pressure-vessel-wrap"),
+            arguments: vec![OsString::from_vec(b"/steam/runtime-\xff/proton".to_vec())],
+        };
+
+        assert!(is_proton_invocation(&invocation));
+    }
+
+    #[test]
+    fn clearing_proton_environment_removes_inherited_preload() {
+        let mut command = Command::new("/usr/bin/env");
+        command.env("LD_PRELOAD", "/run/redunar/libredunar_capture_opengl.so");
+        apply_managed_environment(&mut command, BTreeMap::new(), true);
+
+        let output = command.output().expect("env should run");
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("LD_PRELOAD="));
     }
 
     #[test]
