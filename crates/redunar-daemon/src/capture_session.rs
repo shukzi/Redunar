@@ -810,11 +810,13 @@ impl CaptureSessionHandle {
         .with_overlay_branding(effective.overlay_branding)
         .with_replay_requested(replay.is_requested())
         .with_replay_frame_rate(replay.frame_rate());
-        if let Some(library) = self.configured_opengl_library() {
-            environment = environment
-                .with_opengl_library(library)
-                .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
-        }
+        // A Steam Play launch does not exec the game directly: Steam starts
+        // steam-launch-wrapper, pressure-vessel, and Proton before the game.
+        // An LD_PRELOAD interposer therefore enters that whole native helper
+        // chain. The OpenGL sidecar exports global dlsym/GLX/SDL symbols and
+        // can prevent Proton's X11 startup before the Windows game exists.
+        // Vulkan capture remains enabled through the explicit layer below;
+        // keep the OpenGL sidecar for direct native launches only.
         environment = environment
             .with_overlay_telemetry_path(&self.overlay_telemetry_path)
             .map_err(|error| CaptureSessionError::owned(error.to_string()))?;
