@@ -50,6 +50,16 @@ have fake-library coverage, not NVIDIA hardware evidence. See the
 
 ## Recorded evidence and remaining gates
 
+On October 10, I received confirmation that PR #2 was tested on X11;
+the PR reports ARC Raiders opening with its
+overlay. The tester's installed binary and sidecar hashes were not supplied.
+The current integration incorporates contributor revision `d8c3e91` and adds
+private fixtures for native-runtime detection, non-UTF-8 Proton paths and
+selective preload cleanup, including unavailable activation. The reported
+X11 test remains reported evidence; installed-game acceptance of the
+corrected integration and NVIDIA encoding remain unverified.
+See the [integration task](docs/verification/2026-10-10-steam-x11-task.md).
+
 On October 8, the owner relayed an RTX 3090 Ti / Intel Core i9-12900K tester's
 working GPU detection and in-game metrics, absent CPU temperature and Replay
 rejection at 5120×1440. The installed build/driver were not provided, and no

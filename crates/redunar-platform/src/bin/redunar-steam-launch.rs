@@ -4,8 +4,9 @@ use redunar_platform::{
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
@@ -35,6 +36,9 @@ fn main() -> ExitCode {
                 ),
             }
         }
+    }
+    if is_proton_invocation(&invocation) {
+        remove_opengl_preload(&mut managed);
     }
     let managed_value = |name: &str| managed.get(&OsString::from(name)).cloned();
     let use_gamescope = managed_value("REDUNAR_GAMESCOPE")
@@ -80,6 +84,44 @@ fn main() -> ExitCode {
     } else {
         126
     })
+}
+
+fn is_proton_invocation(invocation: &Invocation) -> bool {
+    // Steam Runtime and pressure-vessel also launch native games. Only a
+    // Proton interpreter in the literal argv disables the GL interposer.
+    std::iter::once(&invocation.command)
+        .chain(invocation.arguments.iter())
+        .any(|value| {
+            Path::new(value)
+                .file_name()
+                .is_some_and(|name| name.as_bytes().eq_ignore_ascii_case(b"proton"))
+        })
+}
+
+fn remove_opengl_preload(managed: &mut BTreeMap<OsString, OsString>) {
+    let Some(preload) = managed.get(OsStr::new("LD_PRELOAD")).cloned() else {
+        return;
+    };
+    let mut retained = OsString::new();
+    // The Linux loader accepts both spaces and colons, including in inherited
+    // entries. Keep path bytes intact and remove only Redunar's GL library.
+    for entry in preload
+        .as_bytes()
+        .split(|byte| *byte == b':' || *byte == b' ')
+        .filter(|entry| !entry.is_empty())
+    {
+        let entry = OsStr::from_bytes(entry);
+        if Path::new(entry).file_name() == Some(OsStr::new("libredunar_capture_opengl.so")) {
+            continue;
+        }
+        if !retained.is_empty() {
+            retained.push(":");
+        }
+        retained.push(entry);
+    }
+    // An empty override is intentional: dropping the update would restore
+    // the child's inherited preload, including a different Redunar copy.
+    managed.insert(OsString::from("LD_PRELOAD"), retained);
 }
 
 fn broker_socket_path() -> Option<PathBuf> {
@@ -181,6 +223,97 @@ mod tests {
                 OsString::from("--"),
             ])
             .is_none()
+        );
+    }
+
+    #[test]
+    fn proton_commands_disable_only_redunar_opengl_preload() {
+        let invocation = Invocation {
+            app_id: None,
+            command: OsString::from("/steam/compatibilitytools.d/Proton/proton"),
+            arguments: Vec::new(),
+        };
+        assert!(is_proton_invocation(&invocation));
+        let mut managed = [(
+            OsString::from("LD_PRELOAD"),
+            OsString::from("/run/redunar/libredunar_capture_opengl.so:/usr/lib/game.so"),
+        )]
+        .into_iter()
+        .collect();
+        remove_opengl_preload(&mut managed);
+        assert_eq!(
+            managed.get(OsStr::new("LD_PRELOAD")),
+            Some(&OsString::from("/usr/lib/game.so"))
+        );
+    }
+
+    #[test]
+    fn native_commands_keep_redunar_opengl_preload() {
+        let invocation = Invocation {
+            app_id: None,
+            command: OsString::from("/games/native-game"),
+            arguments: Vec::new(),
+        };
+        assert!(!is_proton_invocation(&invocation));
+    }
+
+    #[test]
+    fn native_runtime_commands_are_not_proton() {
+        for command in [
+            "/steam/ubuntu12_32/steam-runtime/run.sh",
+            "/steam/SteamLinuxRuntime_sniper/pressure-vessel/bin/pv-bwrap",
+        ] {
+            let invocation = Invocation {
+                app_id: None,
+                command: OsString::from(command),
+                arguments: vec![OsString::from("/games/native-game")],
+            };
+            assert!(!is_proton_invocation(&invocation));
+        }
+    }
+
+    #[test]
+    fn nested_non_utf8_proton_paths_are_recognized() {
+        let proton = OsString::from_vec(b"/steam/disk-\xff/Proton/proton".to_vec());
+        for invocation in [
+            Invocation {
+                app_id: None,
+                command: proton.clone(),
+                arguments: Vec::new(),
+            },
+            Invocation {
+                app_id: None,
+                command: OsString::from("/steam/steam-launch-wrapper"),
+                arguments: vec![OsString::from("--"), proton],
+            },
+        ] {
+            assert!(is_proton_invocation(&invocation));
+        }
+    }
+
+    #[test]
+    fn preload_filter_preserves_foreign_bytes_and_clears_redunar_copies() {
+        let mut managed = [(
+            OsString::from("LD_PRELOAD"),
+            OsString::from_vec(
+                b"/new/libredunar_capture_opengl.so:/game-\xff.so /old/libredunar_capture_opengl.so:/other.so".to_vec(),
+            ),
+        )]
+        .into_iter()
+        .collect();
+        remove_opengl_preload(&mut managed);
+        assert_eq!(
+            managed.get(OsStr::new("LD_PRELOAD")),
+            Some(&OsString::from_vec(b"/game-\xff.so:/other.so".to_vec()))
+        );
+        managed.insert(
+            OsString::from("LD_PRELOAD"),
+            OsString::from("/new/libredunar_capture_opengl.so /old/libredunar_capture_opengl.so"),
+        );
+        remove_opengl_preload(&mut managed);
+        assert_eq!(
+            managed.get(OsStr::new("LD_PRELOAD")),
+            Some(&OsString::new())
         );
     }
 }

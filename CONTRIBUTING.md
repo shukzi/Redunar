@@ -35,6 +35,17 @@ in `output/tauri-redunar` and `cargo fetch --locked` for both Cargo manifests
 before running the offline checks. These bootstrap commands download dependencies.
 Never link another checkout's mutable build outputs into the worktree.
 
+Before the first compatibility build with a new pinned base image, prepare the
+build image while network access is available:
+
+```sh
+podman build --pull=missing --network=host --tag localhost/redunar-build-glibc-2.36:bookworm --file packaging/build-images/glibc-2.36.Containerfile packaging/build-images
+```
+
+This downloads only build dependencies into a rootless container image. The
+documented validation/release commands then use the cached image without network
+access; no application installation or runtime acceptance is part of bootstrap.
+
 ## Build and state isolation
 
 | Output | Checkout-relative location |

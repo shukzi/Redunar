@@ -18,6 +18,12 @@ the game exits without holding Steam's Running status. If this startup capabilit
 is unavailable, launch Redunar before pressing Play; the game still launches.
 See [the bootstrap ownership contract](ARCHITECTURE.md#catalog-profiles-and-installation).
 
+Proton Steam launches use the prepared Vulkan capture path without Redunar's
+OpenGL interposer in the compatibility-tool startup chain. Native Linux Steam
+games retain OpenGL capture, including through Steam Runtime. This does not add
+OpenGL capture to Proton games; Vulkan/encoder capability gates still apply.
+See [capture runtime ownership](ARCHITECTURE.md#metrics-and-history).
+
 The prepared Vulkan or supported desktop-OpenGL runtime also permits
 showing/hiding metrics during that game.
 Hiding metrics does not dismantle capture or disable future visibility changes.

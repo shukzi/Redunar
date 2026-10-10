@@ -75,6 +75,20 @@ open or a name retained beyond the deadline still fails acceptance.
 
 ## Steam Play entry point
 
+The packaged-wrapper preload fixtures use private one-shot brokers and fake
+commands to check native Steam Runtime/pressure-vessel launches, direct and
+nested Proton paths with non-UTF-8 bytes, inherited Redunar copies, mixed
+space/colon preload lists, unrelated libraries, preserved Vulkan/session fields
+and fail-open activation. Fixture library paths do not exist; no game, GPU or
+graphics library is opened. Full validation includes these tests:
+
+```sh
+cargo test --locked --offline -p redunar-platform --bin redunar-steam-launch --test steam_preload --test steam_play --target-dir .redunar-build/checks/root
+```
+
+The [October 10 task](docs/verification/2026-10-10-steam-x11-task.md) records
+the PR integration and the boundary of the friend's reported X11 check.
+
 The [October 5 combined live check](docs/verification/2026-10-05-combined-live-check.md)
 records the Vulkan symbol-preemption regression, corrected bounded fixture,
 local/unpacked shortcut-helper lookup, package checks and current AMD evidence.

@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 10 Steam X11 launch integration](2026-10-10-steam-x11.md):
+  contributor update, selective preload cleanup, real-wrapper fixtures and
+  offline compatibility/package checks; installed-game acceptance remains separate.
+
 - [October 9 Replay save layout and NVIDIA extension discovery](2026-10-09-replay-save-nvidia.md):
   stable duration controls, pending/error status and bounded complete Vulkan
   extension queries; successful NVIDIA encoding still needs hardware acceptance.

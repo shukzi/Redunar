@@ -258,7 +258,14 @@ through a child-only `LD_PRELOAD` entry that
 preserves inherited entries and is never installed as a global graphics
 provider. Native Steam activation carries both private capture libraries through
 the same bounded one-shot wrapper protocol; the OpenGL library is copied into
-the session directory already shared with the Steam Linux runtime. Flatpak
+the session directory already shared with the Steam Linux runtime. When the
+literal command/argv identifies a Proton interpreter, the wrapper removes
+Redunar OpenGL preload entries before exec and keeps Vulkan capture and unrelated
+preloads. Recognition preserves non-UTF-8 path bytes. Steam Runtime and
+pressure-vessel alone do not identify Proton: native games using those runtimes
+retain OpenGL capture. An empty preload override prevents an inherited Redunar
+copy from being restored; unavailable activation still forwards the original
+environment unchanged. Flatpak
 Steam remains a separate unsupported sandbox boundary by owner decision.
 
 Handle-specific GLX swap/context-destruction lookups retain their exact original
