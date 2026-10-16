@@ -844,6 +844,20 @@ or a host package-manager transaction with real system dependencies.
 
 ## Built interface and media
 
+The frontend refresh regressions also run against the production bundle:
+
+```sh
+xvfb-run -a python3 output/tauri-redunar/tests/performance-webview.py
+```
+
+This isolated fixture checks unchanged-status DOM identity/mutation counts across
+real polling, failure transitions, delayed startup update completion preserving
+the Replay player/filter/focus, and lazy/coalesced microphone discovery with
+retained drafts, pending/error feedback and retry. It uses fake native responses;
+it does not measure live compositor scrolling performance or open audio devices.
+See the [October 16 verification](docs/verification/2026-10-16-ui-refresh.md)
+for the exact tested source manifest, commands and current results.
+
 After building, run the relevant WebKitGTK fixture checks:
 
 ```sh

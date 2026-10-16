@@ -139,6 +139,9 @@ right of a wide settings row, below its label on narrow screens. Refresh inputs
 uses a neutral secondary button. With Microphone off, explain how to enable
 input selection; during a game, explain the session lock. Discovery errors and
 missing-input feedback occupy a separate full-width line.
+Input discovery starts on first opening this settings tab, with loading feedback
+and disabled input controls while pending. Completion and Refresh inputs update
+this field without replacing unrelated settings or clearing unsaved drafts.
 The Replay panel retains the recording-folder control and its resolved path.
 The MKV/MP4 save container may change
 during a session and applies to future saves. Menu/save shortcuts may all be

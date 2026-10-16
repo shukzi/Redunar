@@ -60,3 +60,12 @@ test('Unavailable saved microphone remains selected without inventing a default'
  const html=microphoneSelector([],{microphone_mode:'selected',microphone_source:'usb<&'},false,'Audio server unavailable');
  assert.match(html,/value="usb&lt;&amp;" selected>Saved input unavailable/);assert.match(html,/Audio server unavailable/);assert.match(html,/Refresh inputs/);assert.doesNotMatch(html,/value="default" selected/);
 });
+
+test('Pending microphone discovery retains the saved source and disables only its input controls',()=>{
+ const html=microphoneSelector([],{microphone_mode:'selected',microphone_source:'saved-usb'},false,null,true);
+ assert.match(html,/data-action="reload-microphone-devices" disabled/);
+ assert.match(html,/data-microphone-source disabled/);
+ assert.match(html,/value="saved-usb" selected/);
+ assert.match(html,/Loading microphone inputs/);
+ assert.doesNotMatch(html,/No microphone inputs found/);
+});

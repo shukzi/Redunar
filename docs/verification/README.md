@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 16 desktop refresh performance](2026-10-16-ui-refresh.md):
+  unchanged-status DOM retention, startup update isolation, lazy microphone
+  discovery, full validation and production WebKit regressions.
+
 - [October 15 workspace refinements](2026-10-15-workspace-refinements.md):
   persistent clip trash, named exports, draft retention, audio status, updater
   restart guards and integrated keyboard reconnect checks.

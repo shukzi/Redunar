@@ -56,6 +56,7 @@ let clipFilters = {search:'',game:'all',date:'all',sort:'newest',favorites:false
 let historyFilters = {search:'',game:'all',date:'all'};
 let lastTrashed = [], clipTrashFeedbackTimer = null;
 let microphoneDevices = [];
+let microphoneInputsPending = null, microphoneInputsLoaded = false;
 const pendingFavorites = new Set();
 let globalTab = 'overlay', libraryTab = 'profile';
 let preferences = {tray:null,automaticUpdates:true,diagnosticLog:false,diagnosticLogPath:null,betaAccess:false};
@@ -303,7 +304,33 @@ function globalOverlay() {
 }
 function globalReplay() {
  const folder=replayPreferences?.resolved_directory||'Loading replay folder…';
- return `<section class="panel controls-panel"><h2>Capture defaults</h2>${field('Instant replay','Buffers automatically for supported games launched through Redunar or configured Steam launch options. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Recording mode','',frameRateControl())}${field('Quality preset','Next game launch',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Next saved clip',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration <span class="auto-saved-label">Auto-saved</span>','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Microphone <span class="auto-saved-label">Auto-saved</span>','Mix your microphone input with system audio in saved clips. Applies to the next game launch; end the current session before changing this setting.',switchControl('microphone','Capture microphone',replayPreferences?.microphone_mode!=='off','replay-preference',!native||!replayPreferences||busy||Boolean(activeSession?.launch_locked)||active()))}${microphoneSelector(microphoneDevices,replayPreferences,Boolean(activeSession?.launch_locked)||Boolean(active()),errors.microphoneDevices)}${field('Replay folder <span class="auto-saved-label">Auto-saved</span>','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use default folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click <span class="auto-saved-label">Auto-saved</span>','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
+ return `<section class="panel controls-panel"><h2>Capture defaults</h2>${field('Instant replay','Buffers automatically for supported games launched through Redunar or configured Steam launch options. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Recording mode','',frameRateControl())}${field('Quality preset','Next game launch',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Next saved clip',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration <span class="auto-saved-label">Auto-saved</span>','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Microphone <span class="auto-saved-label">Auto-saved</span>','Mix your microphone input with system audio in saved clips. Applies to the next game launch; end the current session before changing this setting.',switchControl('microphone','Capture microphone',replayPreferences?.microphone_mode!=='off','replay-preference',!native||!replayPreferences||busy||Boolean(activeSession?.launch_locked)||active()))}${microphoneInputMarkup()}${field('Replay folder <span class="auto-saved-label">Auto-saved</span>','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use default folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click <span class="auto-saved-label">Auto-saved</span>','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
+}
+function microphoneInputMarkup() {
+ return microphoneSelector(microphoneDevices,replayPreferences,Boolean(activeSession?.launch_locked)||Boolean(active()),errors.microphoneDevices,Boolean(microphoneInputsPending));
+}
+function refreshMicrophoneInputField() {
+ const field=$('.microphone-device');if(!field)return;
+ const template=document.createElement('template');template.innerHTML=microphoneInputMarkup();
+ const next=template.content.firstElementChild,select=field.querySelector('select'),nextSelect=next.querySelector('select');
+ // Discovery owns only the input choices/feedback. Keep the field, focusable
+ // controls and surrounding recording draft mounted while it completes.
+ select.replaceChildren(...nextSelect.childNodes);select.disabled=nextSelect.disabled;
+ field.querySelector('[data-action="reload-microphone-devices"]').disabled=Boolean(microphoneInputsPending);
+ field.querySelector('p').textContent=next.querySelector('p').textContent;
+ field.querySelector('.microphone-device-status')?.remove();
+ const status=next.querySelector('.microphone-device-status');if(status)field.append(status);
+ enhancePrecisionSelects(field);updateObservedElements();
+}
+function reloadMicrophoneInputs() {
+ if(microphoneInputsPending)return microphoneInputsPending;
+ microphoneInputsPending=Promise.resolve().then(async()=>{
+  try{microphoneDevices=await call('microphone_inputs');delete errors.microphoneDevices;}
+  catch(error){microphoneDevices=[];errors.microphoneDevices=message(error);}
+  finally{microphoneInputsPending=null;microphoneInputsLoaded=true;refreshMicrophoneInputField();}
+ });
+ refreshMicrophoneInputField();
+ return microphoneInputsPending;
 }
 function frameRateControl() {
  const selected=Number(draft.fps);
@@ -561,6 +588,7 @@ function render() {
  if(valid==='replay'){loadVideo();scheduleClipThumbnails();}
  if(valid==='overview')scheduleClipThumbnails();
  if(valid==='global')updateHud();
+ if(native&&valid==='global'&&globalTab==='replay'&&!microphoneInputsLoaded)void reloadMicrophoneInputs();
  updateObservedElements();
  const ready=valid==='global'?loaded.global:valid==='library'?loaded.catalog:true;
  if(!native||!ready)workspace.querySelectorAll('button[data-action],input,select').forEach(el=>{if(!native||!el.dataset.action?.startsWith('reload'))el.disabled=true;});
@@ -929,7 +957,7 @@ function updateObservedElements() {
  if(shortcutFeedback){const text=shortcutStatus?.message||shortcutStatus?.last_action||'Shortcut assignments are stored locally and monitored by Redunar while the app is running.';if(shortcutFeedback.textContent!==text)shortcutFeedback.textContent=text;}
  const microphone=$('[data-replay-preference="microphone"]');
  if(microphone){microphone.checked=replayPreferences?.microphone_mode!=='off';microphone.disabled=!native||!replayPreferences||busy||Boolean(activeSession?.launch_locked)||active();}
- const microphoneSource=$('[data-microphone-source]');if(microphoneSource){microphoneSource.disabled=!native||!replayPreferences||busy||replayPreferences.microphone_mode==='off'||Boolean(activeSession?.launch_locked)||Boolean(active());enhancePrecisionSelects(microphoneSource.parentElement);}
+ const microphoneSource=$('[data-microphone-source]');if(microphoneSource){microphoneSource.disabled=!native||!replayPreferences||busy||Boolean(microphoneInputsPending)||replayPreferences.microphone_mode==='off'||Boolean(activeSession?.launch_locked)||Boolean(active());enhancePrecisionSelects(microphoneSource.parentElement);}
  const outside=$('[data-replay-preference="outside"]');if(outside)outside.disabled=!native||!replayPreferences||busy;
  const tray=$('[data-preference="tray"]');
  if(tray){tray.checked=preferences.tray===true;tray.disabled=!native||!loaded.preferences||busy;}
@@ -981,7 +1009,9 @@ function updateObservedElements() {
   slot.hidden=characters===0;
   slot.style.setProperty('--shortcut-characters',String(characters));
  }
- const summary=$('#session-capture-summary');if(summary){const content=captureSummary(runtime);if(summary.innerHTML!==content)summary.innerHTML=content;}
+ // Compare source markup with the last source markup, not serialized DOM:
+ // WebKit normalizes SVG and would otherwise replace unchanged status nodes.
+ const summary=$('#session-capture-summary');if(summary){const content=captureSummary(runtime);if(summary.captureMarkup!==content){summary.innerHTML=content;summary.captureMarkup=content;}}
  const end=$('[data-action="end-session"]');if(end)end.hidden=!active();
  const save=$('[data-action="save-replay"]');if(save)save.disabled=!native||busy||!runtime?.can_save;
  const launch=$('[data-action="launch-game"]');
@@ -1128,7 +1158,6 @@ const reloaders={
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
  'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;preferences.betaAccess=data.beta_access===true;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
- 'reload-microphone-devices':async()=>{try{microphoneDevices=await call('microphone_inputs');delete errors.microphoneDevices;}catch(error){microphoneDevices=[];errors.microphoneDevices=message(error);}},
  'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot');delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
 };
 document.addEventListener('pointerup',event=>{
@@ -1186,7 +1215,7 @@ document.addEventListener('click',event=>{
   showTrashConfirmation(item);return;
  }
  if(target.dataset.recentClip){selectedClip=target.dataset.recentClip;return;}
- if(target.dataset.action==='reload-microphone-devices'){perform(async()=>{await reloaders['reload-microphone-devices']();render();});return;}
+ if(target.dataset.action==='reload-microphone-devices'){void reloadMicrophoneInputs();return;}
  if(target.dataset.favoriteClip||target.dataset.action==='favorite-selected-clip'){const item=target.dataset.favoriteClip?clips.find(c=>c.id===target.dataset.favoriteClip):clip();if(item)saveClipDetails(item,{favorite:!item.favorite}).catch(error=>notify(message(error)));return;}
  if(target.dataset.clipScope){clipFilters.favorites=target.dataset.clipScope==='favorites';refreshClipRail();return;}
  if(target.dataset.removeClipFilter){clipFilters[target.dataset.removeClipFilter]='all';syncClipFilterFields();refreshClipRail();return;}
@@ -1456,7 +1485,7 @@ window.addEventListener('hashchange',()=>{const focusUpdates=focusUpdatesOnRende
 
 render();
     if(native){
- startRuntime({initialize:()=>Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,startPolling:poll,onError:error=>notify(message(error))});
+ startRuntime({initialize:()=>Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,updatePresentation:refreshUpdateCard,startPolling:poll,onError:error=>notify(message(error))});
 }else{
  const connectionStatus=$('#connection-status');
  if(connectionStatus)connectionStatus.textContent='Browser inspection · backend disconnected';

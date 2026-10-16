@@ -36,6 +36,20 @@ Record process scope, host, driver, build, workload, duration, and method.
 - Keep catalog/artwork/media discovery outside monitor ticks and frame callbacks.
   Bound file sizes, records, parsed arguments, worker counts, and queues.
 
+## Desktop refresh work
+
+Capture-status presentation retains the last generated markup on its mounted
+container. Compare generated strings rather than serialized `innerHTML`, which
+normalizes SVG and can turn unchanged status into a DOM replacement every poll.
+Startup update checks refresh only the update card and sidebar badge; their
+completion must not rebuild the workspace or restart clip preparation.
+
+Microphone input discovery starts when Global settings' Instant replay tab is
+first opened, outside the startup data barrier. Concurrent visits share one
+request. Discovery updates only the input choices and feedback, preserves saved
+source identity and recording drafts, and retains explicit retry after failure.
+These bounds reduce unnecessary work; they are not measured scrolling FPS.
+
 The shortcut helper has one keyboard supervisor and one stdin watcher, with a
 128-item event queue. Every 8 ms it reads at most 32 input events from each of at
 most 16 nonblocking keyboard handles. Keyboard discovery runs once per second

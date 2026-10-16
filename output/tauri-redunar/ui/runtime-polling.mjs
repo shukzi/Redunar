@@ -1,9 +1,11 @@
 // Keep update/download latency independent of native session presentation.
-export async function startRuntime({initialize, refresh, render, checkUpdates, startPolling, onError}) {
+export async function startRuntime({initialize, refresh, render, checkUpdates, updatePresentation, startPolling, onError}) {
   try { await initialize(); await refresh(); } catch (error) { onError(error); }
   render();
   startPolling();
-  void Promise.resolve().then(checkUpdates).then(render).catch(onError);
+  // The update result owns only its card/badge. Rebuilding the workspace here
+  // cancels a clip preparation or discards focus after unrelated navigation.
+  void Promise.resolve().then(checkUpdates).then(updatePresentation).catch(onError);
 }
 
 // Actions and the periodic poll share one reader. Retain at most one follow-up
