@@ -207,7 +207,13 @@ whole-app performance claim.
   Thumbnail workers remain bounded; completions update individual images.
   Basic metadata and thumbnails precede optional selected-clip packet counting.
   Thumbnail retrieval and basic metadata run concurrently so cached images can
-  paint while inspection is pending. The shared store keeps at most 256 private
+  paint while inspection is pending. Entry and rail scrolling coalesce requests
+  onto the next task without an idle debounce. Separate lanes allow at most two
+  thumbnail reads/generations and two metadata inspections at once, draining all
+  visible cards without waiting for a metadata batch or another scroll event.
+  Navigation/filter changes replace queued work; started native reads may finish,
+  and stale inventory objects cannot update the current player or card images.
+  The shared store keeps at most 256 private
   JPEGs of at most 256 KiB each, keyed by device/inode, size and modification
   timestamp. Cache hits skip FFmpeg; writes revalidate the live clip under the
   store operation lock. Rename and trash/restore retain images; deletion and

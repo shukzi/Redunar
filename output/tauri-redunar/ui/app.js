@@ -6,7 +6,7 @@ import { diagnosticStatus } from './diagnostic-status.mjs';
 import overlayPalettes from './overlay-palettes.json';
 import { mergeGameDrafts } from './game-drafts.mjs';
 import { startRuntime, latestRuntimeRefresh } from './runtime-polling.mjs';
-import { loadClipPreview } from './clip-library.mjs';
+import { clipPreviewLoader } from './clip-library.mjs';
 import { replayStatusCopy } from './replay-menu-view.mjs';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -81,13 +81,17 @@ let lastSlowRuntimeRefresh = 0;
 let shortcutStatus = {state:'Inactive',message:null,last_action:null};
 let playerDuration = 0, playerPosition = 0, pendingSeek = null, trimStart = 0, trimEnd = 0;
 let stopFilmstrip = null;
-let mediaEvents = null, thumbnailReloadRequested = false;
+let mediaEvents = null;
 let timelineDrag = null, suppressTimelineClick = false, playbackFrame = null;
 let pendingSeekTask = Promise.resolve(), cancelPendingSeek = null, seekGeneration = 0, mediaActionGeneration = 0, playRequested = false, suppressPlayerToggleClickUntil = 0;
-let exporting = false, exportPollTimer = null, thumbnailLoadInFlight = false, thumbnailLoadTimer = null, videoReady = false;
+let exporting = false, exportPollTimer = null, thumbnailLoadTimer = null, videoReady = false;
 const LIVE_TIMELINE_LIMIT = 240;
 let liveTimeline = {game:'',revision:null,values:[],times:[]};
 const call = (command,args={}) => native ? invoke(command,args) : Promise.reject(new Error('Open the native Redunar app to use the production backend.'));
+const clipPreviews=clipPreviewLoader({call,thumbnailDataUri,updateMetadata:updateClipMetadata,updateThumbnail:updateClipThumbnail,
+ current:item=>native&&clips.includes(item)&&['overview','replay'].includes(route()),
+ selected:item=>clips.includes(item)&&item.id===selectedClip&&route()==='replay',
+});
 const installation = gameInstallation(call, updateObservedElements);
 const playbackRequests = latestReplayRequest(
  fileName=>call('clip_playback_path',{fileName}),
@@ -641,6 +645,7 @@ function render() {
  document.documentElement.dataset.page=valid;
  if(valid==='replay'){loadVideo();scheduleClipThumbnails();}
  if(valid==='overview')scheduleClipThumbnails();
+ if(!['overview','replay'].includes(valid))clipPreviews.request([]);
  if(valid==='global')updateHud();
  if(native&&valid==='global'&&globalTab==='replay'&&!microphoneInputsLoaded)void reloadMicrophoneInputs();
  updateObservedElements();
@@ -706,8 +711,10 @@ function reloadSelectedClip(){
  if(viewport)viewport.scrollTop=top;
 }
 function scheduleClipThumbnails(){
- clearTimeout(thumbnailLoadTimer);
- thumbnailLoadTimer=setTimeout(()=>{thumbnailLoadTimer=null;if(['overview','replay'].includes(route()))loadClipThumbnails();},800);
+ // Coalesce a render/scroll burst without restarting a delay on every event.
+ // Cache reads should start on the next task, rather than after an idle wait.
+ if(thumbnailLoadTimer!==null)return;
+ thumbnailLoadTimer=setTimeout(()=>{thumbnailLoadTimer=null;if(['overview','replay'].includes(route()))loadClipThumbnails();},0);
 }
 function updateHud() {
  const previewScale=$('#overlay-preview-scale');if(previewScale)previewScale.textContent=draft.scale;
@@ -763,27 +770,14 @@ function thumbnailDataUri(bytes) {
  for(let offset=0;offset<values.length;offset+=0x8000)binary+=String.fromCharCode(...values.subarray(offset,offset+0x8000));
  return `data:image/jpeg;base64,${btoa(binary)}`;
 }
-async function loadClipThumbnails() {
+function loadClipThumbnails() {
  if(!native)return;
- if(thumbnailLoadInFlight){thumbnailReloadRequested=true;return;}
- thumbnailLoadInFlight=true;thumbnailReloadRequested=false;
- try{
-  // Keep the replay page responsive while FFmpeg creates previews. The rail
-  // only shows a few cards at once, so prioritize those and the selected clip.
-  const rail=$('.clip-list'),bounds=rail?.getBoundingClientRect();
-  const visible=Array.from(document.querySelectorAll('[data-clip]')).filter(card=>{const rect=card.getBoundingClientRect();return bounds&&rect.bottom>=bounds.top&&rect.top<=bounds.bottom;}).map(card=>card.dataset.clip);
-  const prioritized=[selectedClip,...(route()==='overview'?clips.slice(0,3).map(item=>item.id):visible)].filter((id,index,array)=>id&&array.indexOf(id)===index);
-  const pending=prioritized.map(id=>clips.find(item=>item.id===id)).filter(item=>item&&(item.thumbnail===null||(route()==='replay'&&item.id===selectedClip&&!item.metadataDetailed))).slice(0,4);
-  for(let offset=0;offset<pending.length;offset+=2){
-   if(!['overview','replay'].includes(route()))break;
-   await Promise.all(pending.slice(offset,offset+2).map(async item=>{
-    await loadClipPreview({item,call,thumbnailDataUri,updateMetadata:updateClipMetadata,updateThumbnail:updateClipThumbnail,selected:current=>clips.includes(current)&&current.id===selectedClip&&route()==='replay'});
-   }));
-  }
- } finally {
-  thumbnailLoadInFlight=false;
-  if(thumbnailReloadRequested&&['overview','replay'].includes(route()))scheduleClipThumbnails();
- }
+ // Keep the replay page responsive while FFmpeg creates previews. The rail
+ // only shows a few cards at once, so prioritize those and the selected clip.
+ const rail=$('.clip-list'),bounds=rail?.getBoundingClientRect();
+ const visible=Array.from(document.querySelectorAll('[data-clip]')).filter(card=>{const rect=card.getBoundingClientRect();return bounds&&rect.bottom>=bounds.top&&rect.top<=bounds.bottom;}).map(card=>card.dataset.clip);
+ const prioritized=[selectedClip,...(route()==='overview'?clips.slice(0,3).map(item=>item.id):visible)].filter((id,index,array)=>id&&array.indexOf(id)===index);
+ clipPreviews.request(prioritized.map(id=>clips.find(item=>item.id===id)).filter(Boolean));
 }
 function updateClipMetadata(item){
  if(!clips.includes(item))return;
@@ -791,6 +785,7 @@ function updateClipMetadata(item){
  if(item.id===selectedClip){const specs=$('#clip-video-specs'),meta=item.metadata;if(specs&&meta?.width&&meta?.height)specs.textContent=`${meta.width} × ${meta.height}${meta.fps?' · '+measurement(meta.fps,1)+' avg recorded FPS':''}`;}
 }
 function updateClipThumbnail(item){
+ if(!clips.includes(item))return;
  if(item.id===selectedClip&&item.thumbnail){const video=$('#clip-video');if(video)video.poster=item.thumbnail;}
  if(route()==='overview'&&item.thumbnail){const card=Array.from(document.querySelectorAll('[data-recent-clip]')).find(card=>card.dataset.recentClip===item.id);const target=card?.querySelector('.recent-thumbnail');if(target&&!target.querySelector('img')){const image=document.createElement('img');image.src=item.thumbnail;image.alt='';image.decoding='async';target.querySelector('.icon')?.replaceWith(image);}return;}
  if(route()!=='replay'||!clips.includes(item)||!item.thumbnail)return;

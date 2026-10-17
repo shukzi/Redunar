@@ -939,8 +939,13 @@ isolated data. A full 7,200-sample fixture must morph within the vertex budget,
 then restore every exact point and release temporary shapes/opacity/clock work.
 The Node clock fixture also checks exact completion and disconnected cleanup.
 
-The thumbnail fixture holds basic metadata pending while images paint, then
-checks navigation/inventory reuse and changed-file invalidation. Native store
+The thumbnail fixture measures entry-to-request delay on Overview and Instant
+Replay, holds basic metadata pending while every visible image paints, and checks
+scrolling to further cached images without releasing metadata. It also checks
+navigation/inventory reuse and changed-file invalidation. The Node queue tests
+hold basic/detailed inspection, check the independent two-worker limits, replace
+pending work on scrolling/navigation, deduplicate active requests and exercise
+read failures/retry. Native store
 tests cover persistence across reopen/rename/trash/restore, corrupt/oversized
 images, symlinks, bounds/private modes, stale worker results and permanent-delete
 cleanup. Service tests retain secondary-owner restrictions. All use private state.

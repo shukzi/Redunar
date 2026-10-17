@@ -235,14 +235,12 @@ test('Replay workspace aligns to content and limits the desktop clip rail to fou
  assert.match(css,/\.clip-browser \.thumbnail\{height:72px\}/);
  assert.match(css,/@media\(max-width:980px\)\{[\s\S]*\.clip-browser \.clip-list\{max-height:none;overflow:visible/);
 });
-test('Replay opening keeps thumbnail work bounded and playback controls wait for media readiness',()=>{
+test('Replay opening uses the preview queue and playback controls wait for media readiness',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
  assert.match(source,/const prioritized=\[selectedClip,.*:visible\)/);
- assert.match(source,/\.slice\(0,4\);/);
- assert.match(source,/function scheduleClipThumbnails\(\)/);
- assert.match(source,/thumbnailLoadTimer=setTimeout\(\(\)=>\{thumbnailLoadTimer=null;if\(\['overview','replay'\]\.includes\(route\(\)\)\)loadClipThumbnails\(\);\},800\)/);
- assert.match(source,/let exporting = false, exportPollTimer = null, thumbnailLoadInFlight = false, thumbnailLoadTimer = null, videoReady = false/);
+ // Queue bounds and entry timing are exercised by the behavioral fixtures.
+ assert.match(source,/clipPreviews\.request\(prioritized\.map/);
  assert.match(source,/videoReady=false;playRequested=false;updatePlayerUi\(\);/);
  assert.match(source,/toggle\.disabled=!videoReady\|\|exporting/);
  assert.match(source,/if\(!videoReady\|\|video\.readyState<1\)return;/);
