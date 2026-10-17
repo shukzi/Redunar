@@ -18,6 +18,15 @@ impl ReplayClipStore {
         source: &mut impl Read,
         stem: &str,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
+        self.save_named_mp4_preserving_existing_with_limit(source, stem, self.maximum_clip_bytes)
+    }
+
+    pub fn save_named_mp4_preserving_existing_with_limit(
+        &self,
+        source: &mut impl Read,
+        stem: &str,
+        maximum_output_bytes: u64,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
         let name = format!("{stem}.mp4");
         if stem.is_empty()
             || stem.trim() != stem
@@ -41,7 +50,7 @@ impl ReplayClipStore {
             let bytes = write_bounded_mp4(
                 &mut temporary,
                 source,
-                self.maximum_clip_bytes,
+                maximum_output_bytes,
                 self.storage_limit_bytes,
             )?;
             temporary
