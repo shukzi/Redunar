@@ -34,11 +34,11 @@ The full gate stages into temporary directories and checks metadata, package
 contents, installer detection, scripts, helper permissions, and the native
 privilege boundary.
 
-Installation is a separate owner-controlled action. After upgrading, fully quit
-any running Redunar/tray process and run
-`tools/check-installed-tauri-runtime.sh` before acceptance. That read-only
-check compares the installed binary and sidecars to the build; a new file on
-disk cannot update an already-running process.
+Installation and restarting the app are separate maintainer-controlled actions.
+After an authorized upgrade, compare installed components with the exact native
+package selected for that distribution and verify a fresh process loaded them,
+as described in [the release procedure](../docs/RELEASING.md#qualify-before-publication).
+A new file on disk cannot update an already-running process.
 
 ## Active layout and privilege boundary
 
@@ -47,6 +47,9 @@ disk cannot update an already-running process.
   `libredunar_capture_opengl.so` beside the app, resolved into private
   per-launch graphics capture configuration.
 - `/usr/libexec/redunar-hotkey-helper`, running as the logged-in user.
+- `/usr/libexec/redunar-update-helper` and
+  `/usr/share/polkit-1/actions/com.redunar.install-update.policy`, for the
+  explicitly authorized update installation described below.
 - `/usr/lib/udev/rules.d/70-redunar-hotkeys.rules`, giving the active graphical
   session keyboard and mouse event access through logind `uaccess`.
 - `com.redunar.Redunar.desktop`, matching AppStream metadata, canonical
@@ -59,10 +62,13 @@ launcher. Redunar's application state and recordings remain under the shared
 `redunar` state paths.
 
 The only deliberate package post-install action reloads udev and retriggers
-existing keyboard event devices so access can apply without reconnecting them.
-No Polkit policy, setuid/setgid helper, file capability, global Vulkan layer,
-Steam edit, monitoring startup, hardware-policy change, or network request belongs
-in this package. The runtime never prompts for privilege elevation.
+existing keyboard and mouse event devices so access can apply without reconnecting
+them.
+The application, capture components, and hotkey helper run as the logged-in user.
+Only an explicit update installation may request polkit authorization for the
+fixed update helper; the package sets no setuid/setgid bits or file capabilities.
+Package scripts must not install a global Vulkan layer, edit Steam settings,
+start monitoring, change hardware policy, or make network requests.
 
 Steam Launch Options are derived from the verified absolute wrapper path. Keep
 that path representable safely by the existing bridge format. Wrapper presence
@@ -98,9 +104,10 @@ clip-specific missing support. WebKit uses the GStreamer libav plugin with those
 playback; command-line FFmpeg alone does not install this plugin. Conversely,
 codec plugins for another framework are not automatically usable by FFmpeg. Do not claim a limited provider is fully
 compatible merely because an executable exists. A repository offering a required
-provider must already be available; the app never adds repositories or installs
-packages at runtime. Provider/version synchronization remains the distribution's
-package-manager responsibility.
+provider must already be available; the app does not add repositories or install
+missing codec packages. Explicit signed application updates use the separate
+update-helper boundary below. Provider/version synchronization remains the
+distribution's package-manager responsibility.
 
 ## One-command installer and release assets
 

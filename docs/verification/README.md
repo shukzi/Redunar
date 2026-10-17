@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 17 remaining release hygiene review](2026-10-17-release-hygiene.md):
+  align Tauri version metadata, reject stale release inputs, correct native
+  package/tray/update documentation and retire an unused X11 fixture helper.
+
 - [October 17 original native scrolling restored](2026-10-17-native-scroll-restore.md):
   owner-requested removal of custom wheel animation and restored WebKit easing;
   memory-row stability and other performance improvements retained.

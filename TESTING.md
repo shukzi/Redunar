@@ -4,6 +4,19 @@ Current Tauri and shared-backend checks, reviewed September 26, 2026. Run comman
 from the repository root unless explicitly stated otherwise. Use existing offline
 dependencies. Root Cargo commands do **not** include the separate Tauri workspace.
 
+## Release metadata fixtures
+
+`tools/tests/test_release_inputs.py` checks that the tag, package specification,
+native Cargo manifest, Tauri JSON config, and latest AppStream release agree.
+Temporary fixtures reject stale versions, missing or malformed config data, and
+invalid tags without building, downloading, installing, or running the app.
+The regular `tools/validate.sh` entry point includes these fixtures; to run just
+this regression suite, use:
+
+```sh
+python3 -m unittest discover -s tools/tests -p 'test_release_inputs.py'
+```
+
 ## Ultrawide Replay and CPU sensors
 
 Ordinary fixtures also cover the shared pixel budget through Vulkan/OpenGL
@@ -572,15 +585,15 @@ history. `tools/test-updater-versioned-rpm.sh` passed the isolated real-binary
 0.1.3→0.1.4→0.1.3 upgrade/rollback and executable-hash checks. Both containers
 ran without network access and made no host package changes.
 
-The five-asset local candidate bundle is under
-[`local-builds/release-candidate-local-test-signature-2026-09-23`](../local-builds/release-candidate-local-test-signature-2026-09-23/STATUS.txt).
-Its Fedora 44 x86_64 RPM is version `0.1.3-1.local.fc44`, SHA-256
+The five-asset local candidate bundle was retained outside the source repository;
+it is not a repository-distributed artifact. Its historical Fedora 44 x86_64
+RPM was version `0.1.3-1.local.fc44`, SHA-256
 `705e962cecf3c62ec31b6cafe11427e89e3ace627c6f8cf12794eb486398d247`.
-The manifest and all five release assets verify; its signature uses the
+The manifest and all five release assets verified; its signature uses the
 included test-only public key, not the production update key. The candidate RPM
-payload matches the installed runtime components. No package was installed in
-this revalidation. A fresh installed process passed the three isolated 2× Xvfb
-window-size cases. The read-only `rpm -V redunar-app` check showed only
+payload matched the runtime components installed at that date. No package was
+installed in this revalidation. A fresh installed process passed the three
+isolated 2× Xvfb window-size cases. The read-only `rpm -V redunar-app` check showed only
 user/group ownership flags (`nobody:nobody` on this host); installed content
 hashes and modes matched the RPM payload.
 

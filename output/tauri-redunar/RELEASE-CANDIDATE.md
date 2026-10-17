@@ -24,13 +24,12 @@ Rust tests, strict Clippy, frontend tests, desktop metadata, package staging,
 and signed asset checks passed. The Fedora 44 updater RPM flow and the
 isolated real-binary 0.1.3→0.1.4→0.1.3 upgrade/rollback test also passed.
 
-The review bundle is under
-[`local-builds/release-candidate-local-test-signature-2026-09-23`](../../../local-builds/release-candidate-local-test-signature-2026-09-23/STATUS.txt).
-Its Fedora RPM SHA-256 is
+The historical review bundle was retained outside the source repository and is
+not a repository-distributed artifact. Its Fedora RPM SHA-256 is
 `705e962cecf3c62ec31b6cafe11427e89e3ace627c6f8cf12794eb486398d247`.
 Its `SHA256SUMS.sig` uses the bundle's test-only public key and is not a
-production update signature. The candidate RPM's runtime files match the
-currently installed payload. A fresh installed process passed all three
+production update signature. The candidate RPM's runtime files matched the
+payload installed at that date. A fresh installed process passed all three
 isolated 2× Xvfb window-size cases. No installation was performed during this
 revalidation. `rpm -V redunar-app` reported only user/group ownership
 differences (`nobody:nobody` on this host); candidate payload hashes and modes

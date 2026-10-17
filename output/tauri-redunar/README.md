@@ -40,9 +40,10 @@ run `tools/build-local-tauri-rpm.sh target/packages`. Packaging details and
 runtime dependencies are owned by [packaging/README.md](../../packaging/README.md).
 
 The installed executable is `/usr/bin/redunar-tauri`; the package is
-`redunar-app`. A built RPM is not installed automatically. Verify installed
-components with `tools/check-installed-tauri-runtime.sh` and fully quit/reopen
-Redunar after an upgrade so its embedded UI is reloaded.
+`redunar-app`. Building a package does not install it. Installation and restarting
+the app are separately authorized actions. Verify installed components against
+the exact native package and confirm a fresh process loaded them as described in
+[the release procedure](../../docs/RELEASING.md#qualify-before-publication).
 
 The in-app update boundary now checks signed release metadata, selects the
 matching supported Linux package, downloads it with a size limit, verifies its

@@ -3,8 +3,9 @@
 ## Before creating a candidate
 
 1. Integrate the reviewed change into `main`; validate the integrated tree.
-2. Set version metadata using the package specification as authority. Run
-   `tools/check-release-inputs.sh vMAJOR.MINOR.PATCH`.
+2. Set version metadata using the package specification as authority. Keep the
+   native Cargo manifest, Tauri JSON config, and latest AppStream release in sync.
+   Run `tools/check-release-inputs.sh vMAJOR.MINOR.PATCH`.
 3. Prepare `docs/releases/vMAJOR.MINOR.PATCH.md` with the reviewed release notes.
    The release title will be exactly the tag, for example `v0.1.11`.
 4. Review the candidate changes, release notes, acceptance evidence, and recovery
@@ -31,11 +32,20 @@ checks do not establish other-distribution runtime or NVIDIA support.
 
 Plan installation and real-game/hardware acceptance separately from automated
 checks, including their effects on the test system.
-After installation, compare installed payloads with the selected RPM, fully quit
-the old process, and confirm a fresh process loaded the intended binary/sidecars.
-The existing installed-runtime checker reads `target/packages`; for a candidate
-in another directory, explicitly stage its selected RPM there before using it.
-Do not mix a candidate's results with a different local package.
+Installation and restarting the app require separate authorization. Select the
+native package for the target distribution: Arch `.pkg.tar.zst`, Debian/Ubuntu
+`.deb`, or the matching RPM. Record its hash and extract that exact package into
+a private temporary directory. Compare the installed executable, sidecars,
+helpers, resources, and permissions with its extracted payload. Compare against
+packaged bytes rather than raw build outputs, which packaging may strip.
+After the authorized restart, confirm a fresh user process loaded the intended
+installed executable and sidecars. Do not mix a candidate's results with a
+different local package.
+
+`tools/check-installed-tauri-runtime.sh` is an RPM-only convenience check. It
+selects an RPM under `target/packages`; ensure that selection is the exact
+qualified package before using it. It does not verify Arch or DEB installations
+and does not replace checking the selected package's resources and permissions.
 
 ## GitHub workflow
 
