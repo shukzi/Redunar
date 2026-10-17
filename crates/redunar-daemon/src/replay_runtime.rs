@@ -175,14 +175,20 @@ impl ProductionReplayRuntime {
     pub(crate) fn configure_unavailable(&self, settings: ReplaySettings) {
         let mut state = lock_unpoisoned(&self.inner);
         if state.pipeline.is_none() {
+            let completed = state.status.completed_save_revision;
             state.status = ReplayRuntimeStatus::unavailable(settings);
+            state.status.completed_save_revision = completed;
         }
     }
 
     pub(crate) fn configure_validation_candidate(&self, settings: ReplaySettings) {
         let mut state = lock_unpoisoned(&self.inner);
         if state.pipeline.is_none() {
+            // Inventory consumers track app-lifetime commits, including saves
+            // made while their window was hidden or a status read failed.
+            let completed = state.status.completed_save_revision;
             state.status = ReplayRuntimeStatus::validation_candidate(settings);
+            state.status.completed_save_revision = completed;
         }
     }
 
@@ -728,6 +734,29 @@ fn audio_is_active(phase: ReplayPhase, progress_age: Option<Duration>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_saves_survive_shutdown_and_session_reconfiguration() {
+        let settings = ReplaySettings::default();
+        let runtime = ProductionReplayRuntime::unavailable(settings);
+        lock_unpoisoned(&runtime.inner)
+            .status
+            .completed_save_revision = 12;
+        runtime.shutdown().unwrap();
+        runtime.configure_unavailable(settings);
+        assert_eq!(runtime.status().completed_save_revision, 12);
+        runtime.configure_validation_candidate(settings);
+        assert_eq!(runtime.status().completed_save_revision, 12);
+        // A later session's first completion must still advance the counter.
+        lock_unpoisoned(&runtime.inner)
+            .status
+            .completed_save_revision += 1;
+        runtime.shutdown().unwrap();
+        runtime.configure_validation_candidate(settings);
+        assert_eq!(runtime.status().completed_save_revision, 13);
+        runtime.configure_unavailable(settings);
+        assert_eq!(runtime.status().completed_save_revision, 13);
+    }
 
     #[test]
     fn audio_progress_survives_full_buffer_and_reset_without_polling() {

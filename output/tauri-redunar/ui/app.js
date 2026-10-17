@@ -77,6 +77,7 @@ const loaded = {catalog:false,clips:false,history:false,global:false,preferences
 const errors = {};
 let hardware = null, runtime = null, modules = null, diagnostics = null, displayCapability = null, activeSession = null, replayPreferences = null, storageStatus = null, globalRevision = null, savedShortcutMap = {}, busy = false;
 let lastLoadedHistoryRevision = null;
+let observedSaveRevision = null, loadedClipRevision = null;
 let lastSlowRuntimeRefresh = 0;
 let shortcutStatus = {state:'Inactive',message:null,last_action:null};
 let playerDuration = 0, playerPosition = 0, pendingSeek = null, trimStart = 0, trimEnd = 0;
@@ -223,7 +224,8 @@ function replaySelection(c) {
 function clipRows(filter=clipFilters.search) {
  clipFilters.search=filter;
  const filtered=filterClips(clips,clipFilters);
- return filtered.map(c=>`<div class="clip-card ${selectedClip===c.id?'selected':''}"><button type="button" class="clip-star" data-favorite-clip="${escape(c.id)}" aria-label="${c.favorite?'Remove from':'Add to'} favorites: ${escape(clipTitle(c))}" aria-pressed="${Boolean(c.favorite)}">${icon('star','clip-favorite-icon')}</button><button class="clip-select" data-clip="${escape(c.id)}" aria-pressed="${selectedClip===c.id}"><span class="thumbnail native-thumbnail">${c.thumbnail?`<img src="${c.thumbnail}" alt="">`:icon('play')}<span data-clip-duration>${time(c.duration)}</span></span><strong class="clip-title">${escape(clipTitle(c))}</strong><span class="clip-game">${escape(c.game_name||'Game not recorded')}</span><small>${escape(c.date)}<span>${escape(c.size)}</span></small></button></div>`).join('')||`<div class="clip-empty"><strong>${clips.length?'No matching clips':'No saved clips yet'}</strong>${clips.length?button('Clear filters','clear-clip-filters'):'<p>Save recent gameplay during a supported session. Captures stay on this device.</p>'}</div>`;
+ const warning=errors.clips?`<p class="small-note" role="status">Could not refresh clips. ${clips.length?'Showing the last known list. ':''}${escape(errors.clips)}</p>`:'';
+ return warning+(filtered.map(c=>`<div class="clip-card ${selectedClip===c.id?'selected':''}"><button type="button" class="clip-star" data-favorite-clip="${escape(c.id)}" aria-label="${c.favorite?'Remove from':'Add to'} favorites: ${escape(clipTitle(c))}" aria-pressed="${Boolean(c.favorite)}">${icon('star','clip-favorite-icon')}</button><button class="clip-select" data-clip="${escape(c.id)}" aria-pressed="${selectedClip===c.id}"><span class="thumbnail native-thumbnail">${c.thumbnail?`<img src="${c.thumbnail}" alt="">`:icon('play')}<span data-clip-duration>${time(c.duration)}</span></span><strong class="clip-title">${escape(clipTitle(c))}</strong><span class="clip-game">${escape(c.game_name||'Game not recorded')}</span><small>${escape(c.date)}<span>${escape(c.size)}</span></small></button></div>`).join('')||`<div class="clip-empty"><strong>${clips.length?'No matching clips':'No saved clips yet'}</strong>${clips.length?button('Clear filters','clear-clip-filters'):'<p>Save recent gameplay during a supported session. Captures stay on this device.</p>'}</div>`);
 }
 function updateClipBrowserControls(){
  const count=filterClips(clips,clipFilters).length;
@@ -237,7 +239,11 @@ function clipSortingControlsMarkup() {
 }
 function refreshClipSortingControls() {
  const controls=$('#clip-organizing-controls');
- if(controls){controls.innerHTML=clipSortingControlsMarkup();enhancePrecisionSelects(controls);}
+ if(controls){
+  const sort=$('[data-clip-filter="sort"]',controls);
+  if(sort)sort.value=clipFilters.sort;else controls.innerHTML=clipSortingControlsMarkup();
+  enhancePrecisionSelects(controls);
+ }
 }
 function refreshClipTrashFeedback(){
  const feedback=$('#clip-trash-feedback');
@@ -251,7 +257,31 @@ function showClipTrashFeedback(fileNames){
 }
 function refreshClipRail(){
  refreshClipSortingControls();refreshClipTrashFeedback();
- const rail=$('.clip-list');if(rail){rail.innerHTML=clipRows();updateClipBrowserControls();scheduleClipThumbnails();}
+ const rail=$('.clip-list');if(rail){
+  const top=rail.scrollTop,focused=document.activeElement;
+  const clipId=focused?.dataset.clip||focused?.dataset.favoriteClip;
+  const focusKey=focused?.dataset.clip?'clip':'favoriteClip';
+  rail.innerHTML=clipRows();
+  if(clipId)Array.from(rail.querySelectorAll('[data-clip],[data-favorite-clip]')).find(el=>el.dataset[focusKey]===clipId)?.focus({preventScroll:true});
+  rail.scrollTop=top;
+  updateClipBrowserControls();scheduleClipThumbnails();
+ }
+}
+function presentClipInventory(){
+ // Refresh the browser even while a clip plays or prepares. Rebuilding the
+ // whole workspace would cancel playback, trim state and pending seeks.
+ if(route()!=='replay'||!$('#clip-video')||$('#clip-video').dataset.clipId!==selectedClip){render();return;}
+ refreshClipRail();
+ const gameFilter=$('[data-clip-filter="game"]');
+ if(gameFilter){
+  const names=[...new Set(clips.map(c=>c.game_name).filter(Boolean))].sort();
+  if(clipFilters.game!=='all'&&!names.includes(clipFilters.game))names.push(clipFilters.game);
+  gameFilter.innerHTML=`<option value="all">All games</option>`+names.map(name=>`<option value="${escape(name)}">${escape(name)}</option>`).join('');
+  gameFilter.value=clipFilters.game;enhancePrecisionSelects(gameFilter.parentElement);
+ }
+ const storage=$('.clip-storage');
+ if(storage)storage.outerHTML=storageSummary({...storageStatus,used_bytes:storageStatus?.used_bytes??clips.reduce((sum,item)=>sum+item.bytes,0)});
+ const count=$('.nav-link[href="#replay"] .nav-count');if(count)count.textContent=String(clips.length);
 }
 function syncClipFilterFields(){document.querySelectorAll('[data-clip-filter]').forEach(field=>{field.value=clipFilters[field.dataset.clipFilter];});enhancePrecisionSelects(workspace);}
 
@@ -802,7 +832,7 @@ async function readSection(section, command, accept) {
  catch(error) {
   errors[section]=message(error); loaded[section]=false;
   if(section==='catalog'){games=[];selectedGame=null;}
-  if(section==='clips'){clips=[];selectedClip=null;}
+  // Retain the last inventory and selection through a transient read failure.
   if(section==='history')sessions=[];
   return false;
  }
@@ -810,6 +840,7 @@ async function readSection(section, command, accept) {
 function loadVideo() {
  const selected=clip(), video=$('#clip-video');
  if(!selected||!video)return;
+ video.dataset.clipId=selected.id;
  videoReady=false;playRequested=false;updatePlayerUi();
  stopPlaybackTicker();
  playbackRequests.request(selected.file_name,url=>{
@@ -1102,12 +1133,12 @@ async function readRuntime() {
  if(slowRefresh)lastSlowRuntimeRefresh=Date.now();
  const slowResults=slowRefresh?Promise.allSettled([call('diagnostics_snapshot'),call('replay_display_capability')]):null;
  const results=await Promise.allSettled([call('daemon_status'),call('replay_runtime_status'),call('session_status'),call('module_statuses'),call('shortcut_status')]);
- const oldRevision=runtime?.completed_save_revision;
  const oldHistory=lastLoadedHistoryRevision;
  const oldDisplay=JSON.stringify(displayCapability);
  hardware=results[0].status==='fulfilled'&&results[0].value.available?results[0].value:null;
  preferences.diagnosticLogStatus=results[0].status==='fulfilled'?results[0].value.diagnostic_log_status:undefined;
  runtime=results[1].status==='fulfilled'?results[1].value:null;
+ if(Number.isSafeInteger(runtime?.completed_save_revision))observedSaveRevision=runtime.completed_save_revision;
  activeSession=results[2].status==='fulfilled'?visibleSession(results[2].value):null;
  modules=results[3].status==='fulfilled'?results[3].value:null;
  shortcutStatus=results[4].status==='fulfilled'?results[4].value:shortcutStatus;
@@ -1126,11 +1157,11 @@ async function readRuntime() {
   const loadedHistory=await reloaders['reload-history']();
   if(loadedHistory&&route()==='history')render();
  }
- if(oldRevision!==undefined&&runtime?.completed_save_revision>oldRevision){
-  await reloaders['reload-clips']();
-  notify('Replay saved to your local clip store.');
-  if(route()==='replay'&&!$('#clip-video')?.paused)return;
-  render();
+ if(observedSaveRevision!==null&&loadedClipRevision!==observedSaveRevision){
+  const completed=loadedClipRevision!==null&&observedSaveRevision>loadedClipRevision;
+  const refreshed=await reloaders['reload-clips']();
+  presentClipInventory();
+  if(refreshed&&completed)notify('Replay saved to your local clip store.');
  }
 }
 async function checkUpdatesOnStartup() {
@@ -1208,7 +1239,15 @@ async function runClipExport(fileName,start,end,outputName,destination) {
 }
 const reloaders={
  'reload-games':()=>readSection('catalog','catalog_games',acceptGames),
- 'reload-clips':async()=>{await readSection('clips','replay_clips',acceptClips);try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}},
+ 'reload-clips':async()=>{
+  // Acknowledge only the revision known before the read. A save committed
+  // during this request must still trigger a subsequent inventory refresh.
+  const revision=observedSaveRevision;
+  const refreshed=await readSection('clips','replay_clips',acceptClips);
+  if(refreshed)loadedClipRevision=revision;
+  try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}
+  return refreshed;
+ },
  'reload-history':async()=>{const loadedHistory=await readSection('history','session_history',data=>{sessions=mapSessions(data);selectedSession=0;historyCursor=null;loaded.history=true;});if(loadedHistory&&activeSession)lastLoadedHistoryRevision=activeSession.history_revision;return loadedHistory;},
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
  'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;preferences.betaAccess=data.beta_access===true;loaded.preferences=true;}),
@@ -1340,7 +1379,7 @@ document.addEventListener('click',event=>{
   modal('Export clip',`<form id="trim-export-form" class="compact-clip-form"><input type="hidden" name="fileName" value="${escape(selected.file_name)}"><input type="hidden" name="start" value="${trimStart}"><input type="hidden" name="end" value="${trimEnd}"><label class="form-label">Filename<input name="outputName" required maxlength="200" value="${escape(clipFilenameStem(selected.file_name)+'-trimmed')}"></label><div class="export-folder-field"><span>Save to</span><div class="export-folder-display" title="${escape(replayPreferences?.resolved_directory||'Replay folder')}">${icon('folder')}<span id="export-destination">${escape(replayPreferences?.resolved_directory||'Replay folder')}</span></div></div><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Export</button></div></form>`);return;
  }
  perform(async()=>{
-  if(reloaders[action]){await reloaders[action]();render();return;}
+  if(reloaders[action]){await reloaders[action]();if(action==='reload-clips')presentClipInventory();else render();return;}
   if(action==='launch-game'){
    try { await call('launch_game',{gameId:game().id}); }
    catch(error){installation.refresh();modal('Game could not start',`<p class="small-note">${escape(message(error))}</p>`);return;}
@@ -1504,7 +1543,7 @@ document.addEventListener('change',event=>{
  }
 });
 document.addEventListener('submit',event=>{
- if(event.target.id==='clip-filename-form'){event.preventDefault();const form=new FormData(event.target);const item=clips.find(c=>c.id===form.get('fileName'));const name=String(form.get('newFileName')).trim();const newFileName=item?renamedClipFilename(item.file_name,name):'';if(item&&name)perform(async()=>{const result=await call('rename_replay_clip',{fileName:item.file_name,newFileName});const oldId=item.id;item.id=result.file_name;item.file_name=result.file_name;if(selectedClip===oldId)selectedClip=item.id;refreshClipRail();if(selectedClip===item.id){const title=$('[data-selected-clip-title]');if(title)title.textContent=item.file_name;$('#clip-video')?.setAttribute('aria-label',item.file_name);}$('#dialog').close();notify('File renamed.');});return;}
+ if(event.target.id==='clip-filename-form'){event.preventDefault();const form=new FormData(event.target);const item=clips.find(c=>c.id===form.get('fileName'));const name=String(form.get('newFileName')).trim();const newFileName=item?renamedClipFilename(item.file_name,name):'';if(item&&name)perform(async()=>{const result=await call('rename_replay_clip',{fileName:item.file_name,newFileName});const oldId=item.id;item.id=result.file_name;item.file_name=result.file_name;if(selectedClip===oldId)selectedClip=item.id;refreshClipRail();if(selectedClip===item.id){const title=$('[data-selected-clip-title]');if(title)title.textContent=item.file_name;const video=$('#clip-video');if(video){video.setAttribute('aria-label',item.file_name);video.dataset.clipId=item.id;}}$('#dialog').close();notify('File renamed.');});return;}
  if(event.target.id==='trim-export-form'){event.preventDefault();const form=new FormData(event.target);runClipExport(String(form.get('fileName')),Number(form.get('start')),Number(form.get('end')),String(form.get('outputName')).trim(),replayPreferences?.resolved_directory);return;}
  if(event.target.id==='trash-clips-form'){event.preventDefault();const fileNames=JSON.parse(String(new FormData(event.target).get('fileNames')));perform(async()=>{await call('move_replay_clips_to_trash',{fileNames});await reloaders['reload-clips']();showClipTrashFeedback(fileNames);$('#dialog').close();render();});return;}
  if(event.target.id==='discovery-form'){

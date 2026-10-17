@@ -49,6 +49,15 @@ for dated checks and remaining NVIDIA hardware acceptance.
 
 ## Workspace UI and existing-window activation
 
+After building the production frontend, run
+`xvfb-run -a python3 output/tauri-redunar/tests/replay-inventory-webview.py`.
+Private native fixtures cover completed saves during playback and after game
+exit, status/inventory failure recovery, and a save committing during an older
+inventory read. They check visible clip counts and retained player, selection,
+search focus and save duration. Runtime fixtures preserve the completed-save
+counter through shutdown and capability/session reconfiguration. No real game,
+recording, installation or app restart is part of these checks.
+
 The October 14 integration is based on `5f7b048` on `feat/workspace-ui`.
 Its [task and acceptance scope](docs/verification/2026-10-14-workspace-ui-task.md)
 cover the reviewed workspace design and native operations. Run the documented

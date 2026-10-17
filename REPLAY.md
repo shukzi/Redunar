@@ -360,6 +360,12 @@ unique-session window fallback otherwise; ambiguous or missing evidence shows
 source clip's attribution. Inventory requests first flush names committed by the
 save worker into the attribution ledger, so the completion refresh includes the
 recording game. Read thumbnail/metadata files only through validated local paths.
+The completed-save counter lasts for the app's lifetime, across game sessions
+and capability reconfiguration. The browser acknowledges a revision only after
+a successful inventory read, retries failed reads, and catches up after hidden
+windows or status failures. Completion and manual refresh update the saved-clip
+rail even during playback, preserving the selected player, trim, filters and
+scroll. A transient inventory failure retains the last known clips.
 Selection preserves the clip rail, search, scroll, and focus. One preparation
 runs while a newer pending selection replaces older requests; stale completions
 cannot replace the selected player. A newer selection or navigation away cancels

@@ -38,6 +38,9 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  bridge.calls.push({command,args:structuredClone(args)});
  if(command==='save_replay'&&bridge.failSave)throw Error('Fixture save failed');
  if(command==='replay_runtime_status'&&bridge.failRuntime)throw Error('Fixture runtime unavailable');
+ if(command==='replay_runtime_status'&&bridge.replayRuntime)return structuredClone(bridge.replayRuntime);
+ if(command==='replay_clips'&&bridge.failClips)throw Error('Fixture inventory unavailable');
+ if(command==='replay_clips'&&bridge.holdClips){const snapshot=structuredClone(bridge.clips);await new Promise(resolve=>bridge.releaseClips=resolve);return snapshot;}
  if(command==='daemon_status'&&bridge.failDaemon)throw Error('Fixture native status unavailable');
  if(command==='daemon_status')return bridge.unavailable?{available:false}:{available:true,diagnostic_log_status:bridge.logStatus||'off',revision:++bridge.revision,cpu_model:'Fixture CPU',cpu_utilization_percent:32,cpu_temperature_celsius:61,gpu_model:'Fixture GPU',gpu_utilization_percent:81,gpu_temperature_celsius:67,ram_used_bytes:12884901888,ram_total_bytes:34359738368,vram_used_bytes:5368709120,vram_total_bytes:12884901888};
  if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
