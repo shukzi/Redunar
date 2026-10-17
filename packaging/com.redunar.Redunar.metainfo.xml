@@ -27,6 +27,14 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.26" date="2026-10-17">
+      <description>
+        <ul>
+          <li>Improved cached thumbnail loading in Instant Replay and Recent captures.</li>
+          <li>Fixed outdated thumbnails replacing the selected clip’s preview after a file changes.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.25" date="2026-10-17">
       <description>
         <p>Fixes periodic crackling in mixed system and microphone audio, improves workspace responsiveness and transitions, and improves History graph transitions and clip thumbnail loading.</p>
