@@ -156,6 +156,11 @@ impl ReplayClipStore {
     /// Check filesystem headroom for an edited export. Re-encoded exports
     /// have their own bounded output size and are not constrained by the
     /// rolling capture ring's bitrate-derived budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplayStoreError`] for an empty export, unsafe store state,
+    /// unavailable filesystem statistics, or insufficient free space.
     pub fn ensure_free_space_for_export(
         &self,
         expected_clip_bytes: u64,
@@ -305,6 +310,11 @@ impl ReplayClipStore {
     /// are re-encoded separately from the rolling ring, so their encoded size
     /// may exceed the ring's bitrate-derived budget while still fitting the
     /// filesystem quota.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplayStoreError`] for malformed or oversized input, unsafe
+    /// store state, insufficient configured capacity, or I/O failures.
     pub fn save_mp4_preserving_existing_with_limit(
         &self,
         source: &mut impl Read,

@@ -21,6 +21,13 @@ impl ReplayClipStore {
         self.save_named_mp4_preserving_existing_with_limit(source, stem, self.maximum_clip_bytes)
     }
 
+    /// Save a named edited MP4 with a caller-provided output bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplayStoreError`] for an invalid or colliding name,
+    /// malformed or oversized input, unsafe store state, quota failures, or
+    /// I/O errors.
     pub fn save_named_mp4_preserving_existing_with_limit(
         &self,
         source: &mut impl Read,
