@@ -1,0 +1,19 @@
+/* Entry feedback only: no delayed dismissal, layout animation or retained
+   transform/layer. Keep dialogs untransformed so their fixed menus stay aligned. */
+@media (prefers-reduced-motion: no-preference) {
+  #dialog[open] { animation: dialog-enter 140ms ease-out; }
+  .precision-select-menu { animation: dropdown-enter 100ms ease-out; }
+  .change-save-bar.save-bar-enter:not([hidden]) { animation: save-bar-enter 140ms ease-out; }
+}
+@keyframes dialog-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dropdown-enter {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes save-bar-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}

@@ -1,4 +1,5 @@
 mod named_export;
+mod thumbnails;
 mod trash;
 
 use crate::replay_clip_labels::{self as labels, Label};
@@ -687,6 +688,9 @@ impl ReplayClipStore {
             original_file_name: label.original,
             favorite: label.favorite,
         };
+        // Clear every cached revision before removing the recording. A failed
+        // cleanup leaves the clip available for an explicit retry.
+        thumbnails::remove(&self.directory, &metadata)?;
         fs::remove_file(path)
             .map_err(|error| io_error("could not delete Redunar replay clip", &error))?;
         sync_directory(&self.directory)
@@ -1352,6 +1356,9 @@ fn enforce_quota(
         if total <= storage_limit_bytes {
             break;
         }
+        let metadata = fs::symlink_metadata(&clip.path)
+            .map_err(|error| io_error("could not inspect old replay clip", &error))?;
+        thumbnails::remove(directory, &metadata)?;
         fs::remove_file(&clip.path)
             .map_err(|error| io_error("could not remove an old Redunar replay clip", &error))?;
         total = total.saturating_sub(clip.bytes);

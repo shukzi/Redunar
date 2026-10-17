@@ -1,5 +1,14 @@
 // Basic card metadata and its thumbnail should not wait for a full packet scan.
 export async function loadClipPreview({item, call, thumbnailDataUri, updateMetadata, updateThumbnail, selected}) {
+  // A disk-cache hit should paint even while metadata inspection is still
+  // pending. Keep optional packet counting after both basic card requests.
+  const thumbnail = (async()=>{
+    if(item.thumbnail==null) {
+      try { item.thumbnail=thumbnailDataUri(await call('clip_thumbnail',{fileName:item.file_name}))||''; }
+      catch { item.thumbnail=''; }
+    }
+    updateThumbnail(item);
+  })();
   try {
     if (!item.metadata) {
       item.metadata = await call('clip_metadata', {fileName:item.file_name});
@@ -7,11 +16,7 @@ export async function loadClipPreview({item, call, thumbnailDataUri, updateMetad
       updateMetadata(item);
     }
   } catch { /* Leave retry possible on a later request. */ }
-  if(item.thumbnail==null) {
-    try { item.thumbnail=thumbnailDataUri(await call('clip_thumbnail',{fileName:item.file_name}))||''; }
-    catch { item.thumbnail=''; }
-  }
-  updateThumbnail(item);
+  await thumbnail;
   if (selected(item) && !item.metadataDetailed) {
     try {
       item.metadata=await call('clip_metadata',{fileName:item.file_name,includeFps:true});

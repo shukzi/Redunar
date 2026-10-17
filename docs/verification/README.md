@@ -1,5 +1,41 @@
 # Verification evidence
 
+- [October 17 original native scrolling restored](2026-10-17-native-scroll-restore.md):
+  owner-requested removal of custom wheel animation and restored WebKit easing;
+  memory-row stability and other performance improvements retained.
+
+- [October 17 browser scroll frame timing](2026-10-17-browser-scroll.md):
+  local Helium/native WebKit comparison exposes a per-notch repeated frame;
+  fix retarget clock anchoring while retaining the existing finish deadline.
+
+- [October 17 continuous mouse-wheel motion](2026-10-17-wheel-continuity.md):
+  preserve speed between notches, ramp gently from rest and avoid prolonged
+  boundary animation; replaces repeated ease-out restarts.
+
+- [October 17 softer wheel response](2026-10-17-wheel-softening.md):
+  owner tuning to a gentler 150 ms curve, retaining bounded settling and native
+  bypass paths after the first 110 ms treatment.
+
+- [October 17 wheel response refinement](2026-10-17-wheel-refinement.md):
+  short coarse-wheel easing after owner feedback that direct steps felt abrupt;
+  supersedes the direct-only interaction policy in the earlier scroll report.
+
+- [October 17 native settings startup repair](2026-10-17-webview-startup.md):
+  supported Rust getter and a real Tauri regression for the owner-reproduced
+  startup panic, superseding the earlier Python-only runtime acceptance.
+
+- [October 17 Overview scroll stability](2026-10-17-overview-scroll.md):
+  direct native wheel response without trailing easing, retained memory-reading
+  line space through monitor loss/recovery, and isolated input/geometry checks.
+
+- [October 17 History directions and thumbnail reuse](2026-10-17-history-and-thumbnails.md):
+  partial sensor coverage transitions and bounded persistent thumbnail caching
+  with native permanent-deletion cleanup.
+
+- [October 16 workspace interaction motion](2026-10-16-workspace-motion.md):
+  bounded dialog/dropdown/draft-bar entry, reduced motion, immediate cancellation
+  and retained refresh performance regressions.
+
 - [October 16 desktop refresh performance](2026-10-16-ui-refresh.md):
   unchanged-status DOM retention, startup update isolation, lazy microphone
   discovery, full validation and production WebKit regressions.

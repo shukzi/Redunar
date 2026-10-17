@@ -38,6 +38,13 @@ Record process scope, host, driver, build, workload, duration, and method.
 
 ## Desktop refresh work
 
+The main Linux webview enables WebKit's original native smooth scrolling once
+at setup, using the supported getter for its own settings object. The UI does
+not intercept wheel input, read geometry for wheel classification or run a
+JavaScript scroll animation. No scroll timers, polling, permanent layers or idle
+callbacks are added. WebKit owns timing, input handling and system motion
+preferences; Redunar does not change GTK/system preferences or renderer flags.
+
 Capture-status presentation retains the last generated markup on its mounted
 container. Compare generated strings rather than serialized `innerHTML`, which
 normalizes SVG and can turn unchanged status into a DOM replacement every poll.
@@ -49,6 +56,20 @@ first opened, outside the startup data barrier. Concurrent visits share one
 request. Discovery updates only the input choices and feedback, preserves saved
 source identity and recording drafts, and retains explicit retry after failure.
 These bounds reduce unnecessary work; they are not measured scrolling FPS.
+
+Desktop dialog, dropdown and draft-action entry effects last at most 140 ms and
+animate only opacity and small transforms. They have no frame callbacks,
+recurring work, persistent layer hints or delayed close/cleanup. A visible draft
+bar tracks its logical owner across renders so polling and edits cannot restart
+its animation. Dialogs remain untransformed to preserve fixed-menu positioning.
+Reduced motion disables these effects. The refresh/DOM-retention rules above
+still apply; compositor cost requires testing on the actual desktop.
+
+Library's Game settings/Launch matching switches and profile edits/reset/discard/
+save replace only the detail body and update catalog draft labels in place.
+They retain the mounted Steam setup panel and any pending check, and do not
+re-read Steam setup, artwork or installation status. Entry, explicit retries and
+window-focus refreshes retain their existing native authority and error handling.
 
 The shortcut helper has one keyboard supervisor and one stdin watcher, with a
 128-item event queue. Every 8 ms it reads at most 32 input events from each of at
@@ -185,6 +206,14 @@ whole-app performance claim.
   preparation is in flight, with only the newest pending selection retained.
   Thumbnail workers remain bounded; completions update individual images.
   Basic metadata and thumbnails precede optional selected-clip packet counting.
+  Thumbnail retrieval and basic metadata run concurrently so cached images can
+  paint while inspection is pending. The shared store keeps at most 256 private
+  JPEGs of at most 256 KiB each, keyed by device/inode, size and modification
+  timestamp. Cache hits skip FFmpeg; writes revalidate the live clip under the
+  store operation lock. Rename and trash/restore retain images; deletion and
+  existing quota removal clear that inode's cached revisions first. Cache write
+  failures preserve preview/playback; failed deletion cleanup retains the clip
+  for retry. Cache scans are bounded and run on demand, outside polling/frame work.
   Native metadata caches at most 64 file identities, including inode, size, and
   modification/change timestamps. Inventory presentation caches expire after
   one second and invalidate on directory/attribution/history changes; the store
@@ -201,6 +230,21 @@ whole-app performance claim.
   cursor inspection. Do not rebuild all traces on every pointer movement or
   smooth away measurements to reduce rendering work. See the
   [calculation contract](output/tauri-redunar/HISTORY-CALCULATIONS.md).
+- A user-requested History metric switch may interpolate presentation coordinates
+  for 520 ms, using one frame callback chain and at most 1,024 animated trace
+  vertices, including any departing secondary line. Target segments can match
+  a subset of one continuous source segment at recorded timestamps. Unmatched
+  segments fade in place; gaps and isolated readings remain exact. A missing
+  sensor does not cancel motion for other traces.
+  Dense transitions select per-bucket extrema from both shapes at existing
+  timestamps only for transient presentation. Every original point/attribute
+  returns at completion or inspection; saved data and settled traces are never
+  downsampled. Full geometry is captured on metric selection, never per frame.
+  Secondary lines and primary fills also fade within the same callback chain.
+  No layout reads or native queries run per frame. Rapid switches cancel the old
+  chain and start from current geometry. Completion, inspection, scrolling,
+  navigation, hidden windows and reduced motion settle exact destination points
+  and release the chain. Entry and polling never start graph animation.
 
 ## Measurement procedure
 

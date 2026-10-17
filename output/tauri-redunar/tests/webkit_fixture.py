@@ -6,3 +6,9 @@ def configure_webkit():
     # Match configure_webkit_renderer in the native host, retaining an explicit
     # override for deliberate renderer investigations. Never disable sandboxing.
     os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+
+
+def configure_webview(view):
+    # Match the main view's restored native smooth scrolling; the UI does not
+    # intercept wheel input. Never change GTK/system preferences.
+    view.get_settings().set_enable_smooth_scrolling(True)

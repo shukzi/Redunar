@@ -76,10 +76,12 @@ Paths below are relative to `output/tauri-redunar/`:
 | Flow | Main files |
 | --- | --- |
 | Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs`, `activation.rs`, `window_lifecycle.rs` |
+| Main-window native scrolling | `src-tauri/src/webview_settings.rs` restores native WebKit smooth scrolling once during setup; the UI delegates wheel input to the engine |
 | Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `session_lifecycle.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
 | Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
+| Persistent clip thumbnails | `src-tauri/src/media.rs` decodes; `crates/redunar-daemon/src/replay_thumbnails.rs`, `replay_store/thumbnails.rs` validate/cache and own deletion cleanup |
 | Replay menu and shortcuts | `src-tauri/src/hotkeys.rs`; `crates/redunar-hotkeys` (pointer capture); `crates/redunar-capture-vulkan/src/overlay.rs` (in-game menu render); `ui/replay-menu-view.mjs` (app preview) |
 | Tray preference/lifecycle | `src-tauri/src/tray.rs`, `tray_native/`, `main.rs` |
 | Signed updates and installer state | `src-tauri/src/updates.rs`, `runtime.rs`; `ui/app.js` |
@@ -88,6 +90,7 @@ Paths below are relative to `output/tauri-redunar/`:
 | NVIDIA beta Replay candidate | `crates/redunar-daemon/src/replay_encoder.rs`, `crates/redunar-capture-vulkan/src/replay_video.rs` |
 | Real-data mapping | `ui/native-data.mjs`, `app.js` |
 | History coordinates and inspection | `ui/history-timeline.mjs`, `history-chart.css` |
+| Bounded History metric transition | `ui/history-motion.mjs` |
 | Clip selection and previews | `ui/replay-requests.mjs`, `replay-loading.mjs`, `replay-filmstrip.mjs` |
 
 Use [DESIGN.md](DESIGN.md) for component styling and

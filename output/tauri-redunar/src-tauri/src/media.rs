@@ -149,6 +149,14 @@ pub async fn clip_thumbnail(file_name: String) -> Result<Vec<u8>, String> {
 
 fn generate_clip_thumbnail(file_name: &str) -> Result<Vec<u8>, String> {
     let opened = open_inventory_clip(file_name)?;
+    let identity = opened
+        .file
+        .metadata()
+        .map_err(|_| "Clip details are unavailable")?;
+    let service = crate::backend::service();
+    if let Ok(Some(bytes)) = service.cached_replay_thumbnail(file_name, &identity) {
+        return Ok(bytes);
+    }
     let mut child = crate::media_tools::ffmpeg(Some("mjpeg"))?
         .args([
             "-hide_banner",
@@ -229,6 +237,10 @@ fn generate_clip_thumbnail(file_name: &str) -> Result<Vec<u8>, String> {
     {
         return Err("FFmpeg could not produce a valid clip thumbnail".into());
     }
+    // A cache failure never makes an otherwise valid preview fail. The store
+    // revalidates identity under its deletion lock, so late workers cannot
+    // recreate thumbnails for a deleted, replaced or trashed recording.
+    let _ = service.cache_replay_thumbnail(file_name, &identity, &bytes);
     Ok(bytes)
 }
 

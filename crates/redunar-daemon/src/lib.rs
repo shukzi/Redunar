@@ -43,6 +43,7 @@ mod replay_spool_reader;
 mod replay_store;
 #[cfg(test)]
 mod replay_streaming_tests;
+mod replay_thumbnails;
 mod replay_vulkan_video;
 mod session_history;
 mod session_ownership;
@@ -840,17 +841,9 @@ impl RedunarService {
         &self,
         file_name: &str,
     ) -> Result<ReplayClipEntry, ReplayStorageAccessError> {
-        let settings = self
-            .load_game_catalog()
-            .map_err(|error| ReplayStorageAccessError::catalog(&error))?
-            .global_profile
-            .replay;
-        ReplayClipStore::open_existing(
-            self.replay_save_directory()?,
-            ReplayBudget::from_settings(settings),
-        )
-        .and_then(|store| store.delete_clip(file_name))
-        .map_err(|error| ReplayStorageAccessError::delete(&error))
+        self.clip_mutation_store()?
+            .delete_clip(file_name)
+            .map_err(|error| ReplayStorageAccessError::delete(&error))
     }
 
     /// List recoverable clips in the configured store without initializing it.
@@ -1888,6 +1881,11 @@ mod tests {
         .unwrap();
         let name = "redunar-replay-1-000000001-1.mkv";
         fs::write(store.directory().join(name), b"sample").unwrap();
+        let thumbnail_identity = fs::metadata(store.directory().join(name)).unwrap();
+        let thumbnail = [0xff, 0xd8, 1, 2, 0xff, 0xd9];
+        service
+            .cache_replay_thumbnail(name, &thumbnail_identity, &thumbnail)
+            .unwrap();
         service.record_clip_game(name, "Local game").unwrap();
         service.set_replay_clip_favorite(name, true).unwrap();
         service.rename_replay_clip(name, "Great lap.mkv").unwrap();
@@ -1896,6 +1894,13 @@ mod tests {
         assert_eq!(entries[0].game_name.as_deref(), Some("Local game"));
         assert!(entries[0].favorite);
         let restarted = RedunarService::with_state_directory(&state);
+        assert_eq!(
+            restarted
+                .cached_replay_thumbnail("Great lap.mkv", &thumbnail_identity)
+                .unwrap()
+                .unwrap(),
+            thumbnail
+        );
         assert!(restarted.replay_clip_inventory().unwrap()[0].favorite);
         service
             .set_replay_clip_trashed("Great lap.mkv", true)
@@ -1912,9 +1917,21 @@ mod tests {
             .unwrap();
         assert!(service.replay_clip_inventory().unwrap()[0].favorite);
         service.delete_replay_clip("Great lap.mkv").unwrap();
+        assert!(
+            fs::read_dir(store.directory().join(".redunar-thumbnails-v1"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
         assert!(service.replay_clip_inventory().unwrap().is_empty());
         let mut secondary = RedunarService::with_state_directory(&state);
         secondary.read_only = true;
+        assert!(
+            secondary
+                .cache_replay_thumbnail(name, &thumbnail_identity, &thumbnail)
+                .is_err()
+        );
+        assert!(secondary.delete_replay_clip(name).is_err());
         assert!(secondary.rename_replay_clip(name, "No.mkv").is_err());
         assert!(secondary.set_replay_clip_trashed(name, true).is_err());
         assert!(secondary.set_replay_clip_favorite(name, true).is_err());

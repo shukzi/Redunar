@@ -27,6 +27,12 @@ packages. Regenerate and review it for each release; packages whose published
 archive omits a standalone license file remain explicitly listed for manual
 upstream verification.
 
+Native webview configuration directly uses `webkit2gtk` 2.0.2's supported
+settings getter/setter. This MIT-licensed binding was already in the locked
+production Tauri dependency graph and the generated inventory above retains
+its license text. The direct dependency edge introduces no new crate or copied
+upstream source.
+
 The private Steam launch bridge uses the `nix` crate's safe `SO_PEERCRED`
 wrapper. `nix` is MIT-licensed; its upstream copyright and license text must be
 included by that generated release dependency inventory.

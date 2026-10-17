@@ -20,6 +20,7 @@ import { loadGameArtwork } from './game-artwork.js';
 import { gameInstallation } from './game-installation.js';
 import { steamSetupPanel, refreshSteamSetup } from './steam-setup.mjs';
 import { historyMetrics, historyTimeline, historyDuration, historySelection, historySeries, historyScale, historyX, historyY, historyTime, historyKeyboardTime } from './history-timeline.mjs';
+import { captureHistoryGraph, historyGraphMotion } from './history-motion.mjs';
 import { captureSummary, storageSummary, clipFiltersMarkup, clipFilterChips, filterClips, clipTitle, clipFilenameStem, renamedClipFilename, comparisonSelector, microphoneSelector } from './workspace-improvements.mjs';
 const $ = (selector, root = document) => root.querySelector(selector);
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -52,6 +53,10 @@ let draftShortcuts = [...shortcuts];
 let selectedGame = null, selectedClip = null, selectedSession = 0;
 let overviewMetric = 'frame';
 let historyMetric = 'fps', historyCompare = false, historyCursor = null, historyPeerId = '';
+const historyMotion=historyGraphMotion(),reducedHistoryMotion=matchMedia('(prefers-reduced-motion: reduce)');
+reducedHistoryMotion.addEventListener('change',()=>{if(reducedHistoryMotion.matches)historyMotion.settle();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)historyMotion.settle();});
+window.addEventListener('pagehide',()=>historyMotion.settle());
 let clipFilters = {search:'',game:'all',date:'all',sort:'newest',favorites:false};
 let historyFilters = {search:'',game:'all',date:'all'};
 let lastTrashed = [], clipTrashFeedbackTimer = null;
@@ -59,6 +64,7 @@ let microphoneDevices = [];
 let microphoneInputsPending = null, microphoneInputsLoaded = false;
 const pendingFavorites = new Set();
 let globalTab = 'overlay', libraryTab = 'profile';
+let visibleSaveBarKey = null;
 let preferences = {tray:null,automaticUpdates:true,diagnosticLog:false,diagnosticLogPath:null,betaAccess:false};
 let updateStatus = null, pendingUpdateAction = null;
 let runningVersion=$('.build-label')?.textContent?.replace(/^Version\s+/,'')||'Current build';
@@ -112,6 +118,7 @@ function moduleBadge(key,label='') {
 }
 const workspace = $('#workspace');
 const scrollRoot = $('.window-content');
+scrollRoot.addEventListener('scroll',()=>historyMotion.settle(),{passive:true});
 const clip = () => clips.find(c=>c.id===selectedClip);
 const game = () => games.find(g=>g.id===selectedGame);
 const route = () => location.hash.slice(1) || 'overview';
@@ -274,7 +281,35 @@ function library() {
  const header=heading('Library','Games, launch options, and individual profiles.',`<div class="heading-actions library-heading-actions">${button('<span>Scan installed games</span>','scan-games')}${button('<span>Reload library</span>','reload-games')}${button(`${icon('plus')}<span>Add game</span>`,'add-game',true)}</div>`);
  if(!g)return header+`<section class="panel empty-panel"><span class="shortcut-icon">${icon('library')}</span><h2>${errors.catalog?'Library unavailable':'Your game library starts here.'}</h2><p>${escape(errors.catalog||'Scan for installed games, or add a local game yourself. Settings stay on this device.')}</p><div class="heading-actions">${button('Scan installed games','scan-games',true)}${button('Add a game','add-game')}</div></section>`;
  return header+
- `<div class="library-workspace"><aside class="game-catalog"><label class="search">${icon('search')}<input id="game-search" type="search" placeholder="Find a game" aria-label="Find a game"></label><div class="catalog-label">${games.length} local games</div><div id="library-list">${libraryRows()}</div><div class="catalog-note">${icon('folder')}<p>Detected locally or added by you.</p></div></aside><section class="game-detail"><div class="game-cover ${g.color}"><div class="game-cover-banner" data-banner="${escape(g.id)}"></div><div class="cover-art" aria-hidden="true">${icon('library')}</div><div>${pill(escape(g.launcher))}<h2>${escape(g.name)}</h2><p>Local game profile</p></div><div class="game-cover-actions"><div class="game-launch-action">${button(`${icon('play')} Launch game`,'launch-game',true,'disabled aria-describedby="game-installation-note"')}<small id="game-installation-note" aria-live="polite"></small></div><details class="game-more"><summary class="button">More <span aria-hidden="true">⌄</span></summary><div>${button('Edit launch settings','edit-launch')}${button('Remove game','remove-game')}</div></details></div></div>${g.steam_app_id?steamSetupPanel():''}<div class="tabbar">${[['profile','Game settings'],['match','Launch matching']].map(([id,label])=>`<button data-library-tab="${id}" class="${libraryTab===id?'active':''}" aria-pressed="${libraryTab===id}">${label}</button>`).join('')}</div>${libraryTab==='match'?`<div class="detail-body"><h3>Identify this game</h3><p>Exact local matches connect a game to its settings.</p>${g.steam_app_id?field('Steam App ID','Identifies this game when launched from Steam',`<code>${escape(g.steam_app_id)}</code>`):field('Executable','Exact local match',`<code class="launch-match-value">${escape(g.exe)}</code>`)}${g.steam_app_id?field('Launch executable','Starts Steam; the App ID identifies the game',`<code>${escape(g.exe)}</code>`):''}${field('Launcher','Optional metadata',`<span>${escape(g.launcher)}</span>`)}<div class="info-note">Ambiguous matches must be reviewed before a profile can activate.</div></div>`:libraryProfile(g)}</section></div>${gameSaveBar(g)}`;
+ `<div class="library-workspace"><aside class="game-catalog"><label class="search">${icon('search')}<input id="game-search" type="search" placeholder="Find a game" aria-label="Find a game"></label><div class="catalog-label">${games.length} local games</div><div id="library-list">${libraryRows()}</div><div class="catalog-note">${icon('folder')}<p>Detected locally or added by you.</p></div></aside><section class="game-detail"><div class="game-cover ${g.color}"><div class="game-cover-banner" data-banner="${escape(g.id)}"></div><div class="cover-art" aria-hidden="true">${icon('library')}</div><div>${pill(escape(g.launcher))}<h2>${escape(g.name)}</h2><p>Local game profile</p></div><div class="game-cover-actions"><div class="game-launch-action">${button(`${icon('play')} Launch game`,'launch-game',true,'disabled aria-describedby="game-installation-note"')}<small id="game-installation-note" aria-live="polite"></small></div><details class="game-more"><summary class="button">More <span aria-hidden="true">⌄</span></summary><div>${button('Edit launch settings','edit-launch')}${button('Remove game','remove-game')}</div></details></div></div>${g.steam_app_id?steamSetupPanel():''}<div class="tabbar">${[['profile','Game settings'],['match','Launch matching']].map(([id,label])=>`<button data-library-tab="${id}" class="${libraryTab===id?'active':''}" aria-pressed="${libraryTab===id}">${label}</button>`).join('')}</div>${libraryTabContent(g)}</section></div>${gameSaveBar(g)}`;
+}
+function libraryTabContent(g) {
+ return libraryTab==='match'?`<div class="detail-body"><h3>Identify this game</h3><p>Exact local matches connect a game to its settings.</p>${g.steam_app_id?field('Steam App ID','Identifies this game when launched from Steam',`<code>${escape(g.steam_app_id)}</code>`):field('Executable','Exact local match',`<code class="launch-match-value">${escape(g.exe)}</code>`)}${g.steam_app_id?field('Launch executable','Starts Steam; the App ID identifies the game',`<code>${escape(g.exe)}</code>`):''}${field('Launcher','Optional metadata',`<span>${escape(g.launcher)}</span>`)}<div class="info-note">Ambiguous matches must be reviewed before a profile can activate.</div></div>`:libraryProfile(g);
+}
+function showLibraryTab(tab) {
+ if(libraryTab===tab||!['profile','match'].includes(tab))return;
+ libraryTab=tab;refreshLibraryDetail();
+}
+function refreshLibraryDetail() {
+ const body=$('.game-detail > .detail-body'),g=game();
+ if(!body||!g)return;
+ closePrecisionSelect();
+ const template=document.createElement('template');template.innerHTML=libraryTabContent(g);
+ // Tabs/profile drafts own only their detail body. Keep Steam evidence, artwork,
+ // search and actions mounted; native refreshes belong to entry/focus/retry.
+ body.replaceWith(template.content);
+ for(const button of document.querySelectorAll('[data-library-tab]')){
+  const selected=button.dataset.libraryTab===libraryTab;
+  button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));
+ }
+ const entries=new Map(games.map(item=>[item.id,item]));
+ for(const row of document.querySelectorAll('.library-game')){
+  const entry=entries.get(row.dataset.game);
+  const label=row.querySelector('small:last-child');
+  if(entry&&label)label.textContent=Object.keys(entry.overrides).length?'Custom settings':'Global defaults';
+ }
+ enhancePrecisionSelects($('.game-detail'));updateObservedElements();
+ if(!native||!loaded.catalog)$('.game-detail > .detail-body').querySelectorAll('button,input,select').forEach(el=>el.disabled=true);
 }
 function gameSaveBar(g) {
  return `<div class="game-save-bar change-save-bar" ${gameProfileChanged(g)?'':'hidden'}><span id="game-save-state">${gameProfileChanged(g)?'Unsaved changes':'All changes saved'}</span><div class="heading-actions">${button('Discard changes','discard-game',false,gameProfileChanged(g)?'':'disabled')}${button('Save changes','save-game',true,gameProfileChanged(g)?'':'disabled')}</div></div>`;
@@ -390,7 +425,25 @@ function historyTimelineChart(samples,metric,cursor,duration) {
  const marker=historyX(cursor,duration);
  return `<div class="history-chart-legend">${lines.map(line=>`<span class="${line.kind}"><i></i>${line.label}</span>`).join('')}</div><div class="chart history-timeline-chart"><div class="y-axis">${scale.ticks.map(value=>`<span data-axis-value="${value}" style="top:${historyY(value,scale)/220*100}%">${value.toFixed(scale.digits)} ${scale.unit}</span>`).join('')}</div><svg viewBox="0 0 900 220" preserveAspectRatio="none" role="img" aria-label="Session ${escape(metric)} timeline"><defs><linearGradient id="history-area-gradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f15c6c" stop-opacity=".2"/><stop offset="1" stop-color="#f15c6c" stop-opacity="0"/></linearGradient></defs>${scale.ticks.map(value=>`<path d="M0 ${historyY(value,scale)}H900" class="gridline" data-axis-value="${value}"/>`).join('')}${traces}<line id="history-cursor-line" x1="${marker}" x2="${marker}" y1="12" y2="214" class="history-cursor-line"/></svg></div><div class="chart-axis history-time-axis"><span>${historyTime(0)}</span><span>${historyTime(duration/2)}</span><span>${historyTime(duration)}</span></div>${scrubber}`;
 }
+function showHistoryMetric(metric) {
+ const container=$('#history-timeline'),session=sessions[selectedSession];
+ if(!container||!session||!historyMetrics[metric]||historyMetric===metric)return;
+ const animate=!reducedHistoryMotion.matches&&!document.hidden;
+ const from=animate?captureHistoryGraph($('svg',container)):null;
+ historyMotion.settle();
+ historyMetric=metric;
+ const {samples}=historyTimeline(session),duration=historyDuration(session,samples);
+ container.innerHTML=historyTimelineChart(samples,metric,historyCursor,duration);
+ updatePrecisionSliders(container);
+ for(const button of document.querySelectorAll('[data-history-view]')){
+  const selected=button.dataset.historyView===metric;
+  button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));
+ }
+ if(animate)historyMotion.start(from,$('svg',container));
+}
 function updateHistoryCursor(value) {
+ // Inspection always uses exact final geometry, even during metric entry.
+ historyMotion.settle();
  const session=sessions[selectedSession];if(!session)return;
  const timeline=historyTimeline(session),duration=historyDuration(session,timeline.samples);
  const selection=historySelection(timeline.samples,value,duration),sample=selection.sample;
@@ -443,7 +496,7 @@ function history() {
  const selection=historySelection(timeline.samples,historyCursor,duration),moment=selection.sample;
  historyCursor=selection.seconds;
  return heading('History','Review session measurements and compare recorded runs.',button('Refresh history','reload-history'))+
- `<div class="history-workspace">${historyCatalog()}<section class="panel history-detail"><div class="section-heading"><div><p class="record-label">Recorded session</p><h2>${escape(s.game)}</h2><p>${s.date} at ${s.time}</p></div>${pill('Completed','green')}</div><div class="telemetry-row history-stats">${stat('Duration',s.duration)}${stat('Average',s.fps,'FPS')}${stat('1% low',s.low,'FPS')}${stat('0.1% low',s.lowest,'FPS')}</div><div class="history-controls"><div class="history-view-toggle" role="group" aria-label="History chart metric">${[['fps','FPS'],['frame-time','Frame time'],['temperature','Temperatures'],['utilization','Load']].map(([value,label])=>`<button class="${historyMetric===value?'active':''}" data-history-view="${value}" aria-pressed="${historyMetric===value}">${label}</button>`).join('')}</div>${comparisonSelector(sessions,selectedSession,historyPeerId)}</div><div class="section-heading"><div><h3>Session timeline</h3><p>${timeline.legacy?'Legacy retained frame sequence':'Sampled throughout the complete session'}</p></div><span>${timeline.samples.length} observations</span></div>${historyTimelineChart(timeline.samples,historyMetric,historyCursor,duration)}${historyMoment(moment,timeline.legacy,historyCursor)}${historyComparison(s,peer)}<div class="history-explanation"><span>${icon('history')}</span><div><h3>Move through the complete session.</h3><p>Drag the timeline to inspect frame rate, frame time, temperatures, and hardware load at that moment. Long sessions retain the full time span with gradually reduced sample resolution.</p></div></div></section></div>`;
+ `<div class="history-workspace">${historyCatalog()}<section class="panel history-detail"><div class="section-heading"><div><p class="record-label">Recorded session</p><h2>${escape(s.game)}</h2><p>${s.date} at ${s.time}</p></div>${pill('Completed','green')}</div><div class="telemetry-row history-stats">${stat('Duration',s.duration)}${stat('Average',s.fps,'FPS')}${stat('1% low',s.low,'FPS')}${stat('0.1% low',s.lowest,'FPS')}</div><div class="history-controls"><div class="history-view-toggle" role="group" aria-label="History chart metric">${[['fps','FPS'],['frame-time','Frame time'],['temperature','Temperatures'],['utilization','Load']].map(([value,label])=>`<button class="${historyMetric===value?'active':''}" data-history-view="${value}" aria-pressed="${historyMetric===value}">${label}</button>`).join('')}</div>${comparisonSelector(sessions,selectedSession,historyPeerId)}</div><div class="section-heading"><div><h3>Session timeline</h3><p>${timeline.legacy?'Legacy retained frame sequence':'Sampled throughout the complete session'}</p></div><span>${timeline.samples.length} observations</span></div><div id="history-timeline">${historyTimelineChart(timeline.samples,historyMetric,historyCursor,duration)}</div>${historyMoment(moment,timeline.legacy,historyCursor)}${historyComparison(s,peer)}<div class="history-explanation"><span>${icon('history')}</span><div><h3>Move through the complete session.</h3><p>Drag the timeline to inspect frame rate, frame time, temperatures, and hardware load at that moment. Long sessions retain the full time span with gradually reduced sample resolution.</p></div></div></section></div>`;
 }
 function historyRows() {
  return filterSessions(sessions,historyFilters).map(s=>`<button class="history-row ${s.index===selectedSession?'selected':''}" data-session="${s.index}" aria-pressed="${s.index===selectedSession}"><small>${s.date}</small><strong>${escape(s.game)}</strong><span>${s.duration}<b>${s.fps} FPS</b></span></button>`).join('') || '<div class="history-filter-empty"><strong>No matching sessions</strong><button class="button" data-action="clear-history-filters">Clear filters</button></div>';
@@ -570,6 +623,7 @@ function diagnosticsCard() {
 }
 
 function render() {
+ historyMotion.settle();
  const samePage=document.body.dataset.page===route();
  const filters=samePage?['game-search','clip-search'].map(id=>[id,document.getElementById(id)?.value]).filter(([,value])=>value):[];
  const rails=samePage?['#library-list','#session-list','.clip-list'].map(selector=>[selector,$(selector)?.scrollTop??0]):[];
@@ -932,7 +986,13 @@ function updateDirtyActionButtons() {
  const gameState=$('#game-save-state');if(gameState)gameState.textContent='Unsaved changes';
  const globalBar=$('.settings-save-bar');if(globalBar)globalBar.hidden=!(profileChanged||shortcutsChanged);
  const gameBar=$('.game-save-bar');if(gameBar)gameBar.hidden=!gameChanged;
- document.body.dataset.unsaved=String(!!$('.change-save-bar:not([hidden])'));
+ const visibleBar=$('.change-save-bar:not([hidden])');
+ const barKey=visibleBar?(visibleBar===globalBar?'global':`game:${selectedGame}`):null;
+ // Retain the logical owner across re-renders: polling, further edits and tab
+ // changes must not replay entry motion while the same draft bar stays visible.
+ if(visibleBar&&barKey!==visibleSaveBarKey)visibleBar.classList.add('save-bar-enter');
+ visibleSaveBarKey=barKey;
+ document.body.dataset.unsaved=String(!!visibleBar);
 }
 function updateObservedElements() {
  const libraryGuide=$('#library-start-guide');if(libraryGuide)libraryGuide.hidden=!showLibraryStartGuide();
@@ -1226,13 +1286,13 @@ document.addEventListener('click',event=>{
  if(target.dataset.game){selectedGame=target.dataset.game;render();return;}
  if(target.dataset.session!==undefined){selectedSession=Number(target.dataset.session);historyCursor=null;historyCompare=false;historyPeerId='';render();return;}
  if(target.dataset.overviewView){overviewMetric=target.dataset.overviewView;document.querySelectorAll('[data-overview-view]').forEach(el=>{const selected=el.dataset.overviewView===overviewMetric;el.classList.toggle('active',selected);el.setAttribute('aria-pressed',String(selected));});updateObservedElements();return;}
- if(target.dataset.historyView){historyMetric=target.dataset.historyView;render();return;}
+ if(target.dataset.historyView){showHistoryMetric(target.dataset.historyView);return;}
  if(target.dataset.action==='history-compare'){historyCompare=!historyCompare;render();return;}
  if(target.dataset.preset){if(busy||!loaded.global)return;const next=target.dataset.preset;if(next==='Custom'&&draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);draft.preset=next;syncMetricToggles();updateHud();return;}
  if(target.dataset.layout){if(busy||!loaded.global)return;draft.layout=target.dataset.layout;updateHud();return;}
  if(target.dataset.palette){if(busy||!loaded.global)return;draft.palette=target.dataset.palette;updateHud();return;}
  if(target.dataset.globalTab){globalTab=target.dataset.globalTab;if(route()==='global')render();return;}
- if(target.dataset.libraryTab){libraryTab=target.dataset.libraryTab;render();return;}
+ if(target.dataset.libraryTab){showLibraryTab(target.dataset.libraryTab);return;}
  if(target.dataset.action==='reset-trim'){if(videoReady&&!exporting){trimStart=0;trimEnd=playerDuration;seekPlayer(0);updatePlayerUi();}return;}
  if(target.dataset.player){const video=$('#clip-video');if(video){if(target.dataset.player==='toggle'){if(performance.now()<suppressPlayerToggleClickUntil){suppressPlayerToggleClickUntil=0;return;}togglePlayback();}if(target.dataset.player==='back')seekPlayer(clamp((pendingSeek??playerPosition)-5,trimStart,trimEnd));if(target.dataset.player==='forward'){const next=clamp((pendingSeek??playerPosition)+5,trimStart,trimEnd);if(next>=trimEnd-.01&& !video.paused)video.pause();seekPlayer(next);}updatePlayerUi();}return;}
  const action=target.dataset.action;
@@ -1257,10 +1317,10 @@ document.addEventListener('click',event=>{
   performUpdate('install_update','installing');return;
  }
  if(action==='discard-global'){if(!globalProfileChanged()&&!globalShortcutsChanged())return;draft=structuredClone(defaults);draftShortcuts=[...shortcuts];render();return;}
- if(action==='discard-game'){game().overrides={...savedGameOverrides.get(game().id)};game().revision=game().savedRevision??game().revision;render();return;}
+ if(action==='discard-game'){game().overrides={...savedGameOverrides.get(game().id)};game().revision=game().savedRevision??game().revision;refreshLibraryDetail();return;}
  if(action==='reset-game'){
   delete game().overrides.overlay;delete game().overrides.replay;delete game().overrides.captureMetrics;
-  render();notify('Draft now uses global defaults. Save game settings to apply.');return;
+  refreshLibraryDetail();notify('Draft now uses global defaults. Save game settings to apply.');return;
  }
  if(action==='add-game'){
   modal('Add a local game','<form id="add-game-form"><label class="form-label">Game name<input name="name" required maxlength="70" placeholder="Game name"></label><label class="form-label">Executable path<div class="picker-field"><input name="exe" required maxlength="4096" placeholder="/absolute/path/to/game"><button class="button" type="button" data-pick-executable="exe">Choose file</button></div></label><p class="small-note">Adds a verified local executable to the local library. It does not launch the game.</p><button class="button primary" type="submit">Add game</button></form>');return;
@@ -1303,7 +1363,7 @@ document.addEventListener('click',event=>{
   }
   if(action==='save-game'){
    const saved=await saveGameProfileDraft(game()?.id);if(!saved)return;
-   render();notify(saved.liveNotice||'Game settings saved.');
+   refreshLibraryDetail();notify(saved.liveNotice||'Game settings saved.');
   }
   if(action==='save-global'){
    if(globalTab==='shortcuts'){
@@ -1445,7 +1505,7 @@ document.addEventListener('change',event=>{
  if(t.dataset.override){
   if(t.value==='inherit')delete game().overrides[t.dataset.override];
   else game().overrides[t.dataset.override]=t.value==='On';
-  render();focusPrecisionSelect($(`[data-override="${t.dataset.override}"]`));
+  refreshLibraryDetail();focusPrecisionSelect($(`[data-override="${t.dataset.override}"]`));
  }
 });
 document.addEventListener('submit',event=>{

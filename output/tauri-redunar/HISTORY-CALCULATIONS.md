@@ -63,7 +63,25 @@ all traces or run expensive native queries.
 History CPU traces/legends use `#e7474f`; GPU uses `#ff9297`. Selected measurement
 cards retain neutral text. This scope does not recolor unrelated CPU/GPU UI.
 
+User-requested metric switches can briefly interpolate presentation coordinates
+between compatible traces. `ui/history-motion.mjs` never changes the observations,
+timestamps, segment boundaries or exact destination markup. Axis labels change
+to the selected metric immediately; intermediate heights are transition geometry,
+not additional measurements. Scrubbing settles the transition before inspecting
+values. A sensor segment can morph from matching timestamps within one longer
+continuous source segment. Unmatched segments fade at their exact destination
+coordinates; no source gap is joined or timestamp interpolated. Missing sensors
+do not cancel transitions for other series. Isolated observations remain exact.
+Dense morphs temporarily use extrema from both shapes at recorded timestamps
+within the animation budget. They restore every original observation/attribute
+at completion or inspection, including spikes. This is transition geometry only;
+no journal, calculation, axis or settled chart data is downsampled. The GPU line
+and primary fill fade during metric changes. [PERFORMANCE](../../PERFORMANCE.md)
+owns duration, point limits and cancellation rules.
+
 `tests/history-timeline.test.mjs` exercises the calculation helpers.
+`tests/history-motion.test.mjs` and `tests/history-motion-webview.py` check the
+transition, exact final/inspection geometry, interruption and idle-work limits.
 `tests/workspace-webview.py` checks built chart geometry, trace/axis consistency,
 slider alignment, missing samples, and CPU/GPU temperature/load fixtures. Use
 independent expected values and coordinates; asserting one helper against itself

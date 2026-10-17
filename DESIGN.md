@@ -13,6 +13,14 @@ labels, hover titles, and an explicit expansion control. Keep graphics subordina
 to measurements and controls. Keep marketing language, decorative motion, and
 session-identity concepts out of the app workspace.
 
+Interaction feedback uses short entry motion: desktop dialogs fade in over
+140 ms, Precision dropdowns fade/move 2 px over 100 ms, and Save/Discard bars
+fade/rise 4 px over 140 ms when first shown. Continued edits, polling and tab
+changes do not restart a visible draft bar. Dismissal stays immediate, controls
+remain usable during entry, and the system reduced-motion preference disables
+these effects. Do not add decorative page, live-data or in-game overlay motion.
+Workspace scrolling uses the native WebKit behavior described below.
+
 Use a black canvas, neutral charcoal panels, grey separators, and Redunar red
 `#e7474f`. Avoid purple-tinted neutral surfaces and orange replacements for red.
 The approved control colors remain independent of surface refinements. Inspect
@@ -58,6 +66,12 @@ System metrics groups CPU/GPU load, separate temperature meters, RAM, and VRAM
 where available, with readable separators. Red shades follow the graph; missing
 readings remain unavailable. Use Recent captures, not Recent moments, and
 System metrics, not Under the hood.
+Keep the RAM/VRAM availability rows' line space when their readings are missing
+so monitor interruptions do not collapse those rows and move the scrollbar.
+Use WebKit's original native smooth scrolling for the workspace. Delegate wheel,
+fine/high-resolution input, nested scroll areas and editing controls to the
+engine; do not intercept wheel events or add a JavaScript scroll animation.
+The engine owns scrolling and its interaction with system motion preferences.
 
 ## Library
 
@@ -71,6 +85,10 @@ Game settings and Launch matching are separate tabs. Clearly show inherited
 versus custom values and Reset to global settings. Changes retain their own
 drafts through navigation and unrelated saves. Installed-game import reviews
 local Steam/XDG entries; running helper processes are not import candidates.
+Switching these tabs updates only the detail body. Keep the selected game's
+Steam setup panel, expanded launch options, artwork, search and draft actions
+mounted; tab changes and profile edits/reset/discard/save do not restart native
+setup/installation/artwork reads. Refresh catalog draft labels in place.
 Overview offers **Add your first game**, with a short add/scan instruction and
 **Open Library**, only after the catalog successfully loads with no saved games.
 Loading and failed catalog reads never appear as a first-use empty state. Once
@@ -290,6 +308,18 @@ Never smooth away recorded spikes, invent missing samples, or report a value
 that contradicts its plotted height. Empty, partial, unavailable, and
 compatibility data need honest states. A fixture verifies presentation, not
 native measurement.
+
+Changing History metrics may morph compatible traces over 520 ms, without
+changing their recorded timestamps or final values. Selecting the active metric
+does nothing. Scrubbing or scrolling settles immediately so inspection uses
+exact geometry. Reduced motion and hidden/navigation states bypass or end the
+effect. Partial sensor coverage morphs at matching recorded timestamps; segments
+without a continuous source counterpart fade at their exact destination geometry.
+Isolated readings stay exact and gaps remain visible. Dense transitions use bounded
+presentation geometry retaining extrema from both shapes; every original point
+is restored at completion or inspection. Secondary traces and primary fill fade
+as in the prototype. See [PERFORMANCE](PERFORMANCE.md) for the animation budget.
+The session catalog, filters and metric focus stay put.
 
 The saved-clip rail has text sorting with an arrow, a count, and individual clip
 favorites. Trash bin sits beside folder and refresh actions. There is no multiple

@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 
-from webkit_fixture import configure_webkit
+from webkit_fixture import configure_webkit, configure_webview
 configure_webkit()
 import gi
 
@@ -121,6 +121,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
     """.replace("JPEG", json.dumps(jpeg))
     manager.add_script(WebKit2.UserScript.new(setup, WebKit2.UserContentInjectedFrames.TOP_FRAME, WebKit2.UserScriptInjectionTime.START, None, None))
     view = WebKit2.WebView.new_with_user_content_manager(manager)
+    configure_webview(view)
     window = Gtk.Window()
     window.set_default_size(1400, 1000)
     window.add(view)

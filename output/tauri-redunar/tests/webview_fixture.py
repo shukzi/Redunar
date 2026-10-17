@@ -7,7 +7,7 @@ from pathlib import Path
 import json
 import re
 import threading
-from webkit_fixture import configure_webkit
+from webkit_fixture import configure_webkit, configure_webview
 configure_webkit()
 import gi
 gi.require_version('Gtk','3.0')
@@ -99,6 +99,7 @@ fixture = "const fixtureResolutionRejection=" + json.dumps(resolution_copy) + ";
 fixture = "window.fixturePalettes=" + (NATIVE / "ui/overlay-palettes.json").read_text() + ";" + fixture
 manager.add_script(WebKit2.UserScript.new(fixture,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
 view=WebKit2.WebView.new_with_user_content_manager(manager)
+configure_webview(view)
 view.set_background_color(Gdk.RGBA(0,0,0,0))
 window=Gtk.Window();window.set_default_size(1440,1000);window.add(view);window.show_all()
 def pump(ms=250):

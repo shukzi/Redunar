@@ -462,6 +462,19 @@ Disk usage includes trashed files. Changing folders leaves their files and bin
 state in the old store; returning to that store makes them available again. Older
 versions that lack the bin reader show those files as ordinary recordings.
 
+Thumbnail JPEGs are optional private, regenerable data in `.redunar-thumbnails-v1`
+inside the owned replay store. They survive app restarts, filename edits and
+trash/restore. Native lookup validates the clip's device/inode, size and exact
+modification timestamp before reuse; changed clips regenerate their previews.
+Only the native decoder writes cache bytes, and late results cannot recreate
+cached images after native permanent deletion. Permanent deletion clears all
+cached revisions of that inode before removing the recording; failed cache cleanup
+retains the recording for retry. The existing quota cleanup follows the same rule.
+The bin UI currently offers Restore only; this does not add a deletion action.
+[PERFORMANCE.md](PERFORMANCE.md#desktop-media-and-history) owns cache limits.
+Cache write/read failure falls back to ordinary thumbnail generation and does not
+prevent playback. Cached thumbnails do not replace or modify recordings.
+
 Microphone status is cached native packet freshness, independently of system audio
 and video readiness. Enabled input starts Waiting, reports Capturing only with
 recent packets, and becomes Unavailable after three seconds without progress.

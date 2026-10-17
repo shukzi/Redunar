@@ -2528,6 +2528,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "webkit2gtk",
 ]
 
 [[package]]

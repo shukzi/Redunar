@@ -22,6 +22,8 @@ mod tray;
 mod tray_native;
 mod update_restart;
 mod updates;
+#[cfg(target_os = "linux")]
+mod webview_settings;
 mod window_lifecycle;
 use tauri::Manager;
 
@@ -239,6 +241,10 @@ fn main() {
             app.state::<hotkeys::ShortcutMonitor>()
                 .set_app_handle(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "linux")]
+                if let Err(error) = webview_settings::configure(&window) {
+                    redunar_daemon::log_op!("Window scrolling configuration unavailable: {error}");
+                }
                 if let Ok(saved) = backend::service().app_preferences() {
                     if saved.window_maximized {
                         let _ = window.maximize();

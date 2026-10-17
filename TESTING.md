@@ -74,6 +74,38 @@ live-game capture. Those remain separately authorized acceptance. Current run
 results and exact source manifests are kept under `.redunar-build/reports`;
 production build source/binary manifests belong to `.redunar-build/linux`.
 
+## Overview scroll stability
+
+After a production frontend build, run
+`xvfb-run -a python3 output/tauri-redunar/tests/overview-scroll-webview.py`.
+The private WebKit fixture checks page extent, scroll position and recent-capture
+position through complete/partial missing memory readings and recovery at three
+window widths. It verifies unavailable text remains honest. This does not measure
+desktop compositor performance or reproduce every possible scroll jump; see the
+[October 17 investigation](docs/verification/2026-10-17-overview-scroll.md).
+For actual wheel input inside a private X display, also run
+`xvfb-run -a env REDUNAR_PRIVATE_DESKTOP_FIXTURE=1 python3 output/tauri-redunar/tests/overview-wheel-webview.py`.
+It verifies actual native intermediate positions, notch/burst distance, reversal,
+settling, unchanged geometry/thumbnails and navigation. It also checks that the
+production UI registers no wheel handlers, prevents no coarse/fine/control wheel
+events and adds no JavaScript animation callbacks, including reduced motion.
+Shared WebKit fixtures match the main window's enabled native smooth-scrolling
+setting. Exact native timing and desktop hardware feel remain engine/owner
+acceptance rather than a custom animation contract.
+
+The production Rust configuration must also run in a native Tauri view:
+
+```sh
+cargo build --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --example webview_settings_probe --target-dir .redunar-build/checks/tauri
+dbus-run-session -- xvfb-run -a env REDUNAR_PRIVATE_DESKTOP_FIXTURE=1 .redunar-build/checks/tauri/debug/examples/webview_settings_probe
+```
+
+This probe calls the same configuration function as startup, using blank hidden
+incognito views and temporary XDG state. It checks no panic, repeated setup,
+restored native easing and independent-view isolation, without starting the
+backend, tray, hotkeys or games. Python WebKit fixtures alone cannot certify the Rust API
+path. See the [startup-crash repair](docs/verification/2026-10-17-webview-startup.md).
+
 ## Keyboard reconnect fixtures
 
 Private byte-stream fixtures exercise the production keyboard owner with empty
@@ -863,7 +895,42 @@ After building, run the relevant WebKitGTK fixture checks:
 ```sh
 xvfb-run -a python3 output/tauri-redunar/tests/workspace-webview.py
 xvfb-run -a python3 output/tauri-redunar/tests/replay-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/motion-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/library-tabs-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/history-motion-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/thumbnail-webview.py
 ```
+
+The motion fixture checks immediate interaction/cancellation, focus, dropdown
+placement, retained drafts and failed-save retry, no draft-bar animation restart
+through edits/tab renders/polling, and released animations/transforms when
+settled. It changes only its process's GTK animation preference to verify actual
+normal/reduced-motion CSS behavior. Screenshots include entry states and a
+narrow action bar. Use the refresh fixture above to retain performance coverage.
+See the [October 16 motion verification](docs/verification/2026-10-16-workspace-motion.md)
+for build references, current results and limits.
+
+The Library tab fixture holds native Steam checks pending while switching tabs,
+then checks retained evidence, expanded options/text selection, search, drafts,
+keyboard focus, retry/error/ambiguity feedback and out-of-order game responses.
+Tab switches must not request installation status, artwork or Steam evidence.
+Entry, focus and explicit retry still refresh the relevant native evidence.
+Per-game option edits, reset/discard, failed saves and successful saves must also
+retain the pending/expanded Steam panel and update draft labels without reads.
+
+History motion checks cover rapid metric switches, exact final data, immediate
+inspection/scroll settlement, retained focus/catalog, no animation on polling,
+navigation cleanup, live reduced-motion changes, secondary/fill fades, all twelve
+directed metric pairs with partial CPU/GPU coverage, gaps and
+isolated data. A full 7,200-sample fixture must morph within the vertex budget,
+then restore every exact point and release temporary shapes/opacity/clock work.
+The Node clock fixture also checks exact completion and disconnected cleanup.
+
+The thumbnail fixture holds basic metadata pending while images paint, then
+checks navigation/inventory reuse and changed-file invalidation. Native store
+tests cover persistence across reopen/rename/trash/restore, corrupt/oversized
+images, symlinks, bounds/private modes, stale worker results and permanent-delete
+cleanup. Service tests retain secondary-owner restrictions. All use private state.
 
 These use isolated frontend fixtures, not real user sessions. Inspect affected
 screens at normal and compact widths and with keyboard input. Check empty,
