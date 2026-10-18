@@ -51,7 +51,9 @@ checks disabled busy submission, the simple spinner, retained source context,
 cancellation cleanup and narrow progress dialogs.
 Size-control regressions cover source-relative bounds, half-size defaults,
 duration-proportional selection estimates retained on Retry, typed over-limit
-values, already-fitting whole clips, and tiny/missing size context.
+values, already-fitting whole clips, and tiny/missing size context. Sparse-file
+native fixtures cover analysis above 64 MiB within its source-relative budget,
+combined statistics overflow, output overflow, child reaping and private cleanup.
 
 ```sh
 cargo test --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml clip_export --target-dir .redunar-build/checks/tauri
