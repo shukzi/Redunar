@@ -151,6 +151,28 @@ impl ReplayClipStore {
                 "replay free-space request exceeds the configured clip budget",
             ));
         }
+        self.ensure_filesystem_space(expected_clip_bytes)
+    }
+
+    /// Check filesystem headroom for an edited export. Re-encoded exports
+    /// have their own bounded output size and are not constrained by the
+    /// rolling capture ring's bitrate-derived budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplayStoreError`] for an empty export, unsafe store state,
+    /// unavailable filesystem statistics, or insufficient free space.
+    pub fn ensure_free_space_for_export(
+        &self,
+        expected_clip_bytes: u64,
+    ) -> Result<(), ReplayStoreError> {
+        if expected_clip_bytes == 0 {
+            return Err(ReplayStoreError::new("replay export is empty"));
+        }
+        self.ensure_filesystem_space(expected_clip_bytes)
+    }
+
+    fn ensure_filesystem_space(&self, expected_clip_bytes: u64) -> Result<(), ReplayStoreError> {
         validate_store(&self.directory)?;
         let status = statvfs(&self.directory).map_err(|error| {
             ReplayStoreError::owned(format!(
@@ -282,11 +304,28 @@ impl ReplayClipStore {
         &self,
         source: &mut impl Read,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
+        self.save_mp4_preserving_existing_with_limit(source, self.maximum_clip_bytes)
+    }
+
+    /// Save an edited MP4 with a caller-provided output bound. Trim exports
+    /// are re-encoded separately from the rolling ring, so their encoded size
+    /// may exceed the ring's bitrate-derived budget while still fitting the
+    /// filesystem quota.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplayStoreError`] for malformed or oversized input, unsafe
+    /// store state, insufficient configured capacity, or I/O failures.
+    pub fn save_mp4_preserving_existing_with_limit(
+        &self,
+        source: &mut impl Read,
+        maximum_output_bytes: u64,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
         self.save_generated(ReplayOutputFormat::Mp4, true, |temporary| {
             write_bounded_mp4(
                 temporary,
                 source,
-                self.maximum_clip_bytes,
+                maximum_output_bytes,
                 self.storage_limit_bytes,
             )
         })
@@ -1621,6 +1660,19 @@ mod tests {
         assert!(original.path.exists());
         assert!(edited.path.exists());
         assert_eq!(store.inventory().expect("inventory").len(), 2);
+    }
+
+    #[test]
+    fn edited_mp4_can_use_an_explicit_export_limit_above_ring_budget() {
+        let fixture = Fixture::new();
+        let store = fixture.store(16, 128);
+
+        let edited = store
+            .save_mp4_preserving_existing_with_limit(&mut mp4(24, 2), 32)
+            .expect("export limit should be independent of ring budget");
+
+        assert_eq!(edited.bytes, 24);
+        assert!(edited.path.exists());
     }
 
     #[test]

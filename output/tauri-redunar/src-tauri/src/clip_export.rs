@@ -237,13 +237,20 @@ fn export_clip(
         .prepare_replay_store()
         .map_err(|error| error.to_string())?;
     store
-        .ensure_free_space(bytes)
+        .ensure_free_space_for_export(bytes)
         .map_err(|error| error.to_string())?;
     let mut rendered = File::open(&temporary.path)
         .map_err(|error| format!("The trimmed clip could not be reopened: {error}"))?;
     let saved = match output_name {
-        Some(stem) => store.save_named_mp4_preserving_existing(&mut rendered, stem),
-        None => store.save_mp4_preserving_existing(&mut rendered),
+        Some(stem) => store.save_named_mp4_preserving_existing_with_limit(
+            &mut rendered,
+            stem,
+            temporary_output_limit(source_bytes)?,
+        ),
+        None => store.save_mp4_preserving_existing_with_limit(
+            &mut rendered,
+            temporary_output_limit(source_bytes)?,
+        ),
     }
     .map_err(|error| error.to_string())?;
     let file_name = saved
