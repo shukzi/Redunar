@@ -1,94 +1,64 @@
 # Redunar current work
 
-Reviewed September 24, 2026. Redunar has an implemented Tauri application;
-release qualification remains incomplete. The package specification
-is the build-version authority, not a version number copied into every guide.
+Reviewed October 18, 2026 against `main` at `825012d` and the published
+[v0.1.26 release](https://github.com/shukzi/Redunar/releases/tag/v0.1.26).
+Public source and Linux packages are available. Version metadata is owned by
+the package specification and checked against the native application metadata;
+see [the release procedure](docs/RELEASING.md).
+
+The latest published release improves cached clip thumbnails. Current `main`
+also includes saved-clip refresh without restarting and trimmed exports that
+can exceed the rolling capture buffer's size budget while retaining bounded
+output sizes, free-space checks, and protection for existing recordings. These
+source changes are not yet included in a published package release.
 
 ## Implemented product
 
-- The production Tauri workspace with Overview, Library, Global settings,
-  Instant Replay, History, and Settings, backed by shared Rust services.
-- Local game records, installed Steam/XDG import, direct/native Steam launch,
-  explicit profile inheritance, cached poster/banner copies, and unavailable
-  launch state for uninstalled games.
-- Read-only hardware metrics, Vulkan frame telemetry, recorded session history,
-  raw timeline inspection, and an existing same-game comparison view.
-- Direct and native-Steam GLX/EGL/SDL2 OpenGL frame telemetry and bounded
-  Compact, FPS only, Detailed, and Custom metric layouts through a private
-  interposer. On the validated AMD/RADV host, desktop GLX and SDL OpenGL also
-  use fixed-pool GBM exports and the existing Vulkan Video H.264 pipeline for
-  30/60 FPS Replay. Synthetic direct/native-Steam acceptance creates playable
-  clips with zero transport drops/rejects. The production session pump also
-  commits decoded 1080p30/MKV and 1080p60/MP4 clips with H.264 and Opus.
-  The in-game Replay menu and Moment saved surfaces are implemented; owner
-  real-game acceptance completed on September 24, 2026 and the completion
-  contract closed in [OPENGL-COMPLETION.md](OPENGL-COMPLETION.md), including
-  the owner's waiver of the remaining full-matrix scope.
-  Synthetic X11 fullscreen/restore and installed Fedora payload checks on an
-  earlier candidate passed. The newest candidate also passed installed-payload
-  and isolated fresh-process window checks; owner real-game acceptance remains.
-  EGL/OpenGL ES remains metrics-only.
-- Prepared in-game metrics with reversible visibility; automatic capability-gated
-  replay, optional shortcuts, and independent Moment saved feedback.
-- Hardware video capture, bounded rolling spool, local saves, native clip
-  preparation/playback, filmstrip trimming, separate export, and deletion.
-- Immediate Close to tray icon behavior and a dedicated replay-menu document.
-- Local RPM/DEB/portable asset construction, a checksum-verifying distribution
-  installer template, and automated native/frontend checks.
+- The production Tauri application provides Overview, Library, Global settings,
+  Instant Replay, History, and Settings through shared Rust services.
+- Local game records, installed Steam/XDG discovery, supported direct and native
+  Steam launches, explicit global/per-game inheritance, and cached artwork.
+- Read-only system metrics, frame measurements, recorded session history, and
+  explicit comparison between sessions of the same game.
+- Capability-gated Vulkan and supported desktop OpenGL Replay, an in-game
+  metrics overlay with reversible visibility, optional shortcuts, and independent
+  save feedback. The validated baseline is x86_64 Linux with AMD/RADV;
+  [HARDWARE-SUPPORT.md](HARDWARE-SUPPORT.md) defines the narrower tested scope.
+- Bounded rolling recording, local saves, clip browsing and playback, filenames
+  and favorites, trimming to a separate export, and recoverable clip trash.
+  System-output audio and optional microphone capture follow
+  [REPLAY.md](REPLAY.md#audio-behavior), including the native PipeWire preference
+  and PulseAudio-compatible fallback.
+- Tray and background-launch behavior, single-instance activation, signed update
+  checks, and a native package-manager installation handoff.
+- A release workflow producing Fedora/openSUSE RPMs, Debian packages, native Arch
+  packages, a portable archive, and signed checksums. The installer selects a
+  package for the detected distribution family. Build and dependency details
+  belong to [packaging](packaging/README.md).
 
-These are implemented paths, not blanket hardware or release certification.
-[HARDWARE-SUPPORT.md](HARDWARE-SUPPORT.md) defines the narrower validated scope.
+## Current priorities
 
-## Open correctness and release work
+1. **Qualify the next release.** Include the newer source fixes in the next
+   reviewed candidate and run the affected automated, packaging, and manual
+   checks before publication. Keep evidence tied to the exact candidate;
+   earlier release results do not qualify a later build.
+2. **Follow reported game and environment failures.** Use bug reports to drive
+   work on Steam activation, capture readiness, audio, playback/export, and
+   session cleanup. Validate Wayland/X11 and distribution-specific dependencies
+   separately. Successful discovery or packaging does not prove capture works.
+3. **Verify lifecycle and update recovery.** Retain focused checks for repeated
+   actions, cancellation, disk pressure, stale state, failed cleanup, and
+   interrupted updates. Installed-runtime checks compare the exact package with
+   the installed payload and confirm that a fresh process loaded it.
+4. **Measure performance in real use.** Follow
+   [PERFORMANCE.md](PERFORMANCE.md) for collection budgets and measurement
+   procedures. Investigate reported long-session overhead without promising
+   an FPS gain or treating synthetic results as hardware acceptance.
 
-1. **Complete the public update experience.** The native signed
-   metadata checker now selects a supported package, downloads it with bounds,
-   verifies its checksum, retains it in a private cache, and exposes a native
-   installer handoff; release builds embed the HTTPS GitHub release channel and
-   Settings controls are implemented. Release assets now include an authenticated
-   version, and the native host distinguishes an installed package from a
-   cancelled or unconfirmed handoff through read-only package queries. An offline
-   Fedora container covers RPM upgrade and rollback with both a synthetic
-   package and an isolated genuinely newer Tauri binary. The Fedora 44 host
-   has also completed a real-binary 0.1.3→0.1.4→0.1.3 upgrade/rollback,
-   restart verification, and uninstall/reinstall without removing user state.
-   A local signed-feed end-to-end test covers native download, replacement, and
-   tamper rejection. Complete the public signed in-app download and desktop
-   installer cancellation flow during early distribution. The webview must not
-   gain package or shell authority.
-2. **Resolve the reported Stardew playback failure.** Resolved on September 24,
-   2026 with build reference redunar-app-0.1.3-9.local.fc44. The September 23
-   symptom (no sound through Redunar's native Steam wrapper while direct Steam
-   stayed audible) was isolated on September 24: a Steam launch carrying only
-   the OpenGL sidecar in LD_PRELOAD ruled the sidecar out, and diagnostic RPM
-   0.1.3-8 (Replay's host-side default-output recorder suppressed, everything
-   else unchanged) restored music, metrics, and Replay. Discovery had preferred
-   the PulseAudio monitor route on this PipeWire host; recording through
-   pipewire-pulse's compatibility layer disturbed Stardew's own Pulse client.
-   The fix prefers the native PipeWire default-output node with the Pulse
-   monitor retained as fallback, and the owner validated music, effects,
-   metrics, Replay, and clip audio together in one Redunar launch. See
-   local-builds/pipewire-preferred-audio-capture-2026-09-24/STATUS.txt.
-   Preserve the documented output-monitor fallback and make no game-only
-   isolation claim.
-3. **Use issue-driven cross-distribution qualification.** The Fedora RPM still
-   requires the documented compatible codec provider. Additional distribution
-   provider and dependency problems are followed up as users report them.
-4. **Repeat affected installed-runtime acceptance.** Verify matching binary and
-   sidecars and a fresh process before attributing behavior to a new package.
-   Focus on replay-menu transparency/focus, visibility while recording, tray
-   changes, cleared shortcuts, media preparation errors, and numerical history.
-5. **Use issue-driven game and environment qualification.** Retained reports
-   cover ARC Raiders and PEAK on the development Fedora/AMD host. Counter-Strike
-   2 and other environments can be tried after publication; reports should
-   drive fixes and later validation rather than blocking the initial release.
-6. **Track performance reports after launch.** Retain the existing bounded
-   failure, resize, disk-pressure, restart, and exit checks, while treating
-   long-session overhead as follow-up evidence gathered from real use.
-Keep source comments and error strings aligned with current behavior. Current
-normative docs take precedence over dated evidence, while the owner's decisions
-take precedence over both. Do not hide a behavioral disagreement by changing
-only its description.
+Use [TESTING.md](TESTING.md) and the
+[real-game acceptance checklist](output/tauri-redunar/REAL-GAME-ACCEPTANCE.md)
+for verification. Builds do not authorize installation, app restarts, or live-game
+runs. Dated reports describe their recorded builds and hosts.
 
 ## Future desktop Replay
 
@@ -105,28 +75,19 @@ not a claim that desktop capture or uncapped recording is implemented today.
 
 ## Scope discipline
 
-Maintain the current replay, metrics, overlay, catalog, and history flows. Keep
-the existing comparison view without implying an automated before/after workflow.
-Library discovery is installed-entry based; native process supervision remains
-necessary for launch ownership.
+NVIDIA handling remains an opt-in beta path. Detection and in-game metrics have
+reported tester evidence; successful NVIDIA recording remains unverified.
+Neither those reports nor fake-hardware tests establish general NVIDIA support.
 
-Broader launcher integration, Flatpak Steam capture, NVIDIA/ARM support, OpenGL ES Replay,
-late attachment, desktop Replay, KMS production capture, cloud metadata, accounts,
-and broader public releases are outside the current milestone. They require explicit
-scope decisions and validation, not placeholder controls.
+Broader launcher integration, Flatpak Steam capture, ARM builds, OpenGL ES Replay,
+late attachment, production KMS capture, cloud metadata, and accounts remain
+outside the current milestone. New scope requires an explicit decision and
+validation, rather than placeholder controls.
 
-The single-command installer framework now detects Fedora/RHEL, Debian/Ubuntu,
-Arch, and openSUSE families, authenticates a signed checksum manifest, and selects
-a native RPM, DEB, or Arch package. Release binaries build in a pinned Debian 12
-environment with a glibc 2.36 floor. The public source repository is
-`shukzi/Redunar`. Publishing the source does not certify binary releases.
-Release work still needs GitHub asset automation and in-app signed update
-qualification on the initial Fedora release target.
-Preserve existing compatible multimedia providers, use each platform's package
-manager for required dependencies, and never silently replace codecs or add
-third-party repositories. Distribution detection alone does not establish
-app/runtime compatibility.
+Preserve compatible multimedia providers and use each platform's package manager
+for required dependencies. Do not silently replace codecs or add third-party
+repositories. Published packages and distribution detection do not establish
+universal runtime compatibility.
 
-Use [TESTING.md](TESTING.md) and the
-[real-game acceptance checklist](output/tauri-redunar/REAL-GAME-ACCEPTANCE.md)
-for verification. Prior milestone claims are not current release evidence.
+Bug reports and feature suggestions are welcome; contributions to the official
+repository are invitation-only. See [CONTRIBUTING.md](CONTRIBUTING.md).

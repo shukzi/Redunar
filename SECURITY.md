@@ -4,15 +4,16 @@
 
 Please do not open a public issue for a suspected security vulnerability.
 
-Use GitHub's private vulnerability reporting for this repository:
+Use [GitHub's private vulnerability reporting](https://github.com/shukzi/Redunar/security/advisories/new)
+for this repository.
 
-https://github.com/shukzi/Redunar/security/advisories/new
-
-Include affected versions, reproduction steps, impact, and any suggested
-mitigation. Avoid including personal data, private recordings, account
-identifiers, tokens, or local filesystem paths.
+Include the affected Redunar version or source commit, reproduction steps,
+impact, and any suggested mitigation. Avoid including personal data, private
+recordings, account identifiers, tokens, or local filesystem paths.
 
 ## Supported versions
 
-Redunar has not published a stable release yet. Security fixes will target the
-latest source and the most recent release when releases begin.
+Redunar currently publishes 0.x releases. Security fixes target the latest source
+on `main` and the most recent published release. See
+[Releases](https://github.com/shukzi/Redunar/releases/latest) for the current
+release.
