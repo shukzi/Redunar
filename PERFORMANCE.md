@@ -38,6 +38,25 @@ Record process scope, host, driver, build, workload, duration, and method.
 
 ## Desktop refresh work
 
+Successful initial clip and history inventories acknowledge the native process's
+zero revision without rereading them. A nonzero first revision, failed initial
+read or save during a read still takes the normal refresh/retry path. The first
+regular status poll waits its existing interval after the startup status read;
+actions can still request an immediate coalesced refresh. Native supervision and
+shortcut workers remain independent of webview polling.
+
+Clip inventory updates on Library, Global settings, History and Settings change
+only the sidebar count. Their mounted workspace, drafts, focus and pending checks
+remain intact; Overview and Replay retain their own inventory presentation.
+Unchanged status labels, metric text and draft markers retain their DOM instead
+of replacing the same values on every poll. Actual measurements and failures
+still update at the existing cadence.
+
+Cached catalog artwork paints the already-identified node directly. A warm
+render visits the artwork collection once rather than rescanning it for every
+cached poster. The existing two-request queue and bounded cache stay in place;
+results for detached content can warm the cache without painting that content.
+
 The main Linux webview enables WebKit's original native smooth scrolling once
 at setup, using the supported getter for its own settings object. The UI does
 not intercept wheel input, read geometry for wheel classification or run a

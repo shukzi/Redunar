@@ -277,6 +277,13 @@ function refreshClipRail(newIds=new Set()){
  }
 }
 function presentClipInventory(){
+ // Other pages only display the sidebar count. Rebuilding Library/Settings for
+ // an unrelated clip arrival restarts their native checks and drops focus.
+ if(!['overview','replay'].includes(route())){
+  const count=$('#navigation .nav-count'),text=String(clips.length);
+  if(count&&count.textContent!==text)count.textContent=text;
+  arrivingClipIds.clear();return;
+ }
  // Refresh the browser even while a clip plays or prepares. Rebuilding the
  // whole workspace would cancel playback, trim state and pending seeks.
  if(route()!=='replay'||!$('#clip-video')||$('#clip-video').dataset.clipId!==selectedClip){
@@ -1018,13 +1025,13 @@ function updateDirtyActionButtons() {
  const globalLink=$('#navigation a[href="#global"]');
  if(globalLink){
   const changed=profileChanged||shortcutsChanged;
-  globalLink.querySelector('.nav-unsaved-marker').hidden=!changed;
+  const marker=globalLink.querySelector('.nav-unsaved-marker');if(marker.hidden!==!changed)marker.hidden=!changed;
   const label='Global settings'+(changed?', unsaved changes':'');
-  globalLink.setAttribute('aria-label',label);globalLink.title=label;
+  if(globalLink.getAttribute('aria-label')!==label)globalLink.setAttribute('aria-label',label);if(globalLink.title!==label)globalLink.title=label;
  }
  const dirtyTabs=dirtyGlobalTabs(draft,defaults,shortcutsChanged);
- document.querySelectorAll('.global-tabs [data-global-tab]').forEach(tab=>{const dirty=dirtyTabs[tab.dataset.globalTab];const marker=tab.querySelector('.unsaved-tab-marker');if(marker)marker.hidden=!dirty;tab.setAttribute('aria-label',tab.textContent.replace('●','').trim()+(dirty?', unsaved changes':''));tab.title=dirty?'Unsaved changes':'';});
- const feedback=$('#global-save-feedback');if(feedback){const currentChanged=globalTab==='shortcuts'?shortcutsChanged:profileChanged;feedback.textContent=currentChanged?'Unsaved changes':(profileChanged||shortcutsChanged)?'Changes pending in another tab':'All changes saved';}
+ document.querySelectorAll('.global-tabs [data-global-tab]').forEach(tab=>{const dirty=dirtyTabs[tab.dataset.globalTab];const marker=tab.querySelector('.unsaved-tab-marker');if(marker&&marker.hidden!==!dirty)marker.hidden=!dirty;const label=tab.textContent.replace('●','').trim()+(dirty?', unsaved changes':''),title=dirty?'Unsaved changes':'';if(tab.getAttribute('aria-label')!==label)tab.setAttribute('aria-label',label);if(tab.title!==title)tab.title=title;});
+ const feedback=$('#global-save-feedback');if(feedback){const currentChanged=globalTab==='shortcuts'?shortcutsChanged:profileChanged,text=currentChanged?'Unsaved changes':(profileChanged||shortcutsChanged)?'Changes pending in another tab':'All changes saved';if(feedback.textContent!==text)feedback.textContent=text;}
  if(discard)discard.disabled=busy||!(profileChanged||shortcutsChanged);
  if(saveGlobal){
   const currentChanged=globalTab==='shortcuts'?shortcutsChanged:profileChanged;
@@ -1035,33 +1042,35 @@ function updateDirtyActionButtons() {
  const gameChanged=gameProfileChanged(game());
  if(saveGame)saveGame.disabled=busy||!gameChanged;
  const discardGame=$('[data-action="discard-game"]');if(discardGame)discardGame.disabled=busy||!gameChanged;
- const gameState=$('#game-save-state');if(gameState)gameState.textContent='Unsaved changes';
- const globalBar=$('.settings-save-bar');if(globalBar)globalBar.hidden=!(profileChanged||shortcutsChanged);
- const gameBar=$('.game-save-bar');if(gameBar)gameBar.hidden=!gameChanged;
+ const gameState=$('#game-save-state');if(gameState&&gameState.textContent!=='Unsaved changes')gameState.textContent='Unsaved changes';
+ const globalBar=$('.settings-save-bar');if(globalBar){const hidden=!(profileChanged||shortcutsChanged);if(globalBar.hidden!==hidden)globalBar.hidden=hidden;}
+ const gameBar=$('.game-save-bar');if(gameBar&&gameBar.hidden!==!gameChanged)gameBar.hidden=!gameChanged;
  const visibleBar=$('.change-save-bar:not([hidden])');
  const barKey=visibleBar?(visibleBar===globalBar?'global':`game:${selectedGame}`):null;
  // Retain the logical owner across re-renders: polling, further edits and tab
  // changes must not replay entry motion while the same draft bar stays visible.
  if(visibleBar&&barKey!==visibleSaveBarKey)visibleBar.classList.add('save-bar-enter');
  visibleSaveBarKey=barKey;
- document.body.dataset.unsaved=String(!!visibleBar);
+ const unsaved=String(!!visibleBar);if(document.body.dataset.unsaved!==unsaved)document.body.dataset.unsaved=unsaved;
 }
 function updateObservedElements() {
- const libraryGuide=$('#library-start-guide');if(libraryGuide)libraryGuide.hidden=!showLibraryStartGuide();
+ const libraryGuide=$('#library-start-guide');if(libraryGuide){const hidden=!showLibraryStartGuide();if(libraryGuide.hidden!==hidden)libraryGuide.hidden=hidden;}
  updateDirtyActionButtons();
  refreshUpdateCard();
  for(const el of document.querySelectorAll('[data-module-status]')){
   const value=modules?.[el.dataset.moduleStatus],label=el.dataset.moduleLabel;
-  el.textContent=(label?label+' · ':'')+moduleText(value);
-  el.className='pill '+moduleClass(value);
+  const text=(label?label+' · ':'')+moduleText(value),className='pill '+moduleClass(value);
+  if(el.textContent!==text)el.textContent=text;
+  if(el.className!==className)el.className=className;
  }
- for(const el of document.querySelectorAll('[data-readiness-status]')){const value=modules?.[el.dataset.readinessStatus];el.textContent=value==='Enabled'?'Available':moduleText(value);el.dataset.ready=String(value==='Enabled');}
- const replayDot=$('#replay-status-dot');if(replayDot)replayDot.dataset.status=replayStatusCopy(runtime).statusClass;
+ for(const el of document.querySelectorAll('[data-readiness-status]')){const value=modules?.[el.dataset.readinessStatus],text=value==='Enabled'?'Available':moduleText(value),ready=String(value==='Enabled');if(el.textContent!==text)el.textContent=text;if(el.dataset.ready!==ready)el.dataset.ready=ready;}
+ const replayDot=$('#replay-status-dot');if(replayDot){const status=replayStatusCopy(runtime).statusClass;if(replayDot.dataset.status!==status)replayDot.dataset.status=status;}
  const replayBadge=$('#settings-replay-phase');
- if(replayBadge)replayBadge.textContent=runtime?.phase||'Status unavailable';
+ if(replayBadge){const text=runtime?.phase||'Status unavailable';if(replayBadge.textContent!==text)replayBadge.textContent=text;}
  for(const badge of document.querySelectorAll('[data-shortcut-status]')){
-  badge.textContent=shortcutText(shortcutStatus?.state);
-  badge.className=`pill ${shortcutClass(shortcutStatus?.state)}`;
+  const text=shortcutText(shortcutStatus?.state),className=`pill ${shortcutClass(shortcutStatus?.state)}`;
+  if(badge.textContent!==text)badge.textContent=text;
+  if(badge.className!==className)badge.className=className;
  }
  const retryShortcuts=$('[data-action="retry-shortcuts"]');
  if(retryShortcuts){retryShortcuts.hidden=!canRetryShortcuts(shortcutStatus,shortcuts);retryShortcuts.disabled=!native||busy;}
@@ -1111,9 +1120,9 @@ function updateObservedElements() {
  const shortcut=$('#save-replay-shortcut');
  if(shortcut){
   const assignment=savedShortcutMap[$('#save-duration')?.value]||'';
-  shortcut.textContent=assignment;shortcut.hidden=!assignment;
+  if(shortcut.textContent!==assignment)shortcut.textContent=assignment;shortcut.hidden=!assignment;
   const button=$('[data-action="save-replay"]');
-  if(button){const duration=Number($('#save-duration')?.value)||30;button.title=`Save last ${duration} seconds · ${assignment?'Saved shortcut: '+assignment:'No shortcut assigned'}`;}
+  if(button){const duration=Number($('#save-duration')?.value)||30,title=`Save last ${duration} seconds · ${assignment?'Saved shortcut: '+assignment:'No shortcut assigned'}`;if(button.title!==title)button.title=title;}
   // Reserve the longest saved assignment across durations so selecting an
   // unassigned duration doesn't move the adjacent save controls.
   const slot=shortcut.parentElement;
@@ -1124,7 +1133,7 @@ function updateObservedElements() {
  // Compare source markup with the last source markup, not serialized DOM:
  // WebKit normalizes SVG and would otherwise replace unchanged status nodes.
  const summary=$('#session-capture-summary');if(summary){const content=captureSummary(runtime);if(summary.captureMarkup!==content){summary.innerHTML=content;summary.captureMarkup=content;}}
- const end=$('[data-action="end-session"]');if(end)end.hidden=!active();
+ const end=$('[data-action="end-session"]');if(end){const hidden=!active();if(end.hidden!==hidden)end.hidden=hidden;}
  const save=$('[data-action="save-replay"]');if(save)save.disabled=!native||busy||!runtime?.can_save;
  const launch=$('[data-action="launch-game"]');
  if(launch){
@@ -1136,7 +1145,7 @@ function updateObservedElements() {
  }
  const observed=activeSession?.measurements;
  for(const [id,value] of Object.entries({'live-fps':observed?.average_fps,'live-frame-time':observed?.frame_time_ms,'live-low':observed?.one_percent_low_fps,'live-lowest':observed?.point_one_percent_low_fps})){
-  const el=document.getElementById(id);if(el)el.firstChild.nodeValue=measurement(value,id==='live-frame-time'?1:0);
+  const el=document.getElementById(id),text=measurement(value,id==='live-frame-time'?1:0);if(el&&el.firstChild.nodeValue!==text)el.firstChild.nodeValue=text;
  }
  const plot=$('#live-chart');
  const currentGame=activeSession?.game||'';
@@ -1159,7 +1168,6 @@ async function readRuntime() {
  if(slowRefresh)lastSlowRuntimeRefresh=Date.now();
  const slowResults=slowRefresh?Promise.allSettled([call('diagnostics_snapshot'),call('replay_display_capability')]):null;
  const results=await Promise.allSettled([call('daemon_status'),call('replay_runtime_status'),call('session_status'),call('module_statuses'),call('shortcut_status')]);
- const oldHistory=lastLoadedHistoryRevision;
  const oldDisplay=JSON.stringify(displayCapability);
  hardware=results[0].status==='fulfilled'&&results[0].value.available?results[0].value:null;
  preferences.diagnosticLogStatus=results[0].status==='fulfilled'?results[0].value.diagnostic_log_status:undefined;
@@ -1174,15 +1182,20 @@ async function readRuntime() {
   displayCapability=displayResult.status==='fulfilled'?displayResult.value:displayCapability;
  }
  const connectionStatus=$('#connection-status');
- if(connectionStatus)connectionStatus.textContent=results[0].value?.read_only?'Another Redunar app is open · read-only':results.slice(0,4).every(r=>r.status==='rejected')?'Backend unavailable':'Production backend';
+ if(connectionStatus){const text=results[0].value?.read_only?'Another Redunar app is open · read-only':results.slice(0,4).every(r=>r.status==='rejected')?'Backend unavailable':'Production backend';if(connectionStatus.textContent!==text)connectionStatus.textContent=text;}
  updateObservedElements();
  const logStatus=$('#diagnostic-log-status');
- if(logStatus)logStatus.textContent=diagnosticDisplayStatus();
+ if(logStatus){const text=diagnosticDisplayStatus();if(logStatus.textContent!==text)logStatus.textContent=text;}
  if(route()==='global'&&JSON.stringify(displayCapability)!==oldDisplay)render();
- if(activeSession?.history_revision!==undefined&&activeSession.history_revision!==oldHistory){
+ // These revisions start at zero for this native process. A successful initial
+ // read already includes that baseline; nonzero revisions and failed reads must
+ // still refresh, including a save that committed while initialization ran.
+ if(loaded.history&&!errors.history&&lastLoadedHistoryRevision===null&&activeSession?.history_revision===0)lastLoadedHistoryRevision=0;
+ if(activeSession?.history_revision!==undefined&&activeSession.history_revision!==lastLoadedHistoryRevision){
   const loadedHistory=await reloaders['reload-history']();
   if(loadedHistory&&route()==='history')render();
  }
+ if(loaded.clips&&!errors.clips&&loadedClipRevision===null&&observedSaveRevision===0)loadedClipRevision=0;
  if(observedSaveRevision!==null&&loadedClipRevision!==observedSaveRevision){
   const completed=loadedClipRevision!==null&&observedSaveRevision>loadedClipRevision;
   const refreshed=await reloaders['reload-clips']();
@@ -1616,7 +1629,9 @@ window.addEventListener('hashchange',()=>{const focusUpdates=focusUpdatesOnRende
 
 render();
     if(native){
- startRuntime({initialize:()=>Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,updatePresentation:refreshUpdateCard,startPolling:poll,onError:error=>notify(message(error))});
+ // startRuntime has just completed a status read. Start the regular cadence
+ // after its usual interval instead of duplicating that snapshot immediately.
+ startRuntime({initialize:()=>Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,updatePresentation:refreshUpdateCard,startPolling:()=>setTimeout(poll,pollDelay()),onError:error=>notify(message(error))});
 }else{
  const connectionStatus=$('#connection-status');
  if(connectionStatus)connectionStatus.textContent='Browser inspection · backend disconnected';
