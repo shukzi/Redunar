@@ -317,5 +317,6 @@ test('clip metadata preserves observations and never invents game identity',()=>
  const [unknown,known]=mapClips([base,{...base,game_name:'Local game',duration_seconds:29.5}]);
  assert.equal(unknown.game,null);assert.equal(unknown.duration,null);
  assert.equal(known.game,'Local game');assert.equal(known.duration,29.5);
+ assert.equal(mapClips([{...base,bytes:2500000}])[0].size,'2.5 MB','decimal MB matches upload limits and export sizes');
  for(const duration_seconds of [0,-1,Infinity,'30'])assert.equal(mapClips([{...base,duration_seconds}])[0].duration,null);
 });

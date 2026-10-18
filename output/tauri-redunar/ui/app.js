@@ -1,3 +1,8 @@
+import './clip-export.css';
+import { clipExportForm, bindClipExportForm, readClipExportOptions, clipExportProgressView, clipExportProgressLabel, clipExportSpinner } from './clip-export.mjs';
+import './disclosure-motion.css';
+import { installDisclosureMotion, setDisclosureOpen } from './disclosure-motion.mjs';
+import { clipPositions, animateClipArrival, mountClipThumbnail } from './clip-motion.mjs';
 import './navigation-shell.mjs';
 import { updateCard, updateSidebar } from './update-card.mjs';
 import { dirtyGlobalTabs, historyFiltersMarkup, filterSessions, clipSortingToolbar } from './workspace-state.mjs';
@@ -23,6 +28,7 @@ import { historyMetrics, historyTimeline, historyDuration, historySelection, his
 import { captureHistoryGraph, historyGraphMotion } from './history-motion.mjs';
 import { captureSummary, storageSummary, clipFiltersMarkup, clipFilterChips, filterClips, clipTitle, clipFilenameStem, renamedClipFilename, comparisonSelector, microphoneSelector } from './workspace-improvements.mjs';
 const $ = (selector, root = document) => root.querySelector(selector);
+installDisclosureMotion();
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const paths = {
  overview:'M3 13h4l3-8 4 14 3-6h4', library:'M4 4h6v16H4zM14 4h6v16h-6z',
@@ -85,6 +91,7 @@ let stopFilmstrip = null;
 let mediaEvents = null;
 let timelineDrag = null, suppressTimelineClick = false, playbackFrame = null;
 let pendingSeekTask = Promise.resolve(), cancelPendingSeek = null, seekGeneration = 0, mediaActionGeneration = 0, playRequested = false, suppressPlayerToggleClickUntil = 0;
+let exportCancelRequested = false, exportGeneration = 0;
 let exporting = false, exportPollTimer = null, thumbnailLoadTimer = null, videoReady = false;
 const LIVE_TIMELINE_LIMIT = 240;
 let liveTimeline = {game:'',revision:null,values:[],times:[]};
@@ -212,7 +219,7 @@ function replay() {
 
 function replaySelection(c) {
  if(!c)return emptyPanel(errors.clips?'Clips unavailable':'Your next highlight belongs here.',errors.clips||'Saved Redunar clips will appear here. Nothing is uploaded.');
- return `<div class="clip-title-tools"><div class="clip-name"><strong data-selected-clip-title>${escape(clipTitle(c))}</strong><small>${escape(c.date)} · ${escape(c.size)} · ${escape(c.file_name.split('.').pop().toUpperCase())}</small></div><div class="heading-actions clip-edit-actions">${button('Edit filename','edit-clip-filename')}${button(clipFavoriteContent(c.favorite),'favorite-selected-clip',false,`aria-pressed="${Boolean(c.favorite)}"`)}<details class="clip-action-menu"><summary class="button" aria-label="Clip actions" title="Clip actions">⋯</summary><div class="replay-more-menu">${button('Open externally','open-clip-external')}${button('Move to trash bin','delete-selected-clip')}</div></details></div></div><div class="player native-player"><div class="native-video-stage"><video id="clip-video" ${c.thumbnail?`poster="${c.thumbnail}"`:""} preload="auto" aria-label="${escape(clipTitle(c))}"></video><div class="native-video-specs" id="clip-video-specs"></div><button class="center-play" id="center-play" data-player="toggle" aria-label="Play clip" hidden>${icon('play')}</button><div class="media-state-overlay" id="media-state-overlay" role="status"><div><strong id="media-state-title">Preparing the clip…</strong><p id="media-state-detail">Getting your local capture ready for playback.</p><div class="heading-actions"><button class="button" id="retry-clip" data-action="retry-clip" hidden>Retry playback</button>${button('Open externally','open-clip-external')}</div></div></div><div class="native-video-caption"><strong>${escape(c.game_name||'Game not recorded')}</strong></div></div>
+ return `<div class="clip-title-tools"><div class="clip-name"><strong data-selected-clip-title>${escape(clipTitle(c))}</strong><small>${escape(c.date)} · ${escape(c.size)} · ${escape(c.file_name.split('.').pop().toUpperCase())}</small></div><div class="heading-actions clip-edit-actions">${button('Edit filename','edit-clip-filename')}${button(clipFavoriteContent(c.favorite),'favorite-selected-clip',false,`aria-pressed="${Boolean(c.favorite)}"`)}<details class="clip-action-menu"><summary class="button" aria-label="Clip actions" title="Clip actions">⋯</summary><div class="replay-more-menu">${button('Compress clip…','compress-selected-clip')}${button('Open externally','open-clip-external')}${button('Move to trash bin','delete-selected-clip')}</div></details></div></div><div class="player native-player"><div class="native-video-stage"><video id="clip-video" ${c.thumbnail?`poster="${c.thumbnail}"`:""} preload="auto" aria-label="${escape(clipTitle(c))}"></video><div class="native-video-specs" id="clip-video-specs"></div><button class="center-play" id="center-play" data-player="toggle" aria-label="Play clip" hidden>${icon('play')}</button><div class="media-state-overlay" id="media-state-overlay" role="status"><div><strong id="media-state-title">Preparing the clip…</strong><p id="media-state-detail">Getting your local capture ready for playback.</p><div class="heading-actions"><button class="button" id="retry-clip" data-action="retry-clip" hidden>Retry playback</button>${button('Open externally','open-clip-external')}</div></div></div><div class="native-video-caption"><strong>${escape(c.game_name||'Game not recorded')}</strong></div></div>
  <div class="player-controls"><button id="clip-play-toggle" class="icon-button player-toggle" type="button" data-player="toggle" aria-label="Play clip" title="Play clip">${icon('play')}</button><button class="icon-button transport-jump" type="button" data-player="back" aria-label="Back five seconds">−5</button><button class="icon-button transport-jump" type="button" data-player="forward" aria-label="Forward five seconds">+5</button><input id="player-seek" type="range" min="0" max="0" value="0" step="0.05" aria-label="Seek in selected clip" disabled><span class="timecode" id="clip-time">00:00 / 00:00</span></div>
  </div>
  <section class="replay-clip-editor" aria-label="Clip editor">
@@ -255,23 +262,33 @@ function showClipTrashFeedback(fileNames){
  // Only the Undo notice expires; recordings remain recoverable in the trash bin.
  clipTrashFeedbackTimer=setTimeout(()=>{lastTrashed=[];clipTrashFeedbackTimer=null;refreshClipTrashFeedback();},10000);
 }
-function refreshClipRail(){
+function refreshClipRail(newIds=new Set()){
  refreshClipSortingControls();refreshClipTrashFeedback();
  const rail=$('.clip-list');if(rail){
   const top=rail.scrollTop,focused=document.activeElement;
   const clipId=focused?.dataset.clip||focused?.dataset.favoriteClip;
   const focusKey=focused?.dataset.clip?'clip':'favoriteClip';
+  const positions=newIds.size?clipPositions(rail):new Map();
   rail.innerHTML=clipRows();
   if(clipId)Array.from(rail.querySelectorAll('[data-clip],[data-favorite-clip]')).find(el=>el.dataset[focusKey]===clipId)?.focus({preventScroll:true});
   rail.scrollTop=top;
+  animateClipArrival(rail,positions,newIds);
   updateClipBrowserControls();scheduleClipThumbnails();
  }
 }
 function presentClipInventory(){
  // Refresh the browser even while a clip plays or prepares. Rebuilding the
  // whole workspace would cancel playback, trim state and pending seeks.
- if(route()!=='replay'||!$('#clip-video')||$('#clip-video').dataset.clipId!==selectedClip){render();return;}
- refreshClipRail();
+ if(route()!=='replay'||!$('#clip-video')||$('#clip-video').dataset.clipId!==selectedClip){
+  const collection=$('.recent-capture-grid')||$('.clip-list'),positions=collection&&arrivingClipIds.size?clipPositions(collection):new Map(),newIds=arrivingClipIds;
+  arrivingClipIds=new Set();render();
+  const refreshed=$('.recent-capture-grid')||$('.clip-list');if(refreshed)animateClipArrival(refreshed,positions,newIds);
+  return;
+ }
+ const visibleIds=new Set(Array.from(document.querySelectorAll('[data-clip]'),button=>button.dataset.clip));
+ const newIds=new Set(clips.filter(item=>!visibleIds.has(item.id)&&arrivingClipIds.has(item.id)).map(item=>item.id));
+ arrivingClipIds.clear();
+ refreshClipRail(newIds);
  const gameFilter=$('[data-clip-filter="game"]');
  if(gameFilter){
   const names=[...new Set(clips.map(c=>c.game_name).filter(Boolean))].sort();
@@ -784,13 +801,17 @@ function acceptGames(records,committedId=null) {
  savedGameOverrides=new Map(saved.map(item=>[item.id,{...item.overrides}]));
  if(!game())selectedGame=games[0]?.id??null;
 }
+let arrivingClipIds=new Set(),clipInventorySeen=false;
 function acceptClips(records) {
  const previous=new Map(clips.map(item=>[item.id,item]));
  clips=mapClips(records).map(item=>{
   const cached=previous.get(item.id);
   if(cached&&cached.bytes===item.bytes&&cached.modified_unix_ns===item.modified_unix_ns){item.thumbnail=cached.thumbnail;item.duration=cached.duration;item.metadata=cached.metadata;item.metadataDetailed=cached.metadataDetailed;}
   return item;
- });loaded.clips=true;
+ });
+ arrivingClipIds=new Set(clipInventorySeen?clips.filter(item=>!previous.has(item.id)).map(item=>item.id):[]);
+ clipInventorySeen=true;
+ loaded.clips=true;
  if(!clip())selectedClip=clips[0]?.id??null;
 }
 function thumbnailDataUri(bytes) {
@@ -816,15 +837,20 @@ function updateClipMetadata(item){
 }
 function updateClipThumbnail(item){
  if(!clips.includes(item))return;
+ const source=item.thumbnail;
+ const failed=()=>{
+  if(!clips.includes(item)||item.thumbnail!==source)return;
+  // Keep a failed preview unavailable across filter/list redraws. A changed
+  // file identity can request a fresh thumbnail through the normal loader.
+  item.thumbnail='';
+  const video=$('#clip-video');if(item.id===selectedClip&&video?.getAttribute('poster')===source)video.removeAttribute('poster');
+ };
  if(item.id===selectedClip&&item.thumbnail){const video=$('#clip-video');if(video)video.poster=item.thumbnail;}
- if(route()==='overview'&&item.thumbnail){const card=Array.from(document.querySelectorAll('[data-recent-clip]')).find(card=>card.dataset.recentClip===item.id);const target=card?.querySelector('.recent-thumbnail');if(target&&!target.querySelector('img')){const image=document.createElement('img');image.src=item.thumbnail;image.alt='';image.decoding='async';target.querySelector('.icon')?.replaceWith(image);}return;}
+ if(route()==='overview'&&item.thumbnail){const card=Array.from(document.querySelectorAll('[data-recent-clip]')).find(card=>card.dataset.recentClip===item.id);mountClipThumbnail(card?.querySelector('.recent-thumbnail'),item.thumbnail,'',failed);return;}
  if(route()!=='replay'||!clips.includes(item)||!item.thumbnail)return;
  const button=Array.from(document.querySelectorAll('[data-clip]')).find(button=>button.dataset.clip===item.id);
  const thumbnail=button?.querySelector('.thumbnail');
- if(!thumbnail||thumbnail.querySelector('img'))return;
- const image=document.createElement('img');
- image.src=item.thumbnail;image.alt=`Thumbnail for ${clipTitle(item)}`;image.decoding='async';
- thumbnail.querySelector('.icon')?.replaceWith(image);
+ mountClipThumbnail(thumbnail,item.thumbnail,`Thumbnail for ${clipTitle(item)}`,failed);
 }
 
 async function readSection(section, command, accept) {
@@ -957,7 +983,7 @@ function updatePlayerUi(){
   const selectable=videoReady&&playerDuration>0&&trimEnd-trimStart>=.1;
   exportButton.disabled=!native||!selectable||exporting;
   const label=exporting?'Exporting…':'Export selection';
-  if(exportButton.textContent.trim()!==label)exportButton.innerHTML=`${icon('download')} ${label}`;
+  if(exportButton.textContent.trim()!==label)exportButton.innerHTML=`${exporting?clipExportSpinner():icon('download')} ${label}`;
  }
  text('#trim-start-value',videoReady?preciseTime(trimStart):'—');
  text('#trim-end-value',videoReady?preciseTime(trimEnd):'—');
@@ -1208,31 +1234,36 @@ async function perform(action) {
  catch(error){ reportActionError(error); }
  finally { busy=false;document.body.classList.remove('native-busy');updateObservedElements(); }
 }
-function showExportProgress(progress=0) {
+function showExportProgress(context) {
  const body=$('#dialog-body');if(!body)return;
- body.innerHTML=`<p>Creating a separate MP4 from the selected range. The original recording stays unchanged.</p><div class="clip-export-progress"><div><span>Exporting clip</span><output id="clip-export-percent">${Math.round(progress)}%</output></div><progress id="clip-export-progress" max="100" value="${progress}"></progress></div><button class="button" type="button" data-export-cancel>Cancel export</button>`;
+ $('#dialog-title').textContent=context.options?.compression?'Compressing clip':'Exporting clip';
+ body.innerHTML=clipExportProgressView(context);
  const close=$('#dialog [data-close]');if(close)close.disabled=true;
 }
-async function pollClipExport() {
- if(!exporting)return;
+async function pollClipExport(generation) {
+ if(!exporting||generation!==exportGeneration)return;
  try {
   const status=await call('clip_export_status');
+  if(!exporting||generation!==exportGeneration)return;
+  if(exportCancelRequested&&status.active){await call('cancel_clip_export');if(generation!==exportGeneration)return;exportCancelRequested=false;}
   const progress=clamp(Number(status.progress)||0,0,100),bar=$('#clip-export-progress'),label=$('#clip-export-percent');
   if(bar)bar.value=progress;if(label)label.textContent=`${Math.round(progress)}%`;
+  const output=$('#clip-export-output');if(output)output.textContent=clipExportProgressLabel(status);
  } catch {}
- if(exporting)exportPollTimer=setTimeout(pollClipExport,250);
+ if(exporting&&generation===exportGeneration)exportPollTimer=setTimeout(()=>pollClipExport(generation),250);
 }
-async function runClipExport(fileName,start,end,outputName,destination) {
+async function runClipExport(fileName,start,end,outputName,destination,options={},thumbnail='',sourceBytes=null,sourceDuration=null) {
  if(exporting||busy)return;
- exporting=true;busy=true;updatePlayerUi();showExportProgress();pollClipExport();
+ exporting=true;exportCancelRequested=false;busy=true;updatePlayerUi();showExportProgress({fileName,thumbnail,sourceBytes,start,end,options});pollClipExport(++exportGeneration);
  try {
-  const result=await call('export_replay_clip',{fileName,startSeconds:start,endSeconds:end,outputName});
+  const result=await call('export_replay_clip',{fileName,startSeconds:start,endSeconds:end,outputName,options});
   await reloaders['reload-clips']();selectedClip=result.file_name;
-  $('#dialog').close();render();modal('Clip exported',`<div class="export-complete"><strong>${escape(result.file_name)}</strong><p>${escape(result.destination||destination)}</p><small>${preciseTime(result.duration_seconds)} · ${(result.bytes/1048576).toFixed(1)} MB</small></div><div class="dialog-actions"><button class="button" data-action="show-export-folder" data-file-name="${escape(result.file_name)}">Show in folder</button><button class="button primary" data-action="open-exported-clip" data-file-name="${escape(result.file_name)}">Open clip</button><button class="button" data-close>Done</button></div>`);
+  $('#dialog').close();render();modal(options.compression?'Clip compressed':'Clip exported',`<div class="export-complete"><strong>${escape(result.file_name)}</strong><p>${escape(result.destination||destination)}</p><small>${preciseTime(result.duration_seconds)} · ${(result.bytes/1000000).toFixed(2)} MB</small></div><div class="dialog-actions"><button class="button" data-action="show-export-folder" data-file-name="${escape(result.file_name)}">Show in folder</button><button class="button primary" data-action="open-exported-clip" data-file-name="${escape(result.file_name)}">Open clip</button><button class="button" data-close>Done</button></div>`);
  } catch(error) {
-  $('#dialog').close();modal('Export failed',`<p>${escape(message(error))}</p><p class="small-note">Your original recording is unchanged.</p><form id="trim-export-form"><input type="hidden" name="fileName" value="${escape(fileName)}"><input type="hidden" name="start" value="${start}"><input type="hidden" name="end" value="${end}"><label class="form-label">Filename<input name="outputName" required maxlength="200" value="${escape(outputName)}"></label><div class="dialog-actions"><button class="button" data-close type="button">Cancel</button><button class="button primary" type="submit">Retry export</button></div></form>`);
+  $('#dialog').close();modal(/cancelled/i.test(message(error))?'Export cancelled':'Export failed',`<p>${escape(message(error))}</p>${clipExportForm({fileName,thumbnail,sourceBytes,sourceDuration,start,end,outputName,options,retry:true})}`);
+  bindClipExportForm($('#trim-export-form'),updatePrecisionSlider);
  } finally {
-  exporting=false;busy=false;clearTimeout(exportPollTimer);exportPollTimer=null;
+  exporting=false;exportCancelRequested=false;busy=false;clearTimeout(exportPollTimer);exportPollTimer=null;
   const close=$('#dialog [data-close]');if(close)close.disabled=false;
   updateObservedElements();updatePlayerUi();
  }
@@ -1278,12 +1309,12 @@ document.addEventListener('click',event=>{
  }
  const timeline=event.target.closest('#clip-timeline');
  if(timeline){if(suppressTimelineClick){suppressTimelineClick=false;return;}if(!event.target.closest('.timeline-handle')){const value=pointerTimelineValue(event);if(value!==null)setTimelineValue('seek',value,true);return;}}
- const more=event.target.closest('.game-more');document.querySelectorAll('.game-more[open]').forEach(el=>{if(el!==more)el.open=false;});
+ const more=event.target.closest('.game-more');document.querySelectorAll('.game-more[open]').forEach(el=>{if(el!==more)setDisclosureOpen(el,false);});
  const target=event.target.closest('button,a');if(!target)return;
- if(more&&target.matches('button'))more.open=false;
+ if(more&&target.matches('button'))setDisclosureOpen(more,false,{immediate:true});
  if(target.classList.contains('skip-link')){event.preventDefault();workspace.focus();return;}
- if(target.hasAttribute('data-export-cancel')){target.disabled=true;target.textContent='Cancelling…';call('cancel_clip_export').catch(error=>notify(message(error)));return;}
- if(target.hasAttribute('data-close')){if(!exporting)closePrecisionSelect();$('#dialog').close();return;}
+ if(target.hasAttribute('data-export-cancel')){target.disabled=true;target.textContent='Cancelling…';exportCancelRequested=true;return;}
+ if(target.hasAttribute('data-close')){if(exporting)return;closePrecisionSelect();$('#dialog').close();return;}
  if(target.hasAttribute('data-pick-folder')){const input=target.closest('form').elements.namedItem('parent');target.disabled=true;call('pick_replay_folder').then(path=>{if(path)input.value=path;}).catch(error=>notify(message(error))).finally(()=>{target.disabled=false;if(target.isConnected)target.focus({preventScroll:true});});return;}
  if(target.dataset.pickExecutable){
   if(!native)return;
@@ -1373,10 +1404,16 @@ document.addEventListener('click',event=>{
  if(action==='scan-games'){
   perform(async()=>{discoveryModal(await call('discover_games'));});return;
  }
- if(action==='export'){
-  const selected=clip(),duration=Math.max(0,trimEnd-trimStart);if(!selected||duration<.1)return;
+ if(action==='export'||action==='compress-selected-clip'){
+  const selected=clip(),compression=action==='compress-selected-clip';if(!selected)return;
+  const start=compression?0:trimStart,end=compression?(selected.metadata?.duration_seconds||selected.duration||playerDuration):trimEnd;
+  if(!Number.isFinite(end)||end-start<.1){notify('Wait for the clip duration to load.');return;}
+  setDisclosureOpen($('.clip-action-menu'),false,{immediate:true});
   mediaActionGeneration++;playRequested=false;$('#clip-video')?.pause();updatePlayerUi();
-  modal('Export clip',`<form id="trim-export-form" class="compact-clip-form"><input type="hidden" name="fileName" value="${escape(selected.file_name)}"><input type="hidden" name="start" value="${trimStart}"><input type="hidden" name="end" value="${trimEnd}"><label class="form-label">Filename<input name="outputName" required maxlength="200" value="${escape(clipFilenameStem(selected.file_name)+'-trimmed')}"></label><div class="export-folder-field"><span>Save to</span><div class="export-folder-display" title="${escape(replayPreferences?.resolved_directory||'Replay folder')}">${icon('folder')}<span id="export-destination">${escape(replayPreferences?.resolved_directory||'Replay folder')}</span></div></div><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Export</button></div></form>`);return;
+  const options={outputFormat:selected.file_name.toLowerCase().endsWith('.mkv')?'mkv':'mp4',maxSizeMb:null,compression};
+  const sourceDuration=selected.metadata?.duration_seconds||selected.duration||playerDuration;
+  modal(compression?'Compress clip':'Export clip',clipExportForm({fileName:selected.file_name,thumbnail:selected.thumbnail,sourceBytes:selected.bytes,sourceDuration,start,end,outputName:clipFilenameStem(selected.file_name)+(compression?'-small':'-trimmed'),options}));
+  bindClipExportForm($('#trim-export-form'),updatePrecisionSlider);return;
  }
  perform(async()=>{
   if(reloaders[action]){await reloaders[action]();if(action==='reload-clips')presentClipInventory();else render();return;}
@@ -1544,7 +1581,7 @@ document.addEventListener('change',event=>{
 });
 document.addEventListener('submit',event=>{
  if(event.target.id==='clip-filename-form'){event.preventDefault();const form=new FormData(event.target);const item=clips.find(c=>c.id===form.get('fileName'));const name=String(form.get('newFileName')).trim();const newFileName=item?renamedClipFilename(item.file_name,name):'';if(item&&name)perform(async()=>{const result=await call('rename_replay_clip',{fileName:item.file_name,newFileName});const oldId=item.id;item.id=result.file_name;item.file_name=result.file_name;if(selectedClip===oldId)selectedClip=item.id;refreshClipRail();if(selectedClip===item.id){const title=$('[data-selected-clip-title]');if(title)title.textContent=item.file_name;const video=$('#clip-video');if(video){video.setAttribute('aria-label',item.file_name);video.dataset.clipId=item.id;}}$('#dialog').close();notify('File renamed.');});return;}
- if(event.target.id==='trim-export-form'){event.preventDefault();const form=new FormData(event.target);runClipExport(String(form.get('fileName')),Number(form.get('start')),Number(form.get('end')),String(form.get('outputName')).trim(),replayPreferences?.resolved_directory);return;}
+ if(event.target.id==='trim-export-form'){event.preventDefault();let options;try{options=readClipExportOptions(event.target);}catch(error){reportActionError(error);return;}const form=new FormData(event.target),thumbnail=$('.clip-export-thumbnail img',event.target)?.getAttribute('src')||'',sourceBytes=form.get('sourceBytes'),sourceDuration=form.get('sourceDuration');runClipExport(String(form.get('fileName')),Number(form.get('start')),Number(form.get('end')),String(form.get('outputName')).trim(),replayPreferences?.resolved_directory,options,thumbnail,sourceBytes===''?null:Number(sourceBytes),sourceDuration===''?null:Number(sourceDuration));return;}
  if(event.target.id==='trash-clips-form'){event.preventDefault();const fileNames=JSON.parse(String(new FormData(event.target).get('fileNames')));perform(async()=>{await call('move_replay_clips_to_trash',{fileNames});await reloaders['reload-clips']();showClipTrashFeedback(fileNames);$('#dialog').close();render();});return;}
  if(event.target.id==='discovery-form'){
   event.preventDefault();if(busy)return;

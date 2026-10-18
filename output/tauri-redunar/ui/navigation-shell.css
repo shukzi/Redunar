@@ -2,6 +2,7 @@
 .sidebar-toggle:hover { color: var(--text); }
 .sidebar-toggle:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; border-radius: 4px; }
 .sidebar-collapse-icon { width: 20px; height: 20px; flex: none; }
+html[data-sidebar=collapsed] { --sidebar-width: 64px; }
 html[data-sidebar=collapsed] .sidebar { width: 64px; }
 html[data-sidebar=collapsed] .app-shell { margin-left: 64px; }
 html[data-sidebar=collapsed] .sidebar .brand { padding: 25px 16px; width: auto; margin: 0; }
@@ -28,3 +29,9 @@ html[data-sidebar=collapsed] .sidebar-collapse-icon { transform: rotate(180deg);
 .library-heading-actions .button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 9px 16px; line-height: 20px; text-align: center; }
 .library-heading-actions .button > span { display: block; line-height: 20px; }
 .library-heading-actions .button .icon { flex: none; width: 18px; height: 18px; }
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar { transition: width 220ms cubic-bezier(.2,0,0,1); }
+  .app-shell { transition: margin-left 220ms cubic-bezier(.2,0,0,1); }
+  .sidebar-collapse-icon { transition: transform 220ms cubic-bezier(.2,0,0,1); }
+  #workspace .change-save-bar { transition: left 220ms cubic-bezier(.2,0,0,1); }
+}

@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
     window.addEventListener('error',event=>bridge.errors.push(event.message));
     window.addEventListener('unhandledrejection',event=>bridge.errors.push(String(event.reason)));
     window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async(command,args)=>{
-      if(command==='replay_clips')return Array.from({length:24},(_,i)=>({file_name:i===0?'redunar-replay-1789223687-940555037-1-with-a-very-long-local-recording-filename.mp4':`clip-${i}.mp4`,title:`Clip ${String(i).padStart(2,'0')}`,game_name:i===15?'Fixture game':null,bytes:1024,modified_unix_ns:'1000000000'}));
+      if(command==='replay_clips')return Array.from({length:24},(_,i)=>({file_name:i===0?'redunar-replay-1789223687-940555037-1-with-a-very-long-local-recording-filename.mp4':`clip-${i}.mp4`,title:`Clip ${String(i).padStart(2,'0')}`,game_name:i===15?'Fixture game':null,bytes:80000000,modified_unix_ns:'1000000000'}));
       if(command==='clip_playback_path'){
         bridge.calls.push(args.fileName);
         if(bridge.failPlayback)throw new Error('Fixture preparation failed');
@@ -107,6 +107,9 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         bridge.thumbnailCalls++;
         return new Promise(resolve=>bridge.thumbnails.push(()=>resolve(Array.from(atob(JPEG),c=>c.charCodeAt(0)))));
       }
+      if(command==='clip_export_status'){if(bridge.holdStatus){bridge.holdStatus=false;return new Promise(resolve=>bridge.releaseOldStatus=resolve);}return {active:Boolean(bridge.rejectExport),progress:10,phase:bridge.exportPhase||'analysing',output_bytes:bridge.exportBytes??null};}
+      if(command==='cancel_clip_export'){bridge.cancelCalls=(bridge.cancelCalls||0)+1;const reject=bridge.rejectExport;bridge.rejectExport=null;if(reject)reject(Error('Clip export was cancelled'));return {};}
+      if(command==='export_replay_clip'&&bridge.holdExport){bridge.exported=args;return new Promise((resolve,reject)=>bridge.rejectExport=reject);}
       if(command==='export_replay_clip'){bridge.exported=args;if(bridge.failExport)throw Error('A clip with that filename already exists');return {file_name:args.fileName,duration_seconds:args.endSeconds-args.startSeconds,bytes:1024};}
       if(command==='replay_storage_status')return {used_bytes:24576};
       if(command==='catalog_games'||command==='session_history')return [];
@@ -295,12 +298,24 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         document.querySelector('#export-clip-button').click();
         const form=document.querySelector('#trim-export-form');
         check(form.elements.start.value==='0.25'&&form.elements.end.value==='2.75','exact export boundaries');
+        check(form.querySelector('.clip-export-original').textContent==='Original · 80.00 MB','measured source size');
+        check(form.querySelector('[data-export-compress]').getAttribute('aria-expanded')==='false','trim compression starts folded');
+        check(form.elements.maxSizeMb.disabled,'folded size is not submitted');
+        form.querySelector('[data-export-compress]').click();
+        check(form.querySelector('.clip-export-size-comparison').textContent.includes('Selection ≈ 66.67 MB'),'selection estimate uses full source duration');
+        check(form.elements.maxSizeMb.max==='66.6'&&Number(form.elements.maxSizeMb.value)<66.6,'selection maximum and default reduce its estimated size');
+        form.elements.maxSizeMb.value='0.7';form.elements.maxSizeMb.dispatchEvent(new Event('input',{bubbles:true}));
+        form.elements.outputFormat.value='mkv';form.elements.outputFormat.dispatchEvent(new Event('change',{bubbles:true}));
+        check(form.querySelector('[data-export-extension]').textContent==='.mkv','format updates suffix');
+        form.querySelector('[data-export-compress]').click();
+        check(form.elements.maxSizeMb.disabled&&form.elements.maxSizeMb.value==='0.7','folding preserves value but disables size');
+        form.querySelector('[data-export-compress]').click();
         form.elements.outputName.value='My named trim';bridge.failExport=true;form.requestSubmit();
         """)
         pump(350)
         js("check(document.querySelector('#dialog').open,'export collision retains dialog');check(document.querySelector('#dialog-body').textContent.includes('already exists'),'collision explanation');check(document.querySelector('[name=outputName]').value==='My named trim','filename retained for retry');bridge.failExport=false;document.querySelector('#trim-export-form').requestSubmit();")
         pump(350)
-        js("check(bridge.exported.startSeconds===.25&&bridge.exported.endSeconds===2.75,'export sent exact range');check(bridge.exported.outputName==='My named trim','filename stem sent');check(!('destination' in bridge.exported),'native owns configured folder');check(document.querySelector('[data-action=show-export-folder]')&&document.querySelector('[data-action=open-exported-clip]'),'completion actions')")
+        js("check(bridge.exported.startSeconds===.25&&bridge.exported.endSeconds===2.75,'export sent exact range');check(bridge.exported.outputName==='My named trim','filename stem sent');check(!('destination' in bridge.exported),'native owns configured folder');check(bridge.exported.options.maxSizeMb===.7&&bridge.exported.options.outputFormat==='mkv'&&!bridge.exported.options.compression,'trimmed export retains options on retry');check(document.querySelector('[data-action=show-export-folder]')&&document.querySelector('[data-action=open-exported-clip]'),'completion actions')")
         pump(1200)
         js("""
         document.querySelector('#trim-start-bar').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true}));
@@ -343,13 +358,39 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         js("document.querySelector('#export-clip-button').click()")
         pump(100)
         screenshot("export-dialog.png")
-        js("check(document.querySelector('[name=outputName]'),'editable export filename');check(document.querySelector('#export-destination'),'configured destination');check(!document.querySelector('.export-summary'),'trim details stay in editor');document.querySelector('#dialog [data-close]').click();const seek=document.querySelector('#player-seek');check(!seek.disabled,'seek enabled');seek.value='1';seek.dispatchEvent(new Event('input',{bubbles:true}));")
+        js("check(document.querySelector('[name=outputName]'),'editable export filename');check(document.querySelector('[data-export-compress]').getAttribute('aria-expanded')==='false','Compress foldout starts closed');check(document.querySelector('.clip-export-range').textContent.includes('Selected range'),'selection shown');document.querySelector('#dialog [data-close]').click();const seek=document.querySelector('#player-seek');check(!seek.disabled,'seek enabled');seek.value='1';seek.dispatchEvent(new Event('input',{bubbles:true}));")
         pump(200)
         js("check(Math.abs(document.querySelector('#clip-video').currentTime-1)<.1,'precision seek reaches requested time')")
         js("const selected=document.querySelector('[data-selected-clip-title]').textContent;document.querySelector('[data-action=delete-selected-clip]').click();check(JSON.parse(document.querySelector('#trash-clips-form [name=fileNames]').value)[0]===selected,'delete targets current selection');document.querySelector('#dialog [data-close]').click();")
         js("const resetStartHandle=document.querySelector('#trim-start-bar');resetStartHandle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));check(!document.querySelector('[data-action=reset-trim]').disabled,'trim reset available');document.querySelector('[data-action=reset-trim]').click();check(document.querySelector('#trim-start-value').textContent==='00:00.0','trim starts at zero after reset');check(document.querySelector('#clip-selected-duration').textContent==='00:03.0','reset retains entire recording');check(!document.querySelector('#center-play').hidden,'center play visible while paused');document.querySelector('#center-play').click();")
         pump(300)
         js("check(!document.querySelector('#clip-video').paused,'center play starts video');check(document.querySelector('#center-play').hidden,'center control leaves playing picture clear');document.querySelector('#clip-play-toggle').click();")
+        js("document.querySelector('[data-action=compress-selected-clip]').click()")
+        pump(250)
+        js("check(document.querySelector('#dialog-title').textContent==='Compress clip','whole-clip action');check(document.querySelector('[name=start]').value==='0'&&document.querySelector('[name=end]').value==='3','whole recording ignores trim');check(!document.querySelector('[data-export-compress]'),'whole-clip size controls are immediate');check(!document.querySelector('[name=maxSizeMb]').disabled,'maximum size enabled');check(document.querySelector('[name=outputFormat]').value==='mp4','source container default')")
+        js("(()=>{const form=document.querySelector('#trim-export-form'),field=form.elements.maxSizeMb,slider=form.querySelector('[data-export-size-slider]');check(field.max==='80'&&field.value==='40','whole clip starts at half its measured size');check(slider.max==='80','slider stops at original size');slider.value='80';slider.dispatchEvent(new Event('input',{bubbles:true}));check(form.querySelector('[type=submit]').disabled&&form.querySelector('#export-size-status').textContent.includes('Already under this limit'),'no-op compression explains that it already fits');field.value='100';field.dispatchEvent(new Event('change',{bubbles:true}));check(field.value==='80','typed size above source clamps on commit');slider.value='40';slider.dispatchEvent(new Event('input',{bubbles:true}));check(!form.querySelector('[type=submit]').disabled&&form.querySelector('[data-export-limit-label]').textContent==='40 MB','smaller size restores compression');})()")
+        screenshot('compress-clip-dialog.png')
+        window.resize(360,800);pump(250)
+        js("const dialog=document.querySelector('#dialog');check(dialog.scrollWidth<=dialog.clientWidth,'narrow compression dialog fits')")
+        screenshot('compress-clip-narrow.png')
+        window.resize(1400,1000);pump(250)
+        js("bridge.holdStatus=true;bridge.failExport=true;document.querySelector('#trim-export-form').requestSubmit()")
+        pump(150)
+        js("bridge.failExport=false;bridge.holdExport=true;document.querySelector('#trim-export-form').requestSubmit();bridge.releaseOldStatus({active:true,progress:99})")
+        pump(100)
+        js("(()=>{const working=document.querySelector('[data-export-working]');check(working.disabled&&working.getAttribute('aria-busy')==='true','busy button prevents another export');check(document.querySelector('#dialog-title').textContent==='Compressing clip','retry replaces the failure heading while working');check(working.querySelector('.clip-export-spinner')&&!working.querySelector('svg'),'simple spinner without a checkmark');check(document.querySelector('.clip-export-source strong').textContent==='clip-18.mp4','progress keeps source filename');})()")
+        js("check(document.querySelector('#clip-export-progress').value!==99,'stale status cannot repaint a later export');check(document.querySelector('#clip-export-output').textContent==='Analysing clip','analysis has no misleading file size');check(document.querySelector('.clip-export-original').textContent==='Original · 80.00 MB','original size retained during encoding');bridge.exportPhase='encoding';bridge.exportBytes=1234567;")
+        pump(350)
+        screenshot('export-spinner-progress.png')
+        window.resize(360,800);pump(250)
+        js("(()=>{const dialog=document.querySelector('#dialog');check(dialog.scrollWidth<=dialog.clientWidth,'narrow progress dialog fits');const cancel=document.querySelector('[data-export-cancel]').getBoundingClientRect(),working=document.querySelector('[data-export-working]').getBoundingClientRect();check(cancel.right<=working.left,'narrow buttons stay separate');})()")
+        screenshot('export-spinner-narrow.png')
+        window.resize(1400,1000);pump(250)
+        js("check(document.querySelector('#clip-export-output').textContent==='Exporting clip · 1.23 MB','current measured output size');bridge.exportPhase='analysing';bridge.exportBytes=9876543;")
+        pump(350)
+        js("check(document.querySelector('#clip-export-output').textContent==='Analysing clip','retry analysis hides previous output bytes');const event=new Event('cancel',{cancelable:true});document.querySelector('#dialog').dispatchEvent(event);check(event.defaultPrevented,'active export retains cancel dialog');document.querySelector('[data-export-cancel]').click()")
+        pump(500)
+        js("check(bridge.cancelCalls===1,'early cancellation reaches admitted native job exactly once');check(document.querySelector('#dialog-title').textContent==='Export cancelled','cancelled export returns to choices');check(!document.querySelector('[data-export-working]'),'cancellation removes busy feedback');check(document.querySelector('[name=compression]').value==='true','cancellation retains whole-clip mode');check(document.querySelector('[name=maxSizeMb]').value==='40','cancellation retains size');bridge.holdExport=false;document.querySelector('#dialog [data-close]').click()")
         # Exercise actual decoded display dimensions, including a landscape
         # thumbnail on non-landscape recordings, rather than mocking videoWidth.
         for label, width, height in [('fixture', 640, 360), ('ultrawide', 840, 360), ('classic', 480, 360), ('portrait', 360, 640)]:

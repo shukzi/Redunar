@@ -1,10 +1,12 @@
+mod encoding;
+pub use encoding::ExportOptions;
+
 use serde::Serialize;
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, BufRead, BufReader, Read},
+    io::{self, Read},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::{Path, PathBuf},
-    process::Stdio,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
@@ -28,9 +30,46 @@ struct ActiveExport {
     job: Arc<ExportJob>,
 }
 
+#[derive(Default)]
 struct ExportJob {
     cancelled: AtomicBool,
     progress_thousandths: AtomicU32,
+    output: Mutex<ExportOutput>,
+}
+
+#[derive(Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportPhase {
+    #[default]
+    Preparing,
+    Analysing,
+    Encoding,
+    Checking,
+    Saving,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ExportOutput {
+    phase: ExportPhase,
+    bytes: Option<u64>,
+}
+
+impl ExportJob {
+    fn set_output(&self, phase: ExportPhase, bytes: Option<u64>) {
+        if let Ok(mut output) = self.output.lock() {
+            *output = ExportOutput { phase, bytes };
+        }
+    }
+
+    fn status(&self) -> ClipExportStatus {
+        let output = self.output.lock().map(|output| *output).unwrap_or_default();
+        ClipExportStatus {
+            active: true,
+            progress: f64::from(self.progress_thousandths.load(Ordering::Acquire)) / 10.0,
+            phase: output.phase,
+            output_bytes: output.bytes,
+        }
+    }
 }
 
 impl ClipExports {
@@ -43,10 +82,7 @@ impl ClipExports {
             return Err("Another clip export is already running".into());
         }
         let id = NEXT_EXPORT.fetch_add(1, Ordering::Relaxed);
-        let job = Arc::new(ExportJob {
-            cancelled: AtomicBool::new(false),
-            progress_thousandths: AtomicU32::new(0),
-        });
+        let job = Arc::new(ExportJob::default());
         *active = Some(ActiveExport {
             id,
             job: job.clone(),
@@ -101,10 +137,12 @@ impl ClipExports {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub struct ClipExportStatus {
     active: bool,
     progress: f64,
+    phase: ExportPhase,
+    output_bytes: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -118,21 +156,11 @@ pub struct ExportedClip {
 #[tauri::command]
 pub fn clip_export_status(exports: tauri::State<'_, ClipExports>) -> ClipExportStatus {
     let Ok(active) = exports.0.lock() else {
-        return ClipExportStatus {
-            active: false,
-            progress: 0.0,
-        };
+        return ClipExportStatus::default();
     };
-    active.as_ref().map_or(
-        ClipExportStatus {
-            active: false,
-            progress: 0.0,
-        },
-        |export| ClipExportStatus {
-            active: true,
-            progress: f64::from(export.job.progress_thousandths.load(Ordering::Acquire)) / 10.0,
-        },
-    )
+    active
+        .as_ref()
+        .map_or(ClipExportStatus::default(), |export| export.job.status())
 }
 
 #[tauri::command]
@@ -149,10 +177,13 @@ pub async fn export_replay_clip(
     start_seconds: f64,
     end_seconds: f64,
     output_name: Option<String>,
+    options: Option<ExportOptions>,
     exports: tauri::State<'_, ClipExports>,
 ) -> Result<ExportedClip, String> {
     crate::backend::ensure_write_access()?;
     let duration = validate_trim_range(start_seconds, end_seconds)?;
+    let options = options.unwrap_or_default();
+    options.size_limit()?;
     let exports = exports.inner().clone();
     let (id, job) = exports.begin()?;
     let opened = match crate::media::open_inventory_clip(&file_name) {
@@ -167,10 +198,13 @@ pub async fn export_replay_clip(
             opened.file,
             opened.bytes,
             opened.game_name,
-            start_seconds,
-            duration,
+            ExportRequest {
+                start_seconds,
+                duration_seconds: duration,
+                output_name,
+                options,
+            },
             &job,
-            output_name.as_deref(),
         )
     })
     .await
@@ -193,32 +227,63 @@ fn validate_trim_range(start_seconds: f64, end_seconds: f64) -> Result<f64, Stri
     Ok(duration)
 }
 
+struct ExportRequest {
+    start_seconds: f64,
+    duration_seconds: f64,
+    output_name: Option<String>,
+    options: ExportOptions,
+}
+
 fn export_clip(
     source: File,
     source_bytes: u64,
     source_game_name: Option<String>,
-    start_seconds: f64,
-    duration_seconds: f64,
+    request: ExportRequest,
     job: &ExportJob,
-    output_name: Option<&str>,
 ) -> Result<ExportedClip, String> {
-    // Validate the inspection tool before spending time encoding an export.
-    let _probe = crate::media_tools::ffprobe()?;
+    let started = Instant::now();
+    let info = encoding::probe(&source, job, started)?;
+    let (start_seconds, duration_seconds) = if request.options.compression {
+        // Whole-clip requests use inspected native duration, never a UI trim.
+        (0.0, validate_trim_range(0.0, info.duration)?)
+    } else {
+        if request.start_seconds + request.duration_seconds > info.duration + 0.05 {
+            return Err("The selected range is outside this recording".into());
+        }
+        (request.start_seconds, request.duration_seconds)
+    };
     let temporary = TemporaryExport::new().map_err(|error| {
         format!("A private temporary export file could not be created: {error}")
     })?;
-    render_trim(
-        source,
-        source_bytes,
-        start_seconds,
-        duration_seconds,
+    let temporary_limit = temporary_output_limit(source_bytes)?;
+    encoding::Encoding {
+        source: &source,
+        start: start_seconds,
+        duration: duration_seconds,
+        audio_streams: info.audio_streams,
+        options: &request.options,
         job,
-        &temporary.path,
-    )?;
+        started,
+        temporary_limit,
+        quality_first: request.options.size_limit()?.is_some_and(|limit| {
+            source_bytes as f64 * duration_seconds / info.duration <= limit as f64
+        }),
+    }
+    .render(&temporary.path)?;
+    job.set_output(
+        ExportPhase::Checking,
+        temporary.path.metadata().ok().map(|m| m.len()),
+    );
     if job.cancelled.load(Ordering::Acquire) {
         return Err("Clip export was cancelled".into());
     }
-    let actual_duration = probe_duration(&temporary.path)?;
+    let rendered_file =
+        File::open(&temporary.path).map_err(|_| "The exported clip could not be read")?;
+    let rendered_info = encoding::probe(&rendered_file, job, started)?;
+    let actual_duration = rendered_info.duration;
+    if rendered_info.audio_streams != info.audio_streams {
+        return Err("The exported clip did not preserve its audio tracks".into());
+    }
     if job.cancelled.load(Ordering::Acquire) {
         return Err("Clip export was cancelled".into());
     }
@@ -233,26 +298,31 @@ fn export_clip(
         .metadata()
         .map_err(|error| format!("Exported clip metadata is unavailable: {error}"))?
         .len();
+    let output_limit = request
+        .options
+        .size_limit()?
+        .unwrap_or(temporary_limit)
+        .min(temporary_limit);
+    if bytes > output_limit {
+        return Err("The exported clip exceeded its maximum file size".into());
+    }
     let store = crate::backend::service()
         .prepare_replay_store()
         .map_err(|error| error.to_string())?;
+    job.set_output(ExportPhase::Saving, Some(bytes));
     store
         .ensure_free_space_for_export(bytes)
         .map_err(|error| error.to_string())?;
     let mut rendered = File::open(&temporary.path)
         .map_err(|error| format!("The trimmed clip could not be reopened: {error}"))?;
-    let saved = match output_name {
-        Some(stem) => store.save_named_mp4_preserving_existing_with_limit(
+    let saved = store
+        .save_export_preserving_existing_with_limit(
             &mut rendered,
-            stem,
-            temporary_output_limit(source_bytes)?,
-        ),
-        None => store.save_mp4_preserving_existing_with_limit(
-            &mut rendered,
-            temporary_output_limit(source_bytes)?,
-        ),
-    }
-    .map_err(|error| error.to_string())?;
+            request.output_name.as_deref(),
+            request.options.output_format.store_format(),
+            output_limit,
+        )
+        .map_err(|error| error.to_string())?;
     let file_name = saved
         .path
         .file_name()
@@ -281,138 +351,6 @@ fn export_clip(
     })
 }
 
-fn render_trim(
-    source: File,
-    source_bytes: u64,
-    start_seconds: f64,
-    duration_seconds: f64,
-    job: &ExportJob,
-    output: &Path,
-) -> Result<(), String> {
-    let max_output_bytes = temporary_output_limit(source_bytes)?;
-    let mut child = crate::media_tools::ffmpeg(Some("libx264"))?
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-i",
-            "pipe:0",
-            "-ss",
-            &format!("{start_seconds:.6}"),
-            "-t",
-            &format!("{duration_seconds:.6}"),
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "20",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-map_metadata",
-            "-1",
-            "-avoid_negative_ts",
-            "make_zero",
-            "-movflags",
-            "+faststart",
-            "-progress",
-            "pipe:2",
-            "-nostats",
-            "-f",
-            "mp4",
-            "-y",
-        ])
-        .arg(output)
-        .stdin(Stdio::from(source))
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                "FFmpeg is required to export a trimmed clip".into()
-            } else {
-                format!("Clip export could not start: {error}")
-            }
-        })?;
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            terminate(&mut child);
-            return Err("Clip export diagnostics are unavailable".into());
-        }
-    };
-    let progress = Arc::new(AtomicU32::new(0));
-    let progress_reader = progress.clone();
-    let reader = match std::thread::Builder::new()
-        .name("redunar-clip-export-progress".into())
-        .spawn(move || read_ffmpeg_progress(stderr, duration_seconds, progress_reader))
-    {
-        Ok(reader) => reader,
-        Err(error) => {
-            terminate(&mut child);
-            return Err(format!("Clip export progress could not start: {error}"));
-        }
-    };
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(error) => {
-                terminate(&mut child);
-                let _ = reader.join();
-                return Err(format!("Clip export process failed: {error}"));
-            }
-        }
-        job.progress_thousandths
-            .store(progress.load(Ordering::Acquire), Ordering::Release);
-        if job.cancelled.load(Ordering::Acquire) {
-            terminate(&mut child);
-            let _ = reader.join();
-            return Err("Clip export was cancelled".into());
-        }
-        if output
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() > max_output_bytes)
-        {
-            terminate(&mut child);
-            let _ = reader.join();
-            return Err("The trimmed clip exceeded its safe temporary size limit".into());
-        }
-        if started.elapsed() >= EXPORT_TIMEOUT {
-            terminate(&mut child);
-            let _ = reader.join();
-            return Err("Clip export timed out".into());
-        }
-        std::thread::sleep(EXPORT_POLL_INTERVAL);
-    };
-    let diagnostics = reader
-        .join()
-        .unwrap_or_else(|_| "Clip export diagnostics stopped unexpectedly".into());
-    if !status.success() {
-        return Err(
-            if let Some(message) = crate::media_tools::capability_error(&diagnostics) {
-                message
-            } else if diagnostics.is_empty() {
-                "FFmpeg could not export the selected range".into()
-            } else {
-                format!("FFmpeg could not export the selected range: {diagnostics}")
-            },
-        );
-    }
-    job.progress_thousandths.store(950, Ordering::Release);
-    Ok(())
-}
-
 fn temporary_output_limit(source_bytes: u64) -> Result<u64, String> {
     source_bytes
         .checked_mul(OUTPUT_SIZE_MULTIPLIER)
@@ -420,70 +358,9 @@ fn temporary_output_limit(source_bytes: u64) -> Result<u64, String> {
         .ok_or_else(|| "The source clip is too large to export safely".into())
 }
 
-fn read_ffmpeg_progress(
-    stderr: impl Read,
-    duration_seconds: f64,
-    progress: Arc<AtomicU32>,
-) -> String {
-    let mut diagnostics = String::new();
-    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-        if let Some(value) = line.strip_prefix("out_time_us=") {
-            if let Ok(microseconds) = value.parse::<f64>() {
-                let fraction = microseconds / 1_000_000.0 / duration_seconds;
-                progress.store(
-                    (fraction.clamp(0.0, 0.95) * 1000.0) as u32,
-                    Ordering::Release,
-                );
-            }
-        } else if !line.contains('=') {
-            if !diagnostics.is_empty() {
-                diagnostics.push(' ');
-            }
-            diagnostics.push_str(line.trim());
-            if diagnostics.len() > 1200 {
-                diagnostics.truncate(1200);
-            }
-        }
-    }
-    diagnostics
-}
-
 fn terminate(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
-}
-
-fn probe_duration(path: &Path) -> Result<f64, String> {
-    let output = crate::media_tools::ffprobe()?
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
-        .arg(path)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                "FFprobe is required to validate the trimmed clip".into()
-            } else {
-                format!("The trimmed clip could not be validated: {error}")
-            }
-        })?;
-    if !output.status.success() {
-        return Err("The trimmed clip could not be validated".into());
-    }
-    let duration = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "The trimmed clip reported an invalid duration")?;
-    if !duration.is_finite() || duration <= 0.0 {
-        return Err("The trimmed clip reported an invalid duration".into());
-    }
-    Ok(duration)
 }
 
 struct TemporaryExport {
@@ -504,15 +381,7 @@ impl TemporaryExport {
             let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
             match builder.create(&directory) {
-                Ok(()) => {
-                    let path = directory.join("trimmed.mp4");
-                    let _ = OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .mode(0o600)
-                        .open(&path)?;
-                    return Ok(Self { directory, path });
-                }
+                Ok(()) => return Self::initialize(directory),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
@@ -522,18 +391,59 @@ impl TemporaryExport {
             "could not allocate a private clip export directory",
         ))
     }
+
+    // Only called after creating this job's private directory. Establish its
+    // cleanup owner before the fallible file creation, including disk errors.
+    fn initialize(directory: PathBuf) -> io::Result<Self> {
+        let temporary = Self {
+            path: directory.join("output.media"),
+            directory,
+        };
+        let _ = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary.path)?;
+        Ok(temporary)
+    }
 }
 
 impl Drop for TemporaryExport {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        let _ = fs::remove_dir(&self.directory);
+        // This private 0700 directory contains only this job's output and pass
+        // statistics. Failure/cancellation must release every temporary file.
+        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use encoding::read_ffmpeg_progress;
+
+    #[test]
+    fn failed_temporary_output_creation_cleans_its_owned_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "redunar-export-init-test-{}-{}",
+            std::process::id(),
+            NEXT_EXPORT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        fs::create_dir(directory.join("output.media")).unwrap();
+        let result = TemporaryExport::initialize(directory.clone());
+        let leaked = directory.exists();
+        if leaked {
+            fs::remove_dir_all(&directory).unwrap();
+        }
+        assert!(result.is_err());
+        assert!(
+            !leaked,
+            "failed initialization retained its temporary directory"
+        );
+    }
 
     #[test]
     fn trim_range_rejects_invalid_or_empty_intervals() {

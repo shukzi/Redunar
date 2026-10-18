@@ -1,10 +1,10 @@
 //! Exclusive named exports. Authorize the temporary inode before publishing its
 //! user-facing name, preserving old readers and crash-safe ownership recovery.
 use super::{
-    CLIP_PREFIX, Label, NEXT_FILE, Ordering, OsStr, Read, ReplayClipStore, ReplayStoreError,
-    StoredReplayClip, SystemTime, UNIX_EPOCH, create_temporary, fs, io, io_error,
+    CLIP_PREFIX, Label, NEXT_FILE, Ordering, OsStr, Read, ReplayClipStore, ReplayOutputFormat,
+    ReplayStoreError, StoredReplayClip, SystemTime, UNIX_EPOCH, create_temporary, fs, io, io_error,
     is_owned_clip_name, labels, scan_owned_clips, store_operation, sync_directory, validate_store,
-    write_bounded_mp4,
+    write_bounded_matroska, write_bounded_mp4,
 };
 
 impl ReplayClipStore {
@@ -34,7 +34,52 @@ impl ReplayClipStore {
         stem: &str,
         maximum_output_bytes: u64,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
-        let name = format!("{stem}.mp4");
+        self.save_export_preserving_existing_with_limit(
+            source,
+            Some(stem),
+            ReplayOutputFormat::Mp4,
+            maximum_output_bytes,
+        )
+    }
+
+    /// Commit a derived MP4 or MKV without evicting or overwriting recordings.
+    /// Names contain a stem only; the native format determines the suffix and
+    /// ownership identity. Existing MP4 callers retain their original API.
+    ///
+    /// # Errors
+    /// Invalid/colliding names, mismatched containers, capacity or I/O failures.
+    pub fn save_export_preserving_existing_with_limit(
+        &self,
+        source: &mut impl Read,
+        stem: Option<&str>,
+        output_format: ReplayOutputFormat,
+        maximum_output_bytes: u64,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
+        match stem {
+            Some(stem) => {
+                self.save_named_export_with_limit(source, stem, output_format, maximum_output_bytes)
+            }
+            None => self.save_generated(output_format, true, |temporary| {
+                write_bounded_export(
+                    temporary,
+                    source,
+                    output_format,
+                    maximum_output_bytes,
+                    self.storage_limit_bytes,
+                )
+            }),
+        }
+    }
+
+    fn save_named_export_with_limit(
+        &self,
+        source: &mut impl Read,
+        stem: &str,
+        output_format: ReplayOutputFormat,
+        maximum_output_bytes: u64,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
+        let extension = output_format.extension();
+        let name = format!("{stem}.{extension}");
         if stem.is_empty()
             || stem.trim() != stem
             || stem.len() > 200
@@ -54,9 +99,10 @@ impl ReplayClipStore {
             create_temporary(&self.directory)?
         };
         let result = (|| {
-            let bytes = write_bounded_mp4(
+            let bytes = write_bounded_export(
                 &mut temporary,
                 source,
+                output_format,
                 maximum_output_bytes,
                 self.storage_limit_bytes,
             )?;
@@ -78,14 +124,14 @@ impl ReplayClipStore {
                 .is_none_or(|total| total > self.storage_limit_bytes)
             {
                 return Err(ReplayStoreError::new(
-                    "trimmed clip does not fit without removing an existing replay",
+                    "exported clip does not fit without removing an existing replay",
                 ));
             }
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| ReplayStoreError::new("system clock is before the Unix epoch"))?;
             let original = format!(
-                "{CLIP_PREFIX}{}-{:09}-{}.mp4",
+                "{CLIP_PREFIX}{}-{:09}-{}.{extension}",
                 now.as_secs(),
                 now.subsec_nanos(),
                 NEXT_FILE.fetch_add(1, Ordering::Relaxed)
@@ -135,9 +181,76 @@ impl ReplayClipStore {
     }
 }
 
+fn write_bounded_export(
+    temporary: &mut fs::File,
+    source: &mut impl Read,
+    output_format: ReplayOutputFormat,
+    maximum_output_bytes: u64,
+    storage_limit_bytes: u64,
+) -> Result<u64, ReplayStoreError> {
+    match output_format {
+        ReplayOutputFormat::Mp4 => {
+            write_bounded_mp4(temporary, source, maximum_output_bytes, storage_limit_bytes)
+        }
+        ReplayOutputFormat::Matroska => {
+            write_bounded_matroska(temporary, source, maximum_output_bytes, storage_limit_bytes)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mkv_exports_keep_container_identity_and_exclusive_bounded_commit() {
+        let root = std::env::temp_dir().join(format!(
+            "redunar-mkv-export-{}-{}",
+            std::process::id(),
+            NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let store = ReplayClipStore::open_with_limits(root.clone(), 1024, 2048).unwrap();
+        let media = b"\x1a\x45\xdf\xa3fixture";
+        let save = |name, limit| {
+            store.save_export_preserving_existing_with_limit(
+                &mut media.as_slice(),
+                name,
+                ReplayOutputFormat::Matroska,
+                limit,
+            )
+        };
+        let saved = save(Some("Small"), 1024).unwrap();
+        assert_eq!(saved.path.file_name().unwrap(), "Small.mkv");
+        assert!(save(Some("Small"), 1024).is_err());
+        assert!(save(Some("Over budget"), 5).is_err());
+        assert!(
+            store
+                .save_export_preserving_existing_with_limit(
+                    &mut media.as_slice(),
+                    Some("Wrong type"),
+                    ReplayOutputFormat::Mp4,
+                    1024
+                )
+                .is_err()
+        );
+        let generated = save(None, 1024).unwrap();
+        assert_eq!(generated.path.extension().unwrap(), "mkv");
+        store.set_trashed("Small.mkv", true).unwrap();
+        store.set_trashed("Small.mkv", false).unwrap();
+        let reopened = ReplayClipStore::open_with_limits(root.clone(), 1024, 2048).unwrap();
+        assert_eq!(reopened.inventory().unwrap().len(), 2);
+        assert!(
+            reopened
+                .inventory()
+                .unwrap()
+                .iter()
+                .all(|c| std::path::Path::new(&c.original_file_name).extension()
+                    == Some(OsStr::new("mkv")))
+        );
+        assert_eq!(fs::read(&saved.path).unwrap(), media);
+        assert!(!root.join("Over budget.mkv").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn named_export_budget_includes_trash_and_never_evicts_recordings() {
         let root = std::env::temp_dir().join(format!(

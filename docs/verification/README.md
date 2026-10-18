@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 18 clip compression](2026-10-18-clip-compression.md): Size first
+  whole-clip compression, optional trimmed-export foldout, MP4/MKV and verified
+  size ceilings; offline tests, WebKit inspection and an uninstalled local build.
+
 - [October 17 remaining release hygiene review](2026-10-17-release-hygiene.md):
   align Tauri version metadata, reject stale release inputs, correct native
   package/tray/update documentation and retire an unused X11 fixture helper.

@@ -59,7 +59,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='game_banner')return args.gameId==='1'?bannerFixture:null;
  if(command==='replay_clips')return bridge.clips??=Array.from({length:3},(_,i)=>({file_name:`redunar-replay-1789254367-629872093-${i+1}-a-long-capture-filename.mkv`,title:`Capture ${i+1}`,game_name:i===0?games[0].name:null,bytes:68000000,modified_unix_ns:'1789300000000000000',duration_seconds:30}));
  if(command==='clip_metadata')return {duration_seconds:30,width:640,height:360,fps:60};
- if(command==='clip_thumbnail')return captureFixture;
+ if(command==='clip_thumbnail')return bridge.brokenThumbnail?[0,1,2]:captureFixture;
  if(command==='replay_storage_status')return {used_bytes:204000000,available_bytes:bridge.lowDisk?950000000:137400000000,total_bytes:512000000000};
  if(command==='microphone_inputs'){if(bridge.failInputs)throw Error('Fixture audio server unavailable');return [{id:'usb-mic',label:'USB microphone'},{id:'internal-mic',label:'Internal microphone'}];}
  if(command==='pick_replay_folder')return bridge.pickedFolder??null;

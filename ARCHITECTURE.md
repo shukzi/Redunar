@@ -80,7 +80,7 @@ Paths below are relative to `output/tauri-redunar/`:
 | Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `session_lifecycle.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
-| Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_metadata.rs`, `media.rs` |
+| Playback/export/metadata | `src-tauri/src/playback.rs`, `clip_export.rs`, `clip_export/encoding.rs`, `clip_metadata.rs`, `media.rs`; `ui/clip-export.mjs` owns the shared compression/selection form |
 | Persistent clip thumbnails | `src-tauri/src/media.rs` decodes; `crates/redunar-daemon/src/replay_thumbnails.rs`, `replay_store/thumbnails.rs` validate/cache and own deletion cleanup |
 | Replay menu and shortcuts | `src-tauri/src/hotkeys.rs`; `crates/redunar-hotkeys` (pointer capture); `crates/redunar-capture-vulkan/src/overlay.rs` (in-game menu render); `ui/replay-menu-view.mjs` (app preview) |
 | Tray preference/lifecycle | `src-tauri/src/tray.rs`, `tray_native/`, `main.rs` |
@@ -451,9 +451,13 @@ library, exposed read-only through the service/runtime command.
 
 ## Workspace refinement ownership
 
+`ui/disclosure-motion.mjs` owns delegated desktop details animation, including
+reversal and immediate action dismissal. `ui/clip-motion.mjs` owns new-recording
+and decoded-thumbnail presentation. Neither controls inventory or playback.
+
 `replay_store/trash.rs` owns the separate inode-bound logical trash ledger and
 bounded restoration; media remains in the same owned directory. `named_export.rs`
-commits named MP4s with pre-staged inode authorization and atomic no-replace rename.
+commits named MP4/MKV files with pre-staged inode authorization and atomic no-replace rename.
 `clip_details.rs` exposes exact one-clip trash/restore commands through the service,
 serialized with `ClipExports` admission. `replay_runtime.rs` tracks microphone
 packet freshness; `runtime.rs` publishes it without device discovery.
