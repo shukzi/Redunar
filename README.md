@@ -1,5 +1,7 @@
 # Redunar
 
+[![Total downloads](https://raw.githubusercontent.com/shukzi/Redunar/download-stats/weekly.svg)](https://github.com/shukzi/Redunar/releases)
+
 Redunar provides instant replay recording and in-game metrics for Steam games
 running on Linux with AMD hardware.
 
