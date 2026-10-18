@@ -1,0 +1,948 @@
+{
+  "schema_version": 1,
+  "repository": "shukzi/Redunar",
+  "started_at": "2026-10-18T10:44:18Z",
+  "included_filenames": [
+    "redunar-app-linux-amd64.deb",
+    "redunar-app-linux-opensuse-x86_64.rpm",
+    "redunar-app-linux-x86_64.pkg.tar.zst",
+    "redunar-app-linux-x86_64.rpm",
+    "redunar-app-linux-x86_64.tar.gz"
+  ],
+  "assets": {
+    "650326363": {
+      "release": "v0.1.26",
+      "id": 650326363,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-17T11:43:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650326361": {
+      "release": "v0.1.26",
+      "id": 650326361,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-17T11:43:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650326367": {
+      "release": "v0.1.26",
+      "id": 650326367,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 2,
+      "created_at": "2026-10-17T11:43:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650326422": {
+      "release": "v0.1.26",
+      "id": 650326422,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-17T11:43:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650326423": {
+      "release": "v0.1.26",
+      "id": 650326423,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-17T11:43:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650210019": {
+      "release": "v0.1.25",
+      "id": 650210019,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-17T10:42:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650210024": {
+      "release": "v0.1.25",
+      "id": 650210024,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-17T10:42:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650210022": {
+      "release": "v0.1.25",
+      "id": 650210022,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 2,
+      "created_at": "2026-10-17T10:42:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650210050": {
+      "release": "v0.1.25",
+      "id": 650210050,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-17T10:42:31Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "650210058": {
+      "release": "v0.1.25",
+      "id": 650210058,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-17T10:42:31Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "643148675": {
+      "release": "v0.1.24",
+      "id": 643148675,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-15T08:00:57Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "643148684": {
+      "release": "v0.1.24",
+      "id": 643148684,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-15T08:00:57Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "643148680": {
+      "release": "v0.1.24",
+      "id": 643148680,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 3,
+      "created_at": "2026-10-15T08:00:57Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "643148719": {
+      "release": "v0.1.24",
+      "id": 643148719,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-15T08:00:58Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "643148736": {
+      "release": "v0.1.24",
+      "id": 643148736,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-15T08:00:58Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "641162707": {
+      "release": "v0.1.23",
+      "id": 641162707,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-14T17:47:51Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "641162711": {
+      "release": "v0.1.23",
+      "id": 641162711,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-14T17:47:51Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "641162712": {
+      "release": "v0.1.23",
+      "id": 641162712,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 2,
+      "created_at": "2026-10-14T17:47:52Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "641162733": {
+      "release": "v0.1.23",
+      "id": 641162733,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-14T17:47:52Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "641162771": {
+      "release": "v0.1.23",
+      "id": 641162771,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-14T17:47:53Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "640643636": {
+      "release": "v0.1.22",
+      "id": 640643636,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-14T14:32:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "640643635": {
+      "release": "v0.1.22",
+      "id": 640643635,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-14T14:32:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "640643633": {
+      "release": "v0.1.22",
+      "id": 640643633,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 2,
+      "created_at": "2026-10-14T14:32:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "640643670": {
+      "release": "v0.1.22",
+      "id": 640643670,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-14T14:32:40Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "640643697": {
+      "release": "v0.1.22",
+      "id": 640643697,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-14T14:32:40Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "630614505": {
+      "release": "v0.1.21",
+      "id": 630614505,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-11T11:48:15Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "630614507": {
+      "release": "v0.1.21",
+      "id": 630614507,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-11T11:48:15Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "630614512": {
+      "release": "v0.1.21",
+      "id": 630614512,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 4,
+      "created_at": "2026-10-11T11:48:15Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "630614537": {
+      "release": "v0.1.21",
+      "id": 630614537,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-11T11:48:15Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "630614564": {
+      "release": "v0.1.21",
+      "id": 630614564,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-11T11:48:16Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625934835": {
+      "release": "v0.1.20",
+      "id": 625934835,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-09T19:21:14Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625934838": {
+      "release": "v0.1.20",
+      "id": 625934838,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T19:21:14Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625934842": {
+      "release": "v0.1.20",
+      "id": 625934842,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 4,
+      "created_at": "2026-10-09T19:21:14Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625934871": {
+      "release": "v0.1.20",
+      "id": 625934871,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T19:21:14Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625934893": {
+      "release": "v0.1.20",
+      "id": 625934893,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-09T19:21:15Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625584263": {
+      "release": "v0.1.19",
+      "id": 625584263,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-09T16:54:44Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625584267": {
+      "release": "v0.1.19",
+      "id": 625584267,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T16:54:44Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625584260": {
+      "release": "v0.1.19",
+      "id": 625584260,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 2,
+      "created_at": "2026-10-09T16:54:44Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625584312": {
+      "release": "v0.1.19",
+      "id": 625584312,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T16:54:45Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "625584337": {
+      "release": "v0.1.19",
+      "id": 625584337,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-09T16:54:45Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624620475": {
+      "release": "v0.1.18",
+      "id": 624620475,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-09T10:20:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624620469": {
+      "release": "v0.1.18",
+      "id": 624620469,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T10:20:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624620470": {
+      "release": "v0.1.18",
+      "id": 624620470,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 3,
+      "created_at": "2026-10-09T10:20:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624620509": {
+      "release": "v0.1.18",
+      "id": 624620509,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T10:20:39Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624620528": {
+      "release": "v0.1.18",
+      "id": 624620528,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-09T10:20:40Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624160130": {
+      "release": "v0.1.17",
+      "id": 624160130,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-09T06:51:53Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624160133": {
+      "release": "v0.1.17",
+      "id": 624160133,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T06:51:53Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624160132": {
+      "release": "v0.1.17",
+      "id": 624160132,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 1,
+      "created_at": "2026-10-09T06:51:53Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624160153": {
+      "release": "v0.1.17",
+      "id": 624160153,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-09T06:51:54Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "624160169": {
+      "release": "v0.1.17",
+      "id": 624160169,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-09T06:51:54Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "616504624": {
+      "release": "v0.1.14",
+      "id": 616504624,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-06T19:55:12Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "616504631": {
+      "release": "v0.1.14",
+      "id": 616504631,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-06T19:55:12Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "616504619": {
+      "release": "v0.1.14",
+      "id": 616504619,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 4,
+      "created_at": "2026-10-06T19:55:12Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "616504651": {
+      "release": "v0.1.14",
+      "id": 616504651,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-06T19:55:13Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "616504664": {
+      "release": "v0.1.14",
+      "id": 616504664,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-06T19:55:13Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "607471525": {
+      "release": "v0.1.13",
+      "id": 607471525,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 2,
+      "created_at": "2026-10-03T08:43:18Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "607471516": {
+      "release": "v0.1.13",
+      "id": 607471516,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 2,
+      "created_at": "2026-10-03T08:43:18Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "607471524": {
+      "release": "v0.1.13",
+      "id": 607471524,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 4,
+      "created_at": "2026-10-03T08:43:18Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "607471542": {
+      "release": "v0.1.13",
+      "id": 607471542,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 2,
+      "created_at": "2026-10-03T08:43:19Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "607471555": {
+      "release": "v0.1.13",
+      "id": 607471555,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 2,
+      "created_at": "2026-10-03T08:43:19Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "591268809": {
+      "release": "v0.1.10",
+      "id": 591268809,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-26T19:07:20Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "591268817": {
+      "release": "v0.1.10",
+      "id": 591268817,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-26T19:07:21Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "591268820": {
+      "release": "v0.1.10",
+      "id": 591268820,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-26T19:07:21Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "591268828": {
+      "release": "v0.1.10",
+      "id": 591268828,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-26T19:07:21Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "591268830": {
+      "release": "v0.1.10",
+      "id": 591268830,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-26T19:07:21Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590560118": {
+      "release": "v0.1.9",
+      "id": 590560118,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:45:10Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590560126": {
+      "release": "v0.1.9",
+      "id": 590560126,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:45:10Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590560128": {
+      "release": "v0.1.9",
+      "id": 590560128,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:45:10Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590560138": {
+      "release": "v0.1.9",
+      "id": 590560138,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-26T11:45:10Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590560152": {
+      "release": "v0.1.9",
+      "id": 590560152,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:45:11Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590503279": {
+      "release": "v0.1.8",
+      "id": 590503279,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:06:36Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590503315": {
+      "release": "v0.1.8",
+      "id": 590503315,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:06:37Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590503314": {
+      "release": "v0.1.8",
+      "id": 590503314,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:06:37Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590503323": {
+      "release": "v0.1.8",
+      "id": 590503323,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 2,
+      "created_at": "2026-09-26T11:06:37Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "590503329": {
+      "release": "v0.1.8",
+      "id": 590503329,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-26T11:06:37Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588650584": {
+      "release": "v0.1.7",
+      "id": 588650584,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-25T15:32:04Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588650603": {
+      "release": "v0.1.7",
+      "id": 588650603,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-25T15:32:05Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588650609": {
+      "release": "v0.1.7",
+      "id": 588650609,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-25T15:32:05Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588650617": {
+      "release": "v0.1.7",
+      "id": 588650617,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-25T15:32:05Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588650627": {
+      "release": "v0.1.7",
+      "id": 588650627,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-25T15:32:05Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588559430": {
+      "release": "v0.1.6",
+      "id": 588559430,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-25T14:42:18Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588559446": {
+      "release": "v0.1.6",
+      "id": 588559446,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-25T14:42:19Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588559452": {
+      "release": "v0.1.6",
+      "id": 588559452,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-25T14:42:19Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588559459": {
+      "release": "v0.1.6",
+      "id": 588559459,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-25T14:42:19Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588559469": {
+      "release": "v0.1.6",
+      "id": 588559469,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-25T14:42:20Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588247266": {
+      "release": "v0.1.5",
+      "id": 588247266,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-25T11:48:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588247284": {
+      "release": "v0.1.5",
+      "id": 588247284,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-25T11:48:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588247286": {
+      "release": "v0.1.5",
+      "id": 588247286,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-25T11:48:08Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588247296": {
+      "release": "v0.1.5",
+      "id": 588247296,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-25T11:48:09Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "588247303": {
+      "release": "v0.1.5",
+      "id": 588247303,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-25T11:48:09Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "586830687": {
+      "release": "v0.1.4",
+      "id": 586830687,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-24T21:02:15Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "586830782": {
+      "release": "v0.1.4",
+      "id": 586830782,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-24T21:02:17Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "586830920": {
+      "release": "v0.1.4",
+      "id": 586830920,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-24T21:02:19Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "586830977": {
+      "release": "v0.1.4",
+      "id": 586830977,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-24T21:02:20Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "586831015": {
+      "release": "v0.1.4",
+      "id": 586831015,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-24T21:02:22Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577693848": {
+      "release": "v0.1.3",
+      "id": 577693848,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-20T22:40:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577693860": {
+      "release": "v0.1.3",
+      "id": 577693860,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-20T22:40:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577693866": {
+      "release": "v0.1.3",
+      "id": 577693866,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 1,
+      "created_at": "2026-09-20T22:40:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577693871": {
+      "release": "v0.1.3",
+      "id": 577693871,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-20T22:40:30Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577693874": {
+      "release": "v0.1.3",
+      "id": 577693874,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-20T22:40:31Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577310323": {
+      "release": "v0.1.2",
+      "id": 577310323,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-20T18:15:47Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577310338": {
+      "release": "v0.1.2",
+      "id": 577310338,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-20T18:15:47Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577310340": {
+      "release": "v0.1.2",
+      "id": 577310340,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 1,
+      "created_at": "2026-09-20T18:15:47Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577310347": {
+      "release": "v0.1.2",
+      "id": 577310347,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 2,
+      "created_at": "2026-09-20T18:15:47Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577310355": {
+      "release": "v0.1.2",
+      "id": 577310355,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-20T18:15:47Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577148717": {
+      "release": "v0.1.1",
+      "id": 577148717,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-20T16:32:34Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577148729": {
+      "release": "v0.1.1",
+      "id": 577148729,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-20T16:32:35Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577148735": {
+      "release": "v0.1.1",
+      "id": 577148735,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-20T16:32:35Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577148746": {
+      "release": "v0.1.1",
+      "id": 577148746,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-09-20T16:32:35Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "577148754": {
+      "release": "v0.1.1",
+      "id": 577148754,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-20T16:32:35Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "576742173": {
+      "release": "v0.1.0",
+      "id": 576742173,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 0,
+      "created_at": "2026-09-20T12:01:23Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "576742184": {
+      "release": "v0.1.0",
+      "id": 576742184,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-20T12:01:23Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "576742186": {
+      "release": "v0.1.0",
+      "id": 576742186,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 0,
+      "created_at": "2026-09-20T12:01:23Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "576742192": {
+      "release": "v0.1.0",
+      "id": 576742192,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 0,
+      "created_at": "2026-09-20T12:01:24Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "576742201": {
+      "release": "v0.1.0",
+      "id": 576742201,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 0,
+      "created_at": "2026-09-20T12:01:24Z",
+      "first_seen": "2026-10-18T10:44:18Z"
+    }
+  },
+  "observations": [
+    {
+      "checked_at": "2026-10-18T10:44:18Z",
+      "recorded_downloads": 0,
+      "github_lifetime_total": 98,
+      "changes": []
+    },
+    {
+      "checked_at": "2026-10-18T10:50:52+00:00",
+      "recorded_downloads": 0,
+      "github_lifetime_total": 98,
+      "changes": []
+    }
+  ]
+}
