@@ -107,13 +107,12 @@ Never install a development package as an incidental build step.
 
 ## Checks and review
 
-For invited collaborators, pull requests are optional. Use them when a visible
-diff and discussion help; the maintainer can also integrate a locally reviewed
-branch directly. GitHub
-does not require additional reviewers or passing status checks for `main`.
-The validation expectations below still guide acceptance. The branch rule
-blocks force pushes and deletion for users subject to it; administrators retain
-GitHub's default bypass. It does not restrict normal branch work.
+All changes to `main`, including maintainer and documentation changes, require
+a pull request from a task branch. Direct pushes to `main` are not permitted.
+The branch protection applies to administrators and blocks force pushes and
+branch deletion. Additional reviewer approvals and passing status checks are
+not currently mandatory GitHub merge gates; the local validation and review
+requirements below still apply.
 
 ```sh
 tools/validate.sh quick   # syntax, formatting, both Cargo checks, frontend build and UI tests
@@ -122,9 +121,10 @@ tools/validate.sh release # also compatibility build and package/release gate
 ```
 
 Dependencies must already be available; Cargo validation is locked and offline.
-Quick validation is for iteration. Full validation is required before merge;
-release validation is required for a release candidate. Add focused regression
-coverage for changed failures, cancellation, stale state, duplicate actions, and
+Quick validation is for iteration. Documentation-only changes require link,
+command, and consistency checks. Implementation changes require full validation
+before merge; release validation is required for a release candidate. Add focused
+regression coverage for changed failures, cancellation, stale state, duplicate actions, and
 cleanup. UI changes also require visual inspection. Hardware-dependent claims
 need the manual acceptance evidence described in TESTING and HARDWARE-SUPPORT.
 An existing failing check blocks acceptance until fixed or explicitly documented
@@ -137,9 +137,9 @@ and persisted-format changes receive a separate review pass. Record remaining
 limitations. Re-run the required checks after conflict resolution or substantive
 review changes, including the final integrated tree before release.
 
-Keep commits small and descriptive. Merge an accepted branch into `main`, retaining
-its useful history or using one reviewed squash commit. Do not force-push shared
-history. Revert a faulty integration with a new commit; persisted data may need a
+Keep commits small and descriptive. Merge an accepted pull request into `main`,
+retaining its useful history or using one reviewed squash commit. Do not
+force-push shared history. Revert a faulty integration with a new commit; persisted data may need a
 separate compatible recovery path. Remove a branch/worktree only after checking
 for uncommitted work and confirming its result is retained.
 

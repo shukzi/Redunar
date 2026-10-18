@@ -2,16 +2,20 @@
 
 ## Before creating a candidate
 
-1. Integrate the reviewed change into `main`; validate the integrated tree.
-2. Set version metadata using the package specification as authority. Keep the
-   native Cargo manifest, Tauri JSON config, and latest AppStream release in sync.
+1. Merge the reviewed implementation pull requests into `main`; validate the
+   integrated tree.
+2. Set version metadata on a release task branch using the package specification
+   as authority. Keep the native Cargo manifest, Tauri JSON config, and latest
+   AppStream release in sync.
    Run `tools/check-release-inputs.sh vMAJOR.MINOR.PATCH`.
 3. Prepare `docs/releases/vMAJOR.MINOR.PATCH.md` with the reviewed release notes.
    The release title will be exactly the tag, for example `v0.1.11`.
 4. Review the candidate changes, release notes, acceptance evidence, and recovery
    plan with the release maintainer. Local qualification requires no GitHub upload.
-5. Commit all candidate inputs and create the version tag at that commit.
-   Keep release tags immutable. A correction gets a new version.
+5. Commit the candidate inputs on the release task branch and merge its reviewed
+   pull request into `main`. Validate the integrated tree and create the version
+   tag at that exact commit. Keep release tags immutable. A correction gets a
+   new version.
 
 ## Qualify before publication
 
@@ -67,10 +71,10 @@ Before enabling publication:
   environment secret is configured correctly.
 - Set the repository variable `REDUNAR_RELEASE_PUBLICATION_ENABLED` to `true`
   only after the environment and workflow configuration have been reviewed.
-- Keep the lightweight `main` protection: prevent force pushes and branch
-  deletion, with the default administrator bypass. Pull requests, additional
-  reviewers, and status checks are not mandatory GitHub merge gates. Review
-  the diff and validation results before integration as described in
+- Protect `main`: require pull requests, apply the rule to administrators, and
+  prevent force pushes and branch deletion. Additional reviewer approvals and
+  status checks are not currently mandatory GitHub merge gates. Review the diff
+  and validation results before integration as described in
   [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 If required environment review is unavailable for the repository, keep automated
