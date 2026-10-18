@@ -3,7 +3,7 @@ import hashlib
 from html import escape
 import json
 
-from .history import instant, period
+from .history import instant
 
 REPOSITORY = 'shukzi/Redunar'
 PACKAGES = frozenset((
@@ -54,14 +54,18 @@ def fingerprint(document):
 
 
 def weekly_document(history, snapshot):
-    display = period(history, snapshot)
-    display['number'] = ('≈' if display['kind'] == 'historical-weekly-average' else '') + f"{display['value']:,}"
-    display['badge_number'] = display['number'].replace('≈', '~')
+    # Keep the existing Python entry point and data URLs compatible. The
+    # presentation now reports total observed downloads, including the baseline.
+    total = sum(asset['downloads'] for asset in history['assets'].values())
+    display = {'kind': 'lifetime', 'value': total, 'number': f'{total:,}',
+               'badge_number': f'{total:,}', 'label': 'Total downloads',
+               'badge_label': 'Total downloads',
+               'title': 'Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.'}
     result = {'schema_version': 1, 'repository': REPOSITORY,
               'checked_at': snapshot['checked_at'], 'tracking_started_at': history['started_at'],
               'included_filenames': sorted(PACKAGES),
               'recorded_downloads': history['observations'][-1]['recorded_downloads'],
-              'lifetime_downloads': snapshot['total'], 'display': display,
+              'lifetime_downloads': total, 'display': display,
               'policy': 'Published stable app packages only; includes updates and repeat downloads, not unique users or confirmed installs.'}
     result['snapshot_id'] = fingerprint(result)
     return result

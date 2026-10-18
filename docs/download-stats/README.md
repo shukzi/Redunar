@@ -1,4 +1,4 @@
-# Weekly package download statistics
+# Total package download statistics
 
 This recorder produces one presentation snapshot for the website and README
 badge. It counts only uploaded app packages from all published stable Redunar
@@ -10,15 +10,16 @@ downloads do count; the metric cannot identify installations or unique people.
 ## Data and baseline
 
 The original recording began October 18, 2026 at 10:44:18 UTC. The 98 existing
-lifetime downloads are a baseline, not new downloads. The checked-in seed files
+lifetime downloads are included in `Total downloads`, while newly recorded
+download deltas still begin at zero. The checked-in seed files
 preserve the original asset IDs and two observations. They contain only public
 package metadata and aggregate counters, with no visitor or owner diagnostics.
 
-During the first week, `Weekly downloads` shows the historical average with an
-approximation symbol and an explanatory tooltip. After a full recorded week,
-daily observations provide a rolling seven-day count. Up to one daily interval
-at the window boundary is unresolved. A coverage gap longer than 36 hours falls
-back to observed downloads since recording began rather than inventing a week.
+`Total downloads` is the sum of the last observed counters for every qualifying
+asset retained in the history. The initial total is 98. There is no weekly
+estimate, approximation symbol, or minimum observation period. A gap between
+successful refreshes leaves the last snapshot in place until counters can be
+read again; it does not create estimated downloads.
 
 Newly uploaded packages count from their first observation; newly discovered
 packages that predate the baseline are baselined conservatively. Deleted assets
@@ -29,11 +30,17 @@ than silently subtracting or resetting downloads.
 The `download-stats` branch contains exactly three files in one Git commit:
 
 - `history.json`: durable per-asset counters and observations.
-- `weekly.json`: the shared public count, labels, timestamp, policy and snapshot ID.
-- `weekly.svg`: the README badge generated from that same JSON presentation.
+- `weekly.json`: the shared total, labels, timestamp, policy and snapshot ID.
+- `weekly.svg`: the total-download README badge generated from that same JSON presentation.
+
+The `weekly.json` and `weekly.svg` endpoint names are retained for compatibility
+with existing integrations. Their display kind is now `lifetime`, and their
+visible label is `Total downloads`. The Python `weekly_document` entry point
+is retained for the same reason. Historical weekly helpers are not used to
+calculate the public total.
 
 The JSON snapshot ID also appears in the SVG metadata. Website builds import the
-JSON value and labels directly; they must not calculate a separate weekly count.
+JSON value and labels directly; they must not calculate a separate counter.
 The website remains a static snapshot until rebuilt. This workflow does not
 deploy the website or add browser-side API requests.
 
@@ -87,7 +94,7 @@ continuity. Nothing is installed into the app or used to track visitors.
 Once the data branch exists, the proposed README image is:
 
 ```markdown
-[![Weekly downloads](https://raw.githubusercontent.com/shukzi/Redunar/download-stats/weekly.svg)](https://github.com/shukzi/Redunar/releases)
+[![Total downloads](https://raw.githubusercontent.com/shukzi/Redunar/download-stats/weekly.svg)](https://github.com/shukzi/Redunar/releases)
 ```
 
 GitHub's image proxy can cache a README badge, so its displayed number may lag

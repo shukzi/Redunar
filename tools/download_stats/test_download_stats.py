@@ -72,6 +72,7 @@ class CounterTests(unittest.TestCase):
                'created_at': '2026-10-19T12:00:00Z', 'release': 'v2'}
         recorded = history.record(sample(20, assets=[new]), recorded)
         self.assertEqual(recorded['observations'][-1]['recorded_downloads'], 7)
+        self.assertEqual(model.weekly_document(recorded, sample(20, assets=[new]))['lifetime_downloads'], 105)
         old = {**new, 'id': 3, 'downloads': 500, 'created_at': '2026-09-01T00:00:00Z'}
         recorded = history.record(sample(21, assets=[new, old]), recorded)
         recorded = history.record(sample(22, 103), recorded)
@@ -82,24 +83,26 @@ class CounterTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 history.record(bad, recorded)
 
-    def test_rolling_week_estimate_and_coverage_gap(self):
+    def test_total_includes_baseline_without_estimates_or_weekly_coverage(self):
         recorded = history.record(sample())
         display = model.weekly_document(recorded, sample())['display']
-        self.assertEqual((display['number'], display['label']), ('≈25', 'Weekly downloads'))
+        self.assertEqual((display['number'], display['label']), ('98', 'Total downloads'))
         for day in range(19, 27):
             snapshot = sample(day, 98 + (day - 18) * 3)
             recorded = history.record(snapshot, recorded)
         display = model.weekly_document(recorded, snapshot)['display']
-        self.assertEqual((display['kind'], display['value']), ('observed-week', 21))
+        self.assertEqual((display['kind'], display['value']), ('lifetime', 122))
         gap = history.record(sample(26, 110), history.record(sample()))
-        self.assertEqual(model.weekly_document(gap, sample(26, 110))['display']['kind'], 'observed-since-start')
+        self.assertEqual(model.weekly_document(gap, sample(26, 110))['display']['value'], 110)
 
     def test_svg_and_json_share_the_snapshot_and_value(self):
         files = model.bundle(history.record(sample()), sample())
         doc = json.loads(files['weekly.json'])
         self.assertEqual(doc['snapshot_id'], model.fingerprint(doc))
         self.assertIn('sha256:' + doc['snapshot_id'], files['weekly.svg'])
-        self.assertIn('>~25</text>', files['weekly.svg'])
+        self.assertIn('>98</text>', files['weekly.svg'])
+        self.assertIn('>Total downloads</text>', files['weekly.svg'])
+        self.assertEqual(doc['lifetime_downloads'], doc['display']['value'])
 
 
 class ApiTests(unittest.TestCase):
