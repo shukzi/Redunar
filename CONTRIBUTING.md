@@ -1,5 +1,32 @@
 # Developing Redunar
 
+Redunar is open-source software licensed under GPL-3.0-or-later. Forks, bug
+reports, and feature suggestions are welcome. Contributions to the official
+repository are invitation-only.
+
+## Bug reports and feature suggestions
+
+Search [existing issues](https://github.com/shukzi/Redunar/issues) before opening
+a new one. Use the [issue forms](https://github.com/shukzi/Redunar/issues/new/choose)
+for bug reports and feature suggestions.
+
+For bugs, include your Redunar version, system details, steps to reproduce, and
+the expected and actual behavior. If you cannot reproduce a problem reliably,
+describe what happened and how often. For suggestions, explain the problem you
+want to solve, your current workaround, and the outcome you would find useful.
+
+Reports are public. Share only relevant, redacted diagnostics; omit personal
+data, tokens, private recordings, and local filesystem paths. Report suspected
+security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+Pull requests are restricted to invited collaborators. If you are not an invited
+collaborator, describe proposed improvements in an issue rather than submitting
+a patch. Forking and developing your own version remain permitted under the
+project license. A feature suggestion does not guarantee implementation or a
+delivery date.
+
+## Invited contributors
+
 Work from the repository root. Read
 [ARCHITECTURE.md](ARCHITECTURE.md) and the affected product guide before editing.
 The shared service owns state; UI drafts and native commands retain their existing
@@ -80,8 +107,9 @@ Never install a development package as an incidental build step.
 
 ## Checks and review
 
-Pull requests are optional. Use them when a visible diff and discussion help;
-the maintainer can also integrate a locally reviewed branch directly. GitHub
+For invited collaborators, pull requests are optional. Use them when a visible
+diff and discussion help; the maintainer can also integrate a locally reviewed
+branch directly. GitHub
 does not require additional reviewers or passing status checks for `main`.
 The validation expectations below still guide acceptance. The branch rule
 blocks force pushes and deletion for users subject to it; administrators retain

@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a problem with Redunar.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/shukzi/Redunar/issues) before submitting a new report.
+        Reports are public. Remove personal data, tokens, private recordings, and local filesystem paths from any text or attachments.
+        For a suspected security vulnerability, follow the [security policy](https://github.com/shukzi/Redunar/blob/main/SECURITY.md) instead of opening a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Redunar version
+      description: Include the release version, or the commit if you built from source.
+      placeholder: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: System details
+      description: Include what you know. Write "unknown" for details you cannot find.
+      placeholder: |
+        Linux distribution and version:
+        Desktop environment and Wayland or X11:
+        GPU and graphics driver:
+        Installation method (package format or source build):
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Describe how to trigger the problem and how often it happens. If it is intermittent, describe the events leading up to it.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect Redunar to do?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include the exact error message if available.
+    validations:
+      required: true
+  - type: textarea
+    id: game
+    attributes:
+      label: Game and launch details
+      description: For a game-related problem, include the game, native or Proton runtime, Steam installation type, and any relevant profile settings. Omit private paths.
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Relevant logs or screenshots
+      description: Optional. Attach only relevant, redacted excerpts or screenshots. Check attachments for personal data, private recordings, tokens, and local filesystem paths before posting.
+    validations:
+      required: false

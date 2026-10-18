@@ -127,6 +127,16 @@ Initial support covers x86_64 Linux, AMD/RADV graphics, and Steam games.
 Compatibility may vary by game and system configuration; broader hardware,
 distribution, launcher, and game support is not claimed.
 
+## Contributions
+
+Redunar is open-source software licensed under GPL-3.0-or-later. Forks, bug
+reports, and feature suggestions are welcome. Contributions to the official
+repository are invitation-only.
+
+Use the [issue forms](https://github.com/shukzi/Redunar/issues/new/choose) to
+report a bug or suggest a feature. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+reporting guidance and the invited-contributor workflow.
+
 ## License
 
 Redunar is licensed under the [GNU General Public License v3 or later](LICENSE).
