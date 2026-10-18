@@ -1,6 +1,20 @@
 """Completed recordings reach the built UI without restart or player replacement."""
 from webview_fixture import *
 
+gtk_settings = Gtk.Settings.get_default()
+original_animations = gtk_settings.get_property('gtk-enable-animations')
+gtk_settings.set_property('gtk-enable-animations', True)
+extra = r"""
+bridge.clipMotion=[];
+const originalAnimate=Element.prototype.animate;
+Element.prototype.animate=function(frames,timing){
+ bridge.clipMotion.push({clip:this.querySelector('[data-clip]')?.dataset.clip,
+  thumbnail:this.tagName==='IMG',frames,duration:timing.duration});
+ return originalAnimate.call(this,frames,timing);
+};
+"""
+manager.add_script(WebKit2.UserScript.new(extra,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
+
 
 def add_clip(name, revision):
     js(f"""bridge.clips.unshift({{file_name:{json.dumps(name)},bytes:123456,
@@ -22,6 +36,7 @@ try:
         q('#clip-search').focus();q('#clip-search').setSelectionRange(2,5);
         q('#save-duration').value='300';q('#save-duration').dispatchEvent(new Event('change',{bubbles:true}));
         window.clipsBefore=bridge.calls.filter(c=>c.command==='replay_clips').length;
+        bridge.clipMotion=[];
     """)
     add_clip('redunar-five-minute.mp4', 2)
     wait_for("qa('[data-clip]').length===4")
@@ -35,6 +50,15 @@ try:
         check(bridge.calls.filter(c=>c.command==='clip_playback_path').length===preparations,'no extra playback preparation');
     """)
     snap('replay-inventory-playing')
+    wait_for("bridge.clipMotion.some(m=>m.thumbnail)")
+    test('Only the arriving clip fades while decoded thumbnails reveal separately', """
+        const arrivals=bridge.clipMotion.filter(m=>m.clip&&m.frames[0].opacity===0);
+        check(arrivals.length===1&&arrivals[0].clip==='redunar-five-minute.mp4','one new recording fades');
+        check(arrivals[0].duration===180,'short arrival fade');
+        check(bridge.clipMotion.some(m=>m.thumbnail&&m.duration===160),'decoded image fade');
+        bridge.clipMotion=[];q('#clip-search').dispatchEvent(new Event('input',{bubbles:true}));
+        check(!bridge.clipMotion.length,'filter redraw never replays arrivals');
+    """)
 
     # A status failure must not erase the inventory watermark.
     js('bridge.failRuntime=true')
@@ -97,8 +121,33 @@ try:
     add_clip('redunar-sort-focus.mp4', 10)
     wait_for("qa('[data-clip]').length===32")
     test('Completion retains sort focus and its current value', "check(document.activeElement===sortTrigger,'sort control retained');check(q('[data-clip-filter=sort]').value==='newest','sort preserved');check(!bridge.errors.length,bridge.errors.join('; '))")
+    js("bridge.brokenThumbnail=true;window.thumbnailReads=bridge.calls.filter(c=>c.command==='clip_thumbnail').length;rail.scrollTop=0;rail.dispatchEvent(new Event('scroll'))")
+    add_clip('redunar-broken-thumbnail.mp4', 11)
+    wait_for("qa('[data-clip]').length===33")
+    wait_for("bridge.calls.filter(c=>c.command==='clip_thumbnail').length>thumbnailReads")
+    pump(500)
+    test('Failed image decode retains the usable thumbnail placeholder', "const card=q('[data-clip=\"redunar-broken-thumbnail.mp4\"]');check(card.querySelector('.thumbnail>.icon'),'placeholder retained');check(!card.querySelector('img'),'failed image removed');check(q('#clip-video')===video,'decode failure preserves playback');bridge.brokenThumbnail=false")
+    test('Filter redraws retain the failed-thumbnail placeholder', "q('#clip-search').dispatchEvent(new Event('input',{bubbles:true}));const card=q('[data-clip=\"redunar-broken-thumbnail.mp4\"]');check(card.querySelector('.thumbnail>.icon')&&!card.querySelector('img'),'unavailable image remains a placeholder');")
+    gtk_settings.set_property('gtk-enable-animations', False)
+    pump(300)
+    wait_for("matchMedia('(prefers-reduced-motion: reduce)').matches")
+    js('bridge.clipMotion=[]')
+    add_clip('redunar-reduced-motion.mp4', 12)
+    wait_for("qa('[data-clip]').length===34")
+    wait_for("q('[data-clip=\"redunar-reduced-motion.mp4\"] img')?.naturalWidth>0")
+    test('Reduced motion presents arrivals and thumbnails immediately', "check(!bridge.clipMotion.length,'no arrival, layout or thumbnail animations: '+JSON.stringify(bridge.clipMotion));check(q('[data-clip=\"redunar-reduced-motion.mp4\"] img'),'decoded thumbnail visible');check(!document.getAnimations().length,'no residual animation');")
+    gtk_settings.set_property('gtk-enable-animations', True)
+    pump(300)
+    wait_for("matchMedia('(prefers-reduced-motion: no-preference)').matches")
+    js("bridge.clips=[];click('[data-action=reload-clips]')")
+    wait_for("qa('[data-clip]').length===0&&!q('#clip-video')")
+    js('bridge.clipMotion=[]')
+    add_clip('redunar-first-after-empty.mp4', 13)
+    wait_for("qa('[data-clip]').length===1")
+    test('The first arrival into an empty collection also gets the approved fade', "check(bridge.clipMotion.some(m=>m.clip==='redunar-first-after-empty.mp4'&&m.duration===180),'empty-list arrival fades');")
     (ARTIFACTS/'replay-inventory-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
     print(json.dumps({'checks':len(checks),'artifacts':str(ARTIFACTS)}))
 finally:
+    gtk_settings.set_property('gtk-enable-animations', original_animations)
     window.destroy()
     server.shutdown()

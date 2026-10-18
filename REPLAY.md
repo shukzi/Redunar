@@ -396,11 +396,39 @@ muted decoder; timeouts or missing previews must not disable valid playback.
 See PERFORMANCE for worker/decoder bounds.
 
 Export re-encodes the selected range for accurate boundaries, reports progress,
-supports cancellation, and commits a separate MP4. The filename field edits its
-stem only; the native store appends .mp4 and saves exclusively in the configured
-Replay folder. Existing destinations are never overwritten. Named exports retain
-an original generated identity for attribution and crash-safe ownership. The original is never deleted
-or archived as part of trimming. FFmpeg playback/export capabilities must be
+supports cancellation, and commits a separate MP4 or MKV. **Compress clip** uses
+the whole recording, with its duration inspected natively; **Export selection**
+retains the editor range and offers size limiting inside its Compress foldout.
+Both use software H.264/AAC encoding, preserve source dimensions and video cadence,
+and keep all supported audio tracks. The optional maximum is 0.1–500 decimal MB
+(1 MB = 1,000,000 bytes). Limited encoding budgets every audio track and container
+overhead, uses two video passes when needed, and checks the complete output's
+size and duration before commit. A ceiling is not a target: a source range that
+already fits is first encoded at the normal quality setting. A bounded retry
+lowers video bitrate for muxing overshoot; an impossible limit fails with guidance
+to increase it or shorten the range. Outputs are never truncated to fit.
+The dialogs show the original recording's measured byte size. Progress reports
+the current output file's actual bytes, resetting for each encoding attempt;
+the analysis pass reports its phase without exposing a previous attempt's size.
+Completion uses the committed file's bytes. Size labels use decimal MB.
+The UI narrows its size range to the recording's measured bytes for whole clips,
+or a clearly labelled duration-proportional estimate for a trimmed selection,
+with a smaller default. The selection estimate assumes uniform bytes over time;
+variable-bitrate recordings can differ. It is never presented as a measured
+output or a quality estimate. Missing context and sources below the 0.1 MB
+minimum disable compression controls; normal trimmed export remains available.
+The native encoder's 0.1–500 MB validation and final measured cap check remain
+authoritative. An already-fitting whole-clip allowance prompts for a smaller
+size rather than submitting a no-op compression request.
+
+The filename field edits its stem only; the native store appends the selected
+.mp4 or .mkv suffix and saves exclusively in the configured Replay folder.
+Existing destinations are never overwritten. Named exports retain an original
+generated identity for attribution and crash-safe ownership. Neither trimming
+nor compression deletes or archives the original or evicts an existing clip.
+Cancellation, failure and normal shutdown remove private output/pass files;
+export admission still serializes renaming, trash, folder changes and restart.
+FFmpeg playback/export capabilities must be
 validated separately from the live hardware encoder. Native checks resolve the
 installed executables from PATH, check required encoders on demand, and diagnose
 clip-specific missing codec/format support. Successful encoder checks are cached

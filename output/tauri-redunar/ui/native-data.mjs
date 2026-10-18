@@ -30,7 +30,7 @@ export function mapGames(records) {
 }
 export function mapClips(records) {
   if (!Array.isArray(records)) throw new Error('Invalid clip response');
-  return records.map(c=>({...c,id:c.file_name,game:c.game_name||null,duration:Number.isFinite(c.duration_seconds)&&c.duration_seconds>0?c.duration_seconds:null,size:`${(c.bytes/1048576).toFixed(1)} MB`,theme:'sand',date:new Date(Number(BigInt(c.modified_unix_ns)/1000000n)).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}),thumbnail:null}));
+  return records.map(c=>({...c,id:c.file_name,game:c.game_name||null,duration:Number.isFinite(c.duration_seconds)&&c.duration_seconds>0?c.duration_seconds:null,size:`${(c.bytes/1000000).toFixed(1)} MB`,theme:'sand',date:new Date(Number(BigInt(c.modified_unix_ns)/1000000n)).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}),thumbnail:null}));
 }
 const historyValue=(key,value)=>validHistoryValue(key,value)?value:null;
 export function mapSessions(records) {

@@ -20,6 +20,17 @@ changes do not restart a visible draft bar. Dismissal stays immediate, controls
 remain usable during entry, and the system reduced-motion preference disables
 these effects. Do not add decorative page, live-data or in-game overlay motion.
 Workspace scrolling uses the native WebKit behavior described below.
+Sidebar width, workspace offset and the draft bar's left edge share a 220 ms
+transition. The draft bar fills the available workspace in either sidebar state.
+Newly discovered recordings fade in over 180 ms; visible existing cards settle
+into their new positions over 220 ms. Keep playback, selection, focus and scroll.
+Decoded thumbnails fade in over 160 ms, keeping the placeholder until ready;
+failed images retain that placeholder. Initial lists and filter redraws do not
+replay arrival motion. Reduced motion skips these transitions.
+Native details use the same 220 ms unfolding for Filters, detected Steam launch
+options and Library/clip action menus. Rapid reversals keep the current painted
+height; floating menus reveal their contents without moving the header. Keyboard
+activation remains native, and actions/dismissal cancel stale completions.
 
 Use a black canvas, neutral charcoal panels, grey separators, and Redunar red
 `#e7474f`. Avoid purple-tinted neutral surfaces and orange replacements for red.
@@ -267,9 +278,38 @@ cannot be mistaken for changes to exported audio. No Storyboard preview caption
 or expand control belongs in production.
 
 The filmstrip has a time ruler, In/Out handles, playhead, selected duration, and
-Export selection. The export dialog shows In, Out, and Duration in separated
-columns and explains that the original remains. Saving/exporting reports success
-only after native completion; loading failures offer a useful retry/error state.
+Export selection. Export uses a compact dialog with the source thumbnail and
+selected range, Format, Filename and a collapsed **Compress** section. Expanding
+Compress smoothly reveals the centered maximum-size field and slider; collapsing
+it disables size limiting while retaining the entered value. Clip actions also
+offers **Compress clip**, using the entire recording and showing these Size first
+controls immediately. Both forms use the shared Precision MP4/MKV selector,
+default to the source container and hide numeric spinner arrows. Resolution and
+frame rate remain automatic. The filename edits its stem only, and outputs go
+to the configured Replay folder as separate files. Omit advanced video controls
+and repeated original-preservation notes. Reduced motion skips the 220 ms
+foldout animation. Saving/exporting reports success only after native completion;
+failures retain filename, range, format and size for Retry.
+Show the original recording's measured size beside its source details and in
+progress. During encoding, show actual output bytes; analysis has no output-size
+counter. Completion reports the final committed file size.
+The in-progress primary action shows a simple spinner and Exporting label,
+without a simultaneous checkmark or repeated submission. Cancellation remains
+available. Source context stays visible in the same compact dialog; completion
+and failure replace the busy state only after native resolution. Reduced motion
+keeps the labelled busy state while stopping spinner rotation. Clip sizes and
+upload limits consistently use decimal MB.
+Compression controls show the original size leading to an **Under** allowance.
+The whole-clip slider stops at the measured original size, rounded down to a
+tenth of a decimal MB, or the existing 500 MB encoder ceiling. Its default is
+half the original size, within those bounds. At an unchanged-size allowance,
+show Already under this limit and require a smaller value to compress. The
+selection form instead uses source bytes multiplied by the selected/full
+duration ratio, labelled **Selection ≈**; this is an estimate, not a measured
+trimmed-file size. Retain that duration context on Retry. Missing size/duration
+and baselines below 0.1 MB have no active compression range; ordinary selection
+export remains available. Keep the comparison compact and update it with both
+the exact field and slider. Typed values above the maximum clamp on commit.
 
 The shortcut-opened Replay menu is rendered inside the game. No desktop or in-app
 preview is exposed because it cannot represent the production Vulkan presentation.
@@ -325,8 +365,8 @@ The saved-clip rail has text sorting with an arrow, a count, and individual clip
 favorites. Trash bin sits beside folder and refresh actions. There is no multiple
 selection. Trash confirmation names the file once and says “Trashed clips can be
 restored from the trash bin.” Undo lasts 10 seconds; expiration does not delete
-media. The bin offers individual Restore. Export contains Filename, the read-only
-configured replay destination, Cancel and Export; trim times remain in the editor.
+media. The bin offers individual Restore. Export follows the compact Replay dialog
+above and saves in the configured replay folder; trim times remain in the editor.
 History combines text, game and date filters and clears stale reports on no match.
 
 Global settings tabs and its sidebar entry mark retained unsaved drafts. Navigation

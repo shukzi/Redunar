@@ -1,4 +1,6 @@
 /* Keep browsing controls quiet and distinct from editing the selected video. */
+.native-thumbnail img[data-thumbnail-pending],.recent-thumbnail img[data-thumbnail-pending]{opacity:0}
+.recent-thumbnail img{position:absolute;inset:0}
 .replay-workspace .clip-browser { padding: 16px; }
 .replay-workspace .clip-browser h3 { font-size: 16px; font-weight: 500; }
 .replay-workspace .clip-browser .search { min-height: 40px; margin-bottom: 12px; background: #101010; }

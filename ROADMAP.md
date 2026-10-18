@@ -1,6 +1,7 @@
 # Redunar current work
 
-Reviewed October 18, 2026 against `main` at `825012d` and the published
+Reviewed October 18, 2026 against source baseline `3baa431`, the
+[clip compression verification](docs/verification/2026-10-18-clip-compression.md), and the published
 [v0.1.26 release](https://github.com/shukzi/Redunar/releases/tag/v0.1.26).
 Public source and Linux packages are available. Version metadata is owned by
 the package specification and checked against the native application metadata;
@@ -11,6 +12,10 @@ also includes saved-clip refresh without restarting and trimmed exports that
 can exceed the rolling capture buffer's size budget while retaining bounded
 output sizes, free-space checks, and protection for existing recordings. These
 source changes are not yet included in a published package release.
+Size-limited whole-clip compression and trimmed MP4/MKV export are also
+implemented in source, with measured file sizes, cancellable progress and the
+shared interface motion described in [DESIGN.md](DESIGN.md). Real-recording
+acceptance and release qualification remain separate from the local build.
 
 ## Implemented product
 
@@ -25,7 +30,8 @@ source changes are not yet included in a published package release.
   save feedback. The validated baseline is x86_64 Linux with AMD/RADV;
   [HARDWARE-SUPPORT.md](HARDWARE-SUPPORT.md) defines the narrower tested scope.
 - Bounded rolling recording, local saves, clip browsing and playback, filenames
-  and favorites, trimming to a separate export, and recoverable clip trash.
+  and favorites, whole-clip compression, optional size limits on trimmed
+  MP4/MKV exports, and recoverable clip trash.
   System-output audio and optional microphone capture follow
   [REPLAY.md](REPLAY.md#audio-behavior), including the native PipeWire preference
   and PulseAudio-compatible fallback.

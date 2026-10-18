@@ -1,0 +1,4 @@
+.clip-filter-panel,.steam-configured-details{box-sizing:border-box}
+details.clip-filter-panel .filter-chevron,details.steam-configured-details .steam-configured-toggle svg{transition:transform 220ms cubic-bezier(.2,0,0,1)}
+details.clip-filter-panel[data-expanded=false] .filter-chevron,details.steam-configured-details[data-expanded=false] .steam-configured-toggle svg{transform:rotate(0deg)}
+@media(prefers-reduced-motion:reduce){details.clip-filter-panel .filter-chevron,details.steam-configured-details .steam-configured-toggle svg{transition:none}}

@@ -226,6 +226,14 @@ whole-app performance claim.
   and opened clip descriptors are still validated.
 - Playback preparation runs off the UI thread, with one private cached MP4,
   bounded output, cancellation/cleanup, and a 30-second native deadline.
+- Clip export/compression admits one job at a time, off the UI thread, with a
+  15-minute deadline across probing, encoding passes and bounded size retries.
+  FFprobe gets eight seconds and at most 128 KiB of metadata; up to 16 audio
+  streams are retained. Temporary output is bounded by twice the source bytes
+  plus 64 MiB, and x264 pass statistics by 64 MiB. A requested upload limit is
+  checked again before the exclusive store commit. Child monitoring checks
+  cancellation/size/deadline every 50 ms; progress is polled by the UI every
+  250 ms. These explicit software operations do not change live replay budgets.
 - The selected player waits for a decoded frame with a 15-second media deadline.
   A failed preparation or decode offers Retry; it must not spin indefinitely.
 - Eight filmstrip samples use one temporary decoder and a fixed 1280×90 RGBA

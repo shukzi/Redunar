@@ -33,6 +33,38 @@ at these source shapes require separate acceptance.
 See the [October 8 verification](docs/verification/2026-10-08-ultrawide.md) for
 the current build, checks and remaining hardware acceptance.
 
+## Clip compression and trimmed exports
+
+Generated-media fixtures exercise both output containers, exact trimmed duration,
+multiple audio streams, decimal upload limits, complete decode, source retention,
+cancellation and cleanup. Store fixtures cover named/generated MKV ownership,
+quota, mismatched containers, collisions and reopening. The WebKit Replay fixture
+checks the production Size first dialog, Compress foldout, slider/field values,
+format suffix, original/live output sizes, analysis without stale bytes,
+failure/Retry choices, whole-clip boundaries and narrow layout. Inventory fixtures
+also cover arrival/decoded-thumbnail fades, failed-image placeholders, reduced
+motion and preservation of playback, selection, focus and scroll. Workspace
+fixtures check dirty-bar alignment across sidebar widths without losing drafts.
+The motion fixture exercises inline/floating disclosures, rapid reversal,
+external dismissal, detected Steam options and reduced motion. Replay also
+checks disabled busy submission, the simple spinner, retained source context,
+cancellation cleanup and narrow progress dialogs.
+Size-control regressions cover source-relative bounds, half-size defaults,
+duration-proportional selection estimates retained on Retry, typed over-limit
+values, already-fitting whole clips, and tiny/missing size context.
+
+```sh
+cargo test --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml clip_export --target-dir .redunar-build/checks/tauri
+cargo test --locked --offline -p redunar-daemon replay_store --target-dir .redunar-build/checks/root
+npm --prefix output/tauri-redunar run check
+xvfb-run -a python3 output/tauri-redunar/tests/replay-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/motion-webview.py
+```
+
+These tests use private software fixtures, without game/GPU or installation.
+Current dated evidence belongs in `docs/verification`; building alone does not
+establish an installed-runtime or real-recording test.
+
 ## Replay save layout and extension discovery
 
 Fake Vulkan driver fixtures cover complete lists above the old 256-entry encoder
