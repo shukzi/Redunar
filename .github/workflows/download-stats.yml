@@ -1,0 +1,47 @@
+name: Download statistics
+on:
+  schedule:
+    - cron: '47 10 * * *'
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: Initialize the missing data branch from the reviewed October 18 baseline
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: redunar-download-statistics
+  cancel-in-progress: false
+jobs:
+  record:
+    # Publication is intentionally inactive until explicitly enabled after review.
+    if: >-
+      github.repository == 'shukzi/Redunar' &&
+      github.ref == 'refs/heads/main' &&
+      vars.REDUNAR_DOWNLOAD_STATS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/download_stats
+            docs/download-stats
+      - name: Check recorder behavior offline
+        run: python3 -m unittest discover -s tools/download_stats -p 'test_*.py'
+      - name: Record and publish one shared snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REDUNAR_DOWNLOAD_STATS_ENABLED: ${{ vars.REDUNAR_DOWNLOAD_STATS_ENABLED }}
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: |
+          args=()
+          if [[ "$BOOTSTRAP" == true ]]; then
+            args+=(--bootstrap)
+          fi
+          python3 -m tools.download_stats.update --publish "${args[@]}"

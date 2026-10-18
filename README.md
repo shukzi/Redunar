@@ -114,6 +114,7 @@ tools/check-tauri-release.sh
 - [Testing](TESTING.md) — automated and manual verification
 - [Packaging](packaging/README.md) — package formats and dependency obligations
 - [Third-party notices](packaging/THIRD-PARTY-NOTICES.md) — dependency licenses and attribution
+- [Download statistics](docs/download-stats/README.md) — package counter policy and shared badge data
 - [Tauri application guide](output/tauri-redunar/README.md) — native development entry points
 
 ## Scope
