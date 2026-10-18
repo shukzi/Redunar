@@ -375,7 +375,10 @@ impl Encoding<'_> {
                 }
             }
             let guard = check(self.job, self.started).and_then(|()| {
-                // x264's pass statistics are also private, bounded job data.
+                // High-resolution/high-cadence clips can need more than 64 MiB
+                // of analysis even when their compressed output is small. Keep
+                // both pass files together within the same checked source-based
+                // allowance as temporary output, not the requested upload size.
                 let stats = output
                     .with_file_name("video-pass-0.log")
                     .metadata()
@@ -386,10 +389,11 @@ impl Encoding<'_> {
                             .metadata()
                             .map_or(0, |m| m.len()),
                     );
-                if stats > 64 * 1024 * 1024
-                    || output
-                        .metadata()
-                        .is_ok_and(|m| m.len() > self.temporary_limit)
+                if stats > self.temporary_limit {
+                    Err("Clip export analysis exceeded its safe temporary size limit".into())
+                } else if output
+                    .metadata()
+                    .is_ok_and(|m| m.len() > self.temporary_limit)
                 {
                     Err("Clip export exceeded its safe temporary size limit".into())
                 } else {

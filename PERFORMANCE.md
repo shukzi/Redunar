@@ -229,8 +229,11 @@ whole-app performance claim.
 - Clip export/compression admits one job at a time, off the UI thread, with a
   15-minute deadline across probing, encoding passes and bounded size retries.
   FFprobe gets eight seconds and at most 128 KiB of metadata; up to 16 audio
-  streams are retained. Temporary output is bounded by twice the source bytes
-  plus 64 MiB, and x264 pass statistics by 64 MiB. A requested upload limit is
+  streams are retained. Temporary output and combined x264 pass statistics each
+  have a checked allowance of twice the source bytes plus 64 MiB. Analysis is
+  bounded independently of the requested upload size so high-resolution,
+  high-cadence footage can use two-pass encoding without a fixed 64 MiB cutoff.
+  A requested upload limit is
   checked again before the exclusive store commit. Child monitoring checks
   cancellation/size/deadline every 50 ms; progress is polled by the UI every
   250 ms. These explicit software operations do not change live replay budgets.

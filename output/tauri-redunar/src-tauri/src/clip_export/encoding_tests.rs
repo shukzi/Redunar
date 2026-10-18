@@ -190,6 +190,72 @@ fn cancelled_and_expired_jobs_never_start_media_work() {
 }
 
 #[test]
+fn analysis_statistics_use_the_source_budget_and_excess_work_is_reaped() {
+    // Sparse private files model a normal 1440p/high-cadence analysis without
+    // making the regression encode a long recording or consume physical disk.
+    let temporary = super::super::TemporaryExport::new().unwrap();
+    let source = File::open(&temporary.path).unwrap();
+    let job = job();
+    let options = ExportOptions {
+        max_size_mb: Some(32.6),
+        compression: true,
+        ..ExportOptions::default()
+    };
+    let limit = super::super::temporary_output_limit(125_373_641).unwrap();
+    let stats = File::create(temporary.directory.join("video-pass-0.log.mbtree")).unwrap();
+    let log = File::create(temporary.directory.join("video-pass-0.log")).unwrap();
+    let encoding = Encoding {
+        source: &source,
+        start: 0.0,
+        duration: 46.65,
+        audio_streams: 1,
+        options: &options,
+        job: &job,
+        started: Instant::now(),
+        temporary_limit: limit,
+        quality_first: false,
+    };
+    stats.set_len(96 * 1024 * 1024).unwrap();
+    let mut child = Command::new("sleep").arg("0.1").spawn().unwrap();
+    assert!(encoding
+        .monitor(&mut child, &temporary.path, &AtomicU32::new(0), 0, 350)
+        .expect("normal analysis above 64 MiB should fit its source budget")
+        .success());
+    // The two statistics files share one cap, rather than each getting it.
+    stats.set_len(limit).unwrap();
+    log.set_len(1).unwrap();
+    let mut child = Command::new("sleep").arg("10").spawn().unwrap();
+    assert!(encoding
+        .monitor(&mut child, &temporary.path, &AtomicU32::new(0), 0, 350)
+        .unwrap_err()
+        .contains("analysis"));
+    assert!(child.try_wait().unwrap().is_some());
+    stats.set_len(0).unwrap();
+    log.set_len(0).unwrap();
+    File::options()
+        .write(true)
+        .open(&temporary.path)
+        .unwrap()
+        .set_len(limit + 1)
+        .unwrap();
+    let mut child = Command::new("sleep").arg("10").spawn().unwrap();
+    assert!(encoding
+        .monitor(&mut child, &temporary.path, &AtomicU32::new(0), 0, 950)
+        .unwrap_err()
+        .contains("temporary size limit"));
+    assert!(child.try_wait().unwrap().is_some());
+    let directory = temporary.directory.clone();
+    drop(stats);
+    drop(log);
+    drop(source);
+    drop(temporary);
+    assert!(
+        !directory.exists(),
+        "failure leaked private analysis/output files"
+    );
+}
+
+#[test]
 fn cancelling_a_running_encoder_reaps_it_and_releases_temporary_work() {
     let temporary = super::super::TemporaryExport::new().unwrap();
     let source = File::open(&temporary.path).unwrap();
