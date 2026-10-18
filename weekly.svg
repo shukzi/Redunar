@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="155" height="22" viewBox="0 0 155 22" role="img" aria-label="Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.">
-<title>Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.</title><metadata>sha256:6b2cb7a50ea493a52ffa581e27da2c058c641097bf6f2d469371ef48234f624a</metadata>
+<title>Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.</title><metadata>sha256:4ba8e6e576d059b13722106da796f8b9542598b12e7157be95ce8ded291bfb4e</metadata>
 <defs><clipPath id="badge"><rect width="155" height="22" rx="5"/></clipPath></defs>
 <g clip-path="url(#badge)"><path fill="#171a1e" d="M0 0h121v22H0z"/><path fill="#672536" d="M121 0h34v22H121z"/></g>
 <rect x=".5" y=".5" width="154" height="21" rx="4.5" fill="none" stroke="#5b606944"/>
