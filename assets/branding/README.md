@@ -14,3 +14,8 @@ desktop/icon identity, derived from `redunar.com`; its native icon is the
 existing square export. See [packaging](../../packaging/README.md) before
 changing icon registration.
 Sidebar, title area, and taskbar should keep the same mark.
+
+## Using the branding
+
+See the [branding policy](../../TRADEMARKS.md) for references, redistribution,
+modified products, and permission requests.

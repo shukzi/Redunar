@@ -142,3 +142,6 @@ reporting guidance and the invited-contributor workflow.
 Redunar is licensed under the [GNU General Public License v3 or later](LICENSE).
 Third-party components retain their own licenses and notices; see
 [THIRD-PARTY-NOTICES.md](packaging/THIRD-PARTY-NOTICES.md).
+
+For use of the Redunar name and logo, see the [branding policy](TRADEMARKS.md).
+The policy does not change the software license or claim trademark registration.
