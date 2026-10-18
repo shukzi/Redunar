@@ -1,9 +1,36 @@
-# Redunar
+<p align="center">
+  <img src="assets/branding/redunar-logo-256.png" width="96" height="96" alt="Redunar app icon">
+</p>
 
-[![Total downloads](https://raw.githubusercontent.com/shukzi/Redunar/download-stats/weekly.svg)](https://github.com/shukzi/Redunar/releases)
+<h1 align="center">Redunar</h1>
 
-Redunar provides instant replay recording and in-game metrics for Steam games
-running on Linux with AMD hardware.
+<p align="center">Instant replay and in-game metrics for Linux.</p>
+
+<p align="center">
+  <a href="https://github.com/shukzi/Redunar/releases/latest"><img src="https://img.shields.io/github/v/release/shukzi/Redunar?label=release&amp;color=b93646" alt="Latest release"></a>
+  <a href="https://github.com/shukzi/Redunar/releases"><img src="https://raw.githubusercontent.com/shukzi/Redunar/download-stats/weekly.svg" alt="Total downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0%2B-647379" alt="License: GPL-3.0-or-later"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/shukzi/Redunar/releases/latest">Download</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="https://github.com/shukzi/Redunar/issues/new/choose">Report a bug</a>
+</p>
+
+## Install
+
+For x86_64 Linux with AMD/RADV graphics and Steam games. Check
+[hardware support](HARDWARE-SUPPORT.md) for requirements and current limits.
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://redunar.com/install.sh | sh
+```
+
+The installer detects the Linux package format, verifies the signed release
+manifest, and uses the system package manager. Initial package support covers
+x86_64 glibc Linux in the Fedora/RHEL, Debian/Ubuntu, Arch, and openSUSE
+families.
 
 ## Features
 
@@ -12,6 +39,9 @@ running on Linux with AMD hardware.
 - Session history with frame and hardware readings
 - Clip trimming and playback in Redunar
 - Steam game discovery and launch profiles
+
+<details>
+<summary>Set up a native Steam game</summary>
 
 For a native Steam game, import it into Library. Its **Play from Steam** panel
 shows the required app-specific Launch Options and a **Copy**
@@ -31,20 +61,12 @@ Replay still depends on
 actual hardware/runtime capabilities. Flatpak Steam capture remains unsupported.
 See [architecture](ARCHITECTURE.md) and [hardware support](HARDWARE-SUPPORT.md).
 
-## Install
-
-On a supported system, run:
-
-```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://redunar.com/install.sh | sh
-```
-
-The installer detects the Linux package format, verifies the signed release
-manifest, and uses the system package manager. Initial package support covers
-x86_64 glibc Linux in the Fedora/RHEL, Debian/Ubuntu, Arch, and openSUSE
-families.
+</details>
 
 ## Updates
+
+<details>
+<summary>Update Redunar and keep your settings and clips</summary>
 
 Redunar checks signed GitHub release metadata from Settings. Manual checks are
 available, and automatic checks run when the app starts by default. The native
@@ -53,7 +75,12 @@ package. Update now requests polkit authorization; a fixed helper verifies the
 cached package again and installs it with the system package manager. Settings,
 clips, and history remain in place across an update.
 
+</details>
+
 ## Uninstall
+
+<details>
+<summary>Remove the app or its local data</summary>
 
 Quit Redunar completely before removing the package.
 
@@ -89,7 +116,12 @@ This removes Redunar’s state, artwork cache, and update cache while preserving
 saved clips in `~/Videos/Redunar Replays`. Clips saved in another location are
 also untouched unless that location is inside `~/.local/state/redunar/`.
 
+</details>
+
 ## Build and run locally
+
+<details>
+<summary>Build, launch, and check a local release build</summary>
 
 From the repository root:
 
@@ -104,6 +136,8 @@ Run the release checks without installing:
 ```sh
 tools/check-tauri-release.sh
 ```
+
+</details>
 
 ## Documentation
 
