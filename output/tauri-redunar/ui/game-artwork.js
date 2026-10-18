@@ -10,14 +10,16 @@ function remember(id,url){
 }
 const artworkNodes=root=>root.querySelectorAll('[data-poster],[data-banner]');
 const identity=node=>{const kind=node.hasAttribute('data-banner')?'banner':'poster';const id=node.dataset[kind];return {kind,id,key:`${kind}:${id}`};};
+function paintNode(node,key,url){
+  if(!url||node.querySelector('img'))return;
+  const img=document.createElement('img');img.alt='';img.loading='lazy';img.decoding='async';img.src=url;
+  const fallback=[...node.childNodes].map(child=>child.cloneNode(true));
+  img.addEventListener('error',()=>{remember(key,null);node.replaceChildren(...fallback);},{once:true});
+  node.replaceChildren(img);
+}
 function paint(root,key,url){
-  for(const node of artworkNodes(root)){
-    if(identity(node).key!==key||!url||node.querySelector('img'))continue;
-    const img=document.createElement('img');img.alt='';img.loading='lazy';img.decoding='async';img.src=url;
-    const fallback=[...node.childNodes].map(child=>child.cloneNode(true));
-    img.addEventListener('error',()=>{remember(key,null);node.replaceChildren(...fallback);},{once:true});
-    node.replaceChildren(img);
-  }
+  if(!root.isConnected)return;
+  for(const node of artworkNodes(root))if(identity(node).key===key)paintNode(node,key,url);
 }
 function drain(){
   while(active<2&&pending.size){
@@ -38,7 +40,9 @@ function drain(){
 export function loadGameArtwork(root,call){
   for(const node of artworkNodes(root)){
     const {id,kind,key}=identity(node);
-    if(cache.has(key))paint(root,key,cache.get(key));
+    // The current node is already identified. A whole-list scan per cached
+    // poster makes a warm catalog render quadratic in its artwork count.
+    if(cache.has(key))paintNode(node,key,cache.get(key));
     else if(!inflight.has(key)&&pending.size<64)pending.set(key,{root,call,id,kind});
   }
   drain();

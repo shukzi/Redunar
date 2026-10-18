@@ -83,6 +83,22 @@ for dated checks and remaining NVIDIA hardware acceptance.
 
 ## Workspace UI and existing-window activation
 
+`tests/startup-inventory-webview.py` in the Tauri directory exercises the built
+production UI with zero startup revisions, failed first reads, saves during an
+initial clip read and sessions completing during initial history loading. It
+checks that successful inventories are reused without acknowledging races early.
+`tests/game-artwork.test.mjs` covers duplicate artwork nodes, cached repainting,
+fallbacks, bounded requests and detached completions. The performance WebKit
+fixture also checks that clip arrivals retain mounted settings, unsaved drafts
+and focus. These are isolated operation/behavior checks, not game FPS evidence.
+
+```sh
+node --test output/tauri-redunar/tests/game-artwork.test.mjs
+xvfb-run -a python3 output/tauri-redunar/tests/startup-inventory-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/performance-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/library-tabs-webview.py
+```
+
 After building the production frontend, run
 `xvfb-run -a python3 output/tauri-redunar/tests/replay-inventory-webview.py`.
 Private native fixtures cover completed saves during playback and after game
