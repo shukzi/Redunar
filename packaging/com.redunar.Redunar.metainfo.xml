@@ -27,6 +27,18 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.27" date="2026-10-19">
+      <description>
+        <ul>
+          <li>Added whole-clip compression and optional size limits for trimmed MP4/MKV exports.</li>
+          <li>Fixed export duration mismatches around video frame gaps and improved Retry and cancellation.</li>
+          <li>Refreshed saved clips without restarting and corrected export and compression-analysis size budgets.</li>
+          <li>Refined dropdowns, overlay settings, Library and Replay layouts while retaining the established colors and control shapes.</li>
+          <li>Preferred native Wayland with X11 fallback and explicit overrides for desktop and Steam launches.</li>
+          <li>Updated stable Tauri dependencies and reduced redundant startup, refresh and clip-preview work.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.26" date="2026-10-17">
       <description>
         <ul>

@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.26
+Version:        0.1.27
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,12 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Mon Oct 19 2026 Redunar <local@redunar.invalid> - 0.1.27-1.local
+- Add clip compression and repair export duration, cancellation and size handling.
+- Refine workspace controls, overlay settings, Library and Replay layouts.
+- Prefer native Wayland with X11 fallback and update stable Tauri dependencies.
+- Reduce redundant startup, refresh and clip-preview work.
+
 * Sat Oct 17 2026 Redunar <local@redunar.invalid> - 0.1.26-1.local
 - Improved cached thumbnail loading in Instant Replay and Recent captures.
 - Fixed outdated thumbnails replacing the selected clip’s preview after a file changes.
