@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.27
+Version:        0.1.28
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,10 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Mon Oct 19 2026 Redunar <local@redunar.invalid> - 0.1.28-1.local
+- Add microphone recording gain, meter, test playback and peak limiting.
+- Add listening-only playback volume and reliable clip player controls.
+
 * Mon Oct 19 2026 Redunar <local@redunar.invalid> - 0.1.27-1.local
 - Add clip compression and repair export duration, cancellation and size handling.
 - Refine workspace controls, overlay settings, Library and Replay layouts.
