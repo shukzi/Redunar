@@ -5,10 +5,14 @@
 //! available and direct `PipeWire` otherwise, then produces fixed 48 kHz stereo
 //! PCM and independent 20 ms Opus packets.
 
+mod microphone;
 mod node;
 mod opus;
 mod source;
 
+pub use microphone::{
+    MAX_MICROPHONE_GAIN_DB, MIN_MICROPHONE_GAIN_DB, MicrophoneLevels, MicrophoneProcessor,
+};
 pub use node::{
     GameAudioNode, GameAudioNodeError, MicrophoneInput, discover_game_audio_node,
     discover_microphone_node, discover_output_monitor_node, microphone_inputs_from_registry,

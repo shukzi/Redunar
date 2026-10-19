@@ -12,13 +12,14 @@ pub(super) fn start(
     replay: ProductionReplayRuntime,
     first_frame: u64,
     mode: MicrophoneMode,
+    gain_db: i16,
 ) -> Option<JoinHandle<()>> {
     let started = Instant::now();
     let timestamp = redunar_capture_audio::monotonic_now_ns().unwrap_or(first_frame);
     thread::Builder::new()
         .name("redunar-replay-microphone".to_owned())
         .spawn(move || {
-            run(&stop, &replay, timestamp, started, &mode);
+            run(&stop, &replay, timestamp, started, &mode, gain_db);
         })
         .map_err(|error| {
             crate::log_op!("Redunar Replay: could not start microphone worker: {error}");
@@ -41,6 +42,7 @@ fn run(
     timestamp: u64,
     started: Instant,
     mode: &MicrophoneMode,
+    gain_db: i16,
 ) {
     let (sender, receiver) = mpsc::sync_channel(1);
     let route_stop = Arc::clone(stop);
@@ -59,7 +61,9 @@ fn run(
             wait_retry(stop);
             continue;
         };
-        let Ok(mut capture) = MicrophoneAudioCapture::start(&source, timestamp, started) else {
+        let Ok(mut capture) =
+            MicrophoneAudioCapture::start_with_gain(&source, timestamp, started, gain_db)
+        else {
             attempt = attempt.wrapping_add(1);
             log_retry(&mut retry_logged);
             wait_retry(stop);
@@ -74,10 +78,10 @@ fn run(
             &mut capture,
             &receiver,
             &source,
-            |packet| {
+            |packet, levels| {
                 // Recorder resets/failures pause ingestion but must not leave a
                 // blocked helper pipe or turn audio availability into video authority.
-                let _ = replay.submit_microphone_audio(packet);
+                let _ = replay.submit_microphone_audio(packet, levels);
             },
             Instant::now(),
         );
@@ -116,9 +120,15 @@ enum CaptureEnd {
 
 trait PacketCapture {
     fn next(&mut self) -> Result<Option<EncodedOpusPacket>, ()>;
+    fn levels(&self) -> redunar_capture_audio::MicrophoneLevels {
+        redunar_capture_audio::MicrophoneLevels::default()
+    }
 }
 
 impl PacketCapture for MicrophoneAudioCapture {
+    fn levels(&self) -> redunar_capture_audio::MicrophoneLevels {
+        self.levels()
+    }
     fn next(&mut self) -> Result<Option<EncodedOpusPacket>, ()> {
         self.next_packet(Duration::from_millis(100)).map_err(|_| ())
     }
@@ -129,14 +139,14 @@ fn consume(
     capture: &mut impl PacketCapture,
     routes: &Receiver<Vec<MicrophoneAudioSource>>,
     source: &MicrophoneAudioSource,
-    mut submit: impl FnMut(EncodedOpusPacket),
+    mut submit: impl FnMut(EncodedOpusPacket, redunar_capture_audio::MicrophoneLevels),
     mut last_packet: Instant,
 ) -> CaptureEnd {
     while !stop.load(Ordering::Acquire) {
         match capture.next() {
             Ok(Some(packet)) => {
                 last_packet = Instant::now();
-                submit(packet);
+                submit(packet, capture.levels());
             }
             Ok(None) => {
                 if last_packet.elapsed() >= super::AUDIO_CAPTURE_STALL_TIMEOUT {
@@ -235,7 +245,7 @@ mod tests {
                 &mut capture,
                 &routes,
                 &current,
-                |_| {},
+                |_, _| {},
                 Instant::now().checked_sub(Duration::from_secs(4)).unwrap()
             ),
             CaptureEnd::TransportFailed
@@ -250,7 +260,7 @@ mod tests {
                 &mut capture,
                 &routes,
                 &current,
-                |_| {},
+                |_, _| {},
                 Instant::now()
             ),
             CaptureEnd::RouteChanged
@@ -264,7 +274,7 @@ mod tests {
                 &mut capture,
                 &routes,
                 &current,
-                |_| {},
+                |_, _| {},
                 Instant::now()
             ),
             CaptureEnd::TransportFailed
@@ -277,7 +287,7 @@ mod tests {
                 &mut capture,
                 &routes,
                 &current,
-                |_| {},
+                |_, _| {},
                 Instant::now()
             ),
             CaptureEnd::Stopped
@@ -303,7 +313,7 @@ mod tests {
                 &mut capture,
                 &routes,
                 &source("one"),
-                |_| {
+                |_, _| {
                     count += 1;
                 },
                 Instant::now()

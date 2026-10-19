@@ -1,3 +1,5 @@
+import { microphoneControlsMarkup, microphoneControls } from './microphone-controls.mjs';
+import { playbackVolume } from './playback-volume.mjs';
 import './clip-export.css';
 import { clipExportForm, bindClipExportForm, readClipExportRequest, clipExportProgressView, clipExportProgressLabel, clipExportSpinner } from './clip-export.mjs';
 import './disclosure-motion.css';
@@ -42,9 +44,14 @@ const paths = {
  refresh:'M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1',
  arrow:'M5 12h14M14 7l5 5-5 5', check:'M5 12l4 4L19 6', search:'M20 20l-5-5M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0', download:'M12 3v12M7 10l5 5 5-5M4 17v4h16v-4', plus:'M12 4v16M4 12h16'
 };
+paths.speaker='M11 5 6 9H3v6h3l5 4V5zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14';
+paths.speakerMuted='M11 5 6 9H3v6h3l5 4V5zM16 9l5 6m0-6-5 6';
+paths.shieldCheck='M12 3 20 6v6c0 5-8 9-8 9s-8-4-8-9V6l8-3zM8 12l3 3 5-6';
 paths.trash='M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7';
 paths.star='m12 3 2.8 5.7 6.3.9-4.5 4.4 1.1 6.2-5.7-3-5.7 3 1.1-6.2-4.5-4.4 6.3-.9Z';
 const icon = (name, cls='') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name] || paths.global}"/></svg>`;
+let listeningStorage;try{listeningStorage=window.localStorage;}catch{}
+const listeningVolume=playbackVolume({storage:listeningStorage,getVideo:()=>$('#clip-video'),icon,updateSlider:updatePrecisionSlider});
 const clipFavoriteContent = favorite => `${icon('star','clip-favorite-icon')}<span>${favorite?'Favorited':'Favorite'}</span>`;
 const pages = [['overview','Overview'],['library','Library'],['global','Global settings'],['replay','Instant Replay'],['history','History']];
 let games = [], clips = [], sessions = [];
@@ -100,6 +107,10 @@ let exporting = false, exportPollTimer = null, thumbnailLoadTimer = null, videoR
 const LIVE_TIMELINE_LIMIT = 240;
 let liveTimeline = {game:'',revision:null,values:[],times:[]};
 const call = (command,args={}) => native ? invoke(command,args) : Promise.reject(new Error('Open the native Redunar app to use the production backend.'));
+const microphonePanel=microphoneControls({call,icon,saved:preferences=>{replayPreferences=preferences;},locked:()=>!native||!replayPreferences||busy||Boolean(activeSession?.launch_locked)||Boolean(active()),enabled:()=>Boolean(replayPreferences)&&replayPreferences.microphone_mode!=='off',live:()=>Boolean(active())&&runtime?.microphone_state==='active',updateSlider:updatePrecisionSlider,errorText:error=>message(error)});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)void microphonePanel.suspend();else microphonePanel.resume();});
+window.addEventListener('pagehide',()=>{void microphonePanel.suspend();});
+
 const clipPreviews=clipPreviewLoader({call,thumbnailDataUri,updateMetadata:updateClipMetadata,updateThumbnail:updateClipThumbnail,
  current:item=>native&&clips.includes(item)&&['overview','replay'].includes(route()),
  selected:item=>clips.includes(item)&&item.id===selectedClip&&route()==='replay',
@@ -225,7 +236,7 @@ function replay() {
 function replaySelection(c) {
  if(!c)return emptyPanel(errors.clips?'Clips unavailable':'Your next highlight belongs here.',errors.clips||'Saved Redunar clips will appear here. Nothing is uploaded.');
  return `<div class="clip-title-tools"><div class="clip-name"><strong data-selected-clip-title>${escape(clipTitle(c))}</strong><small>${escape(c.date)} · ${escape(c.size)} · ${escape(c.file_name.split('.').pop().toUpperCase())}</small></div><div class="heading-actions clip-edit-actions">${button('Edit filename','edit-clip-filename')}${button(clipFavoriteContent(c.favorite),'favorite-selected-clip',false,`aria-pressed="${Boolean(c.favorite)}"`)}<details class="clip-action-menu"><summary class="button" aria-label="Clip actions" title="Clip actions">⋯</summary><div class="replay-more-menu">${button('Compress clip…','compress-selected-clip')}${button('Open externally','open-clip-external')}${button('Move to trash bin','delete-selected-clip')}</div></details></div></div><div class="player native-player"><div class="native-video-stage"><video id="clip-video" ${c.thumbnail?`poster="${c.thumbnail}"`:""} preload="auto" aria-label="${escape(clipTitle(c))}"></video><div class="native-video-specs" id="clip-video-specs"></div><button class="center-play" id="center-play" data-player="toggle" aria-label="Play clip" hidden>${icon('play')}</button><div class="media-state-overlay" id="media-state-overlay" role="status"><div><strong id="media-state-title">Preparing the clip…</strong><p id="media-state-detail">Getting your local capture ready for playback.</p><div class="heading-actions"><button class="button" id="retry-clip" data-action="retry-clip" hidden>Retry playback</button>${button('Open externally','open-clip-external')}</div></div></div><div class="native-video-caption"><strong>${escape(c.game_name||'Game not recorded')}</strong></div></div>
- <div class="player-controls"><button id="clip-play-toggle" class="icon-button player-toggle" type="button" data-player="toggle" aria-label="Play clip" title="Play clip">${icon('play')}</button><button class="icon-button transport-jump" type="button" data-player="back" aria-label="Back five seconds">−5</button><button class="icon-button transport-jump" type="button" data-player="forward" aria-label="Forward five seconds">+5</button><input id="player-seek" type="range" min="0" max="0" value="0" step="0.05" aria-label="Seek in selected clip" disabled><span class="timecode" id="clip-time">00:00 / 00:00</span></div>
+ <div class="player-controls"><button id="clip-play-toggle" class="icon-button player-toggle" type="button" data-player="toggle" aria-label="Play clip" title="Play clip">${icon('play')}</button><button class="icon-button transport-jump" type="button" data-player="back" aria-label="Back five seconds">−5</button><button class="icon-button transport-jump" type="button" data-player="forward" aria-label="Forward five seconds">+5</button><input id="player-seek" type="range" min="0" max="0" value="0" step="0.05" aria-label="Seek in selected clip" disabled><span class="timecode" id="clip-time">00:00 / 00:00</span>${listeningVolume.markup()}<p class="playback-volume-help" id="playback-volume-help">Only changes what you hear. Saved clips and exports stay unchanged.</p></div>
  </div>
  <section class="replay-clip-editor" aria-label="Clip editor">
  <div class="clip-time-ruler" id="clip-time-ruler" aria-hidden="true">${Array(7).fill('<span>—</span>').join('')}</div>
@@ -410,7 +421,7 @@ function globalOverlay() {
 }
 function globalReplay() {
  const folder=replayPreferences?.resolved_directory||'Loading replay folder…';
- return `<section class="panel controls-panel"><h2>Capture defaults</h2>${field('Instant replay','Buffers automatically for supported games launched through Redunar or configured Steam launch options. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Recording mode','',frameRateControl())}${field('Quality preset','Next game launch',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Next saved clip',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration <span class="auto-saved-label">Auto-saved</span>','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Microphone <span class="auto-saved-label">Auto-saved</span>','Mix your microphone input with system audio in saved clips. Applies to the next game launch; end the current session before changing this setting.',switchControl('microphone','Capture microphone',replayPreferences?.microphone_mode!=='off','replay-preference',!native||!replayPreferences||busy||Boolean(activeSession?.launch_locked)||active()))}${microphoneInputMarkup()}${field('Replay folder <span class="auto-saved-label">Auto-saved</span>','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use default folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click <span class="auto-saved-label">Auto-saved</span>','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
+ return `<section class="panel controls-panel"><h2>Capture defaults</h2>${field('Instant replay','Buffers automatically for supported games launched through Redunar or configured Steam launch options. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Recording mode','',frameRateControl())}${field('Quality preset','Next game launch',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Next saved clip',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration <span class="auto-saved-label">Auto-saved</span>','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Microphone <span class="auto-saved-label">Auto-saved</span>','Mix your microphone input with system audio in saved clips. Applies to the next game launch; end the current session before changing this setting.',switchControl('microphone','Capture microphone',replayPreferences?.microphone_mode!=='off','replay-preference',!native||!replayPreferences||busy||Boolean(activeSession?.launch_locked)||active()))}${microphoneInputMarkup()}${microphoneControlsMarkup(replayPreferences?.microphone_gain_db,icon)}${field('Replay folder <span class="auto-saved-label">Auto-saved</span>','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use default folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click <span class="auto-saved-label">Auto-saved</span>','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
 }
 function microphoneInputMarkup() {
  return microphoneSelector(microphoneDevices,replayPreferences,Boolean(activeSession?.launch_locked)||Boolean(active()),errors.microphoneDevices,Boolean(microphoneInputsPending));
@@ -711,6 +722,8 @@ function render() {
  document.body.dataset.page=valid;
  document.documentElement.dataset.page=valid;
  visibleClips.bind(valid==='replay'?$('.clip-list'):null);
+ microphonePanel.mount(workspace);
+ listeningVolume.mount(workspace);
  if(valid==='replay'){loadVideo();scheduleClipThumbnails();}
  if(valid==='overview')scheduleClipThumbnails();
  if(!['overview','replay'].includes(valid))clipPreviews.request([]);
@@ -890,6 +903,7 @@ async function readSection(section, command, accept) {
 function loadVideo() {
  const selected=clip(), video=$('#clip-video');
  if(!selected||!video)return;
+ listeningVolume.apply(video);
  video.dataset.clipId=selected.id;
  videoReady=false;playRequested=false;updatePlayerUi();
  stopPlaybackTicker();
@@ -1073,6 +1087,7 @@ function updateDirtyActionButtons() {
  const unsaved=String(!!visibleBar);if(document.body.dataset.unsaved!==unsaved)document.body.dataset.unsaved=unsaved;
 }
 function updateObservedElements() {
+ microphonePanel.update();
  updateOverlaySessionState(Boolean(active()));
  const libraryGuide=$('#library-start-guide');if(libraryGuide){const hidden=!showLibraryStartGuide();if(libraryGuide.hidden!==hidden)libraryGuide.hidden=hidden;}
  updateDirtyActionButtons();

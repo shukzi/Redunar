@@ -205,7 +205,8 @@ output plus microphone). Opus encoding uses one fixed scratch frame and
 allocates each retained payload to its encoded length, rather than retaining a
 maximum-size allocation for every packet. Saving copies encoded packets only for the selected
 video window; those snapshots have the same per-input limits. The assembler
-keeps at most one decoded 20 ms PCM frame per input and one output accumulator,
+keeps at most one decoded 20 ms PCM frame per input, two fixed input accumulators
+and one output frame,
 then retains at most 45,000 packets/32 MiB of mixed output. PCM storage and
 lookup work do not grow with the retained history; mixing visits selected
 packets in timestamp order and checks cancellation each frame. These separate
@@ -381,3 +382,14 @@ directory; trash never copies video. Named exports retain the existing byte/time
 budgets and reject collisions without extra published files. Microphone UI status
 reads existing packet timestamps under the audio mutex, with no additional thread,
 I/O or discovery at the UI poll cadence.
+
+Microphone gain and stereo-linked peak protection visit each existing 20 ms
+frame without another buffer or capture process. The explicit microphone test
+has one worker and one helper, at most 300 frames, 1,152,000 PCM bytes plus a
+44-byte WAV header, and an eight-second capture deadline after bounded input
+discovery. Temporary IPC serialization and the UI Blob add bounded copies;
+these limits are not whole-process RSS measurements. There is no idle capture
+or meter timer. Tests poll serially every 150 ms; a visible active-session meter
+reads cached levels every 200 ms and clears measurements older than 500 ms.
+Test capture ends on cancellation, focus loss, launch or shutdown. Playback
+volume changes only the existing media element and adds no audio worker.

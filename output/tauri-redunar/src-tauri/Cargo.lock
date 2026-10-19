@@ -2502,6 +2502,7 @@ version = "0.1.27"
 dependencies = [
  "gtk",
  "libc",
+ "redunar-capture-audio",
  "redunar-core",
  "redunar-daemon",
  "redunar-platform",

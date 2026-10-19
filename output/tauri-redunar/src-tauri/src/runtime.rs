@@ -617,6 +617,7 @@ pub struct ReplayPreferencesDto {
     initial_save_duration_seconds: u16,
     microphone_mode: String,
     microphone_source: Option<String>,
+    microphone_gain_db: i16,
 }
 
 #[derive(Debug, Serialize)]
@@ -646,7 +647,7 @@ pub fn replay_display_capability() -> ReplayDisplayCapabilityDto {
     }
 }
 
-fn replay_preferences_dto() -> Result<ReplayPreferencesDto, String> {
+pub(crate) fn replay_preferences_dto() -> Result<ReplayPreferencesDto, String> {
     let service = crate::backend::service();
     let preferences = service
         .replay_preferences()
@@ -663,6 +664,7 @@ fn replay_preferences_dto() -> Result<ReplayPreferencesDto, String> {
         overlay_shortcut: preferences.overlay_shortcut,
         close_overlay_on_outside_click: preferences.close_overlay_on_outside_click,
         initial_save_duration_seconds: preferences.initial_save_duration.seconds(),
+        microphone_gain_db: preferences.microphone_gain_db,
         microphone_mode: match preferences.microphone {
             redunar_daemon::MicrophoneMode::Off => "off",
             redunar_daemon::MicrophoneMode::DefaultInput => "default",
@@ -682,7 +684,7 @@ pub fn replay_preferences() -> Result<ReplayPreferencesDto, String> {
 }
 
 #[tauri::command]
-pub fn set_replay_microphone(
+pub async fn set_replay_microphone(
     mode: String,
     source: Option<String>,
 ) -> Result<ReplayPreferencesDto, String> {
@@ -695,10 +697,16 @@ pub fn set_replay_microphone(
         ),
         _ => return Err("Unsupported microphone mode".to_owned()),
     };
-    crate::backend::service()
-        .set_replay_microphone(microphone)
-        .map_err(|error| error.to_string())?;
-    replay_preferences_dto()
+    // Changing an input cancels/reaps an explicit test; never wait for that
+    // bounded cleanup on GTK's input thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::backend::service()
+            .set_replay_microphone(microphone)
+            .map_err(|error| error.to_string())?;
+        replay_preferences_dto()
+    })
+    .await
+    .map_err(|_| "Microphone setting task failed".to_owned())?
 }
 
 #[tauri::command]

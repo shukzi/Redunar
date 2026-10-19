@@ -293,6 +293,29 @@ stops video or system-output audio. System-output capture deliberately includes
 other applications that play through the same output, so it must be described as
 system-output audio rather than isolated game audio.
 
+Microphone recording gain is global, from -12 to +24 dB, and defaults to 0 dB
+for fresh and migrated preferences. `redunar-capture-audio/src/microphone.rs`
+applies gain before Opus encoding and limits frame peaks to about -1 dBFS.
+The stereo-linked limiter uses the existing 20 ms frame, with no extra capture
+buffer, and recovers gradually. System-output capture bypasses this processor.
+The service serializes gain/device writes with session admission and rejects
+them throughout launch, recording and teardown. Preference format version 8
+retains readers for versions 1–7 and migrates their gain to 0 dB. Older releases
+cannot read version 8; a downgrade needs the prior private preference file,
+not an older binary writing over the new format.
+
+An explicit **Test microphone** opens only the selected input, runs the same
+processing/Opus path for at most 300 frames (six seconds), then offers local WAV
+playback. Capture has an eight-second deadline after discovery, 100 ms reads,
+and existing bounded discovery deadlines. The daemon owns one test at a time,
+reaps helpers on cancellation, and cancels before admitting a game launch.
+A test ID guards status, audio retrieval and cancellation from stale requests.
+No test media is written to disk or normal logs. Test audio can be retrieved
+once, expires on access after one minute, and is discarded on cancellation,
+replacement or shutdown. The UI revokes its playback URL on clear, navigation,
+hiding or timeout. Live meters use fresh cached processed-frame levels; idle
+inputs remain closed until Test microphone is pressed.
+
 `crates/redunar-capture-audio/src/source.rs` prefers the native PipeWire route:
 when the PipeWire registry exposes a default output node, Redunar records it
 directly with `pw-cat`, explicitly requesting that sink's monitor ports.
@@ -314,7 +337,10 @@ Sample offsets align overlapping frames. Microphone speech survives missing
 system packets, and a microphone-only clip uses that input as its sole audio
 track. Gaps in both inputs remain timestamp gaps; decode/encode failures fail
 the save instead of silently producing separate tracks. Coincident PCM peaks
-saturate safely; a silent input does not halve the other input's volume.
+reduce only microphone contribution to the available mix headroom, with a
+stereo-linked frame envelope and gradual recovery. A silent microphone does
+not change system-output volume. This protects against newly introduced mix
+clipping without lowering the system recording level.
 Both audio timelines are cleared when the video epoch resets or Replay stops.
 A resize cancels an unfinished save before resetting its audio epoch; already
 committed clips are retained.
@@ -352,6 +378,12 @@ output through PulseAudio or PipeWire. Missing audio still leaves video capture
 running and must be reported honestly.
 
 ## Clip browsing, playback, and export
+
+The player's **Playback volume** is a listening preference stored in webview
+local storage. It applies only to `HTMLMediaElement.volume`, including new
+player instances. Mute restores the previous listening level. Neither capture
+settings nor save/export requests consume this value. The control always
+states that saved clips and exports stay unchanged.
 
 Native inventory supplies names, sizes, timestamps, and available game/duration
 metadata. The game name follows the persisted attribution ledger first and the

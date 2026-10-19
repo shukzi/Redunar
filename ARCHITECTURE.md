@@ -71,6 +71,14 @@ encoded packets; the spool assembler selects the video window before requesting
 its bounded audio snapshots. `replay_audio_mix.rs` decodes and mixes those
 snapshots on the assembler thread, outside capture/runtime locks. Capture utility
 arguments, discovery deadlines and helper cleanup stay in `redunar-capture-audio`.
+Its `microphone.rs` owns recording-only PCM gain and peak protection.
+`microphone_test.rs` owns the bounded in-memory microphone test worker; the
+session coordinator serializes its admission/cancellation with game launch
+and preference writes. Native `src-tauri/src/microphone.rs` exposes typed
+commands and bounded test audio. The UI's `microphone-controls.mjs` owns
+presentation, generation checks and temporary playback URLs; it cannot set
+system input volume. `playback-volume.mjs` owns the separate listening-only
+player volume and never contributes to export requests.
 
 Follow native command registration and `RedunarService::for_tauri()` for
 production behavior. The Tauri service owns the active feature and privilege

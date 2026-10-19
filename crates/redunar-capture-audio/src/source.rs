@@ -506,6 +506,7 @@ struct AudioCaptureStream {
     timeline_timestamp_ns: u64,
     timeline_started: Instant,
     next_timestamp_ns: Option<u64>,
+    microphone: Option<crate::MicrophoneProcessor>,
 }
 
 impl AudioCaptureStream {
@@ -562,6 +563,7 @@ impl AudioCaptureStream {
             timeline_timestamp_ns,
             timeline_started,
             next_timestamp_ns: None,
+            microphone: None,
         })
     }
 
@@ -630,6 +632,9 @@ impl AudioCaptureStream {
             ));
         }
         let timestamp_ns = self.next_timestamp_ns.unwrap_or(live_timestamp_ns);
+        if let Some(processor) = &mut self.microphone {
+            processor.process(&mut samples);
+        }
         let packet = self
             .encoder
             .encode_frame(timestamp_ns, &samples)
@@ -687,6 +692,29 @@ pub struct MicrophoneAudioCapture {
 }
 
 impl MicrophoneAudioCapture {
+    /// Start microphone-only processing before the normal Opus encoder.
+    ///
+    /// # Errors
+    /// Returns an error if the capture helper or encoder cannot start.
+    pub fn start_with_gain(
+        source: &MicrophoneAudioSource,
+        timeline_timestamp_ns: u64,
+        timeline_started: Instant,
+        gain_db: i16,
+    ) -> Result<Self, AudioCaptureError> {
+        let mut capture = Self::start(source, timeline_timestamp_ns, timeline_started)?;
+        capture.inner.microphone = Some(crate::MicrophoneProcessor::new(gain_db));
+        Ok(capture)
+    }
+
+    #[must_use]
+    pub fn levels(&self) -> crate::MicrophoneLevels {
+        self.inner.microphone.as_ref().map_or_else(
+            crate::MicrophoneLevels::default,
+            crate::MicrophoneProcessor::levels,
+        )
+    }
+
     /// Start a raw capture child on the requested route.
     ///
     /// # Errors

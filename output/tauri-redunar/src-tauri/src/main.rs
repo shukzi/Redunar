@@ -15,6 +15,7 @@ mod installation;
 mod launch_plan;
 mod media;
 mod media_tools;
+mod microphone;
 mod playback;
 mod profiles;
 mod runtime;
@@ -293,6 +294,22 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::Focused(focused) = event {
+                    microphone::window_focus_changed(*focused);
+                }
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    microphone::invalidate_pending_tests();
+                }
+            }
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Focused(false) | tauri::WindowEvent::CloseRequested { .. }
+                )
+            {
+                backend::cancel_microphone_test();
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Do not write preferences from every native move/resize
                 // notification. GTK can emit those events repeatedly while
@@ -349,6 +366,12 @@ fn main() {
             clip_details::restore_replay_clips,
             clip_details::set_clip_details,
             runtime::set_replay_microphone,
+            microphone::set_microphone_gain,
+            microphone::start_microphone_test,
+            microphone::microphone_test_status,
+            microphone::microphone_test_audio,
+            microphone::stop_microphone_test,
+            microphone::microphone_levels,
             runtime::set_replay_overlay_behavior,
             runtime::set_replay_initial_save_duration,
             runtime::hide_replay_menu,
