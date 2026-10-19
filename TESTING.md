@@ -1475,3 +1475,27 @@ packet freshness; native restart admission covers session/export races and failu
 All ordinary checks use private state and fake hardware. Existing-window activation,
 installed upgrade, live microphone/keyboard reconnection and real-game capture
 remain separate acceptance; never substitute fixture evidence for them.
+
+## Recording gain and playback-volume checks
+
+After building the production frontend, run:
+
+```sh
+xvfb-run -a -s '-screen 0 1920x1200x24' env REDUNAR_PRIVATE_DESKTOP_FIXTURE=1 python3 output/tauri-redunar/tests/audio-controls-webview.py
+```
+
+This fixture uses synthetic WAV/video and fake native commands. It checks
+recording-gain persistence/rollback, explicit test recording and playback,
+measured meter/limiter presentation, navigation cancellation, grouped wide/narrow
+microphone controls, explicit test play/pause/seek and media cleanup,
+listening-only volume/mute, clip selection without a page reload, immediate drag feedback,
+coalesced storage writes, player recreation and narrow controls. It never opens an input,
+launches the native app, changes OS volume or writes user recordings.
+`audio-controls.test.mjs` additionally covers late native starts/audio reads,
+serial polling and input failure. Rust tests cover PCM gain/limiting, final mix
+headroom, old preference migration, invalid writes, session locks, test identity,
+once-only bounded WAV retrieval, expiry and worker cancellation/join.
+These are regression fixtures, not live microphone or installed-app acceptance.
+A separately authorized real-input check should compare normal/boosted speech
+against unchanged system audio, meter response and test playback, then inspect
+the actual saved clip for distortion and sound balance.

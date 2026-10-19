@@ -24,6 +24,21 @@ pub fn service() -> RedunarService {
         .expect("backend is available until shutdown")
         .clone()
 }
+pub(crate) fn cancel_microphone_test() {
+    let service = SERVICE
+        .get()
+        .and_then(|slot| slot.lock().ok()?.as_ref().cloned());
+    let Some(service) = service else {
+        return;
+    };
+    let Some(id) = service.microphone_test_id() else {
+        return;
+    };
+    // Reaping a capture helper may wait for bounded discovery. Keep that
+    // work off GTK's input thread; identity guards protect a newer test.
+    tauri::async_runtime::spawn_blocking(move || service.stop_microphone_test(id));
+}
+
 pub fn shutdown() {
     if let Some(slot) = SERVICE.get() {
         let service = slot

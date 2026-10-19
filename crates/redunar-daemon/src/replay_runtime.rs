@@ -34,6 +34,7 @@ struct ProductionAudioState {
     microphone_recording: bool,
     microphone_started: Option<Instant>,
     microphone_progress: Option<Instant>,
+    microphone_levels: redunar_capture_audio::MicrophoneLevels,
 }
 
 struct RuntimeState {
@@ -92,6 +93,7 @@ impl ProductionReplayRuntime {
                 microphone_recording: false,
                 microphone_started: None,
                 microphone_progress: None,
+                microphone_levels: redunar_capture_audio::MicrophoneLevels::default(),
             })),
             inner: Arc::new(Mutex::new(RuntimeState {
                 status: ReplayRuntimeStatus::unavailable(settings),
@@ -320,6 +322,7 @@ impl ProductionReplayRuntime {
     pub(crate) fn submit_microphone_audio(
         &self,
         packet: redunar_capture_audio::EncodedOpusPacket,
+        levels: redunar_capture_audio::MicrophoneLevels,
     ) -> Result<(), ReplayRuntimeError> {
         let mut audio = lock_unpoisoned(&self.audio);
         if !audio.recording || !audio.microphone_recording {
@@ -330,7 +333,20 @@ impl ProductionReplayRuntime {
             .push(packet)
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))?;
         audio.microphone_progress = Some(Instant::now());
+        audio.microphone_levels = levels;
         Ok(())
+    }
+
+    /// Last measured microphone frame, never a fabricated idle reading.
+    #[must_use]
+    pub fn microphone_levels(&self) -> Option<redunar_capture_audio::MicrophoneLevels> {
+        let audio = lock_unpoisoned(&self.audio);
+        (audio.recording
+            && audio.microphone_recording
+            && audio
+                .microphone_progress
+                .is_some_and(|time| time.elapsed() < Duration::from_millis(500)))
+        .then_some(audio.microphone_levels)
     }
 
     pub(crate) fn enable_microphone_recording(&self) {
@@ -798,10 +814,17 @@ mod tests {
             duration_ns: 20_000_000,
             bytes: vec![1, 2, 3],
         };
-        assert!(runtime.submit_microphone_audio(packet.clone()).is_err());
+        assert!(
+            runtime
+                .submit_microphone_audio(
+                    packet.clone(),
+                    redunar_capture_audio::MicrophoneLevels::default()
+                )
+                .is_err()
+        );
         runtime.enable_microphone_recording();
         runtime
-            .submit_microphone_audio(packet)
+            .submit_microphone_audio(packet, redunar_capture_audio::MicrophoneLevels::default())
             .expect("enabled microphone packet");
     }
 

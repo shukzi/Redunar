@@ -41,6 +41,7 @@ pub(crate) fn mix_audio_tracks(
     let mut packets = Vec::new();
     let mut bytes = 0_usize;
     let mut timestamp = window.0;
+    let mut microphone_gain = 1.0_f64;
     while timestamp < window.1 {
         check_cancel(cancel)?;
         let next = system
@@ -55,15 +56,15 @@ pub(crate) fn mix_audio_tracks(
         if timestamp >= window.1 {
             break;
         }
-        let mut samples = [0_i32; FRAME_SAMPLES];
-        system.add_frame(timestamp, &mut samples, cancel)?;
-        input.add_frame(timestamp, &mut samples, cancel)?;
-        let pcm = samples.map(|value| {
-            // Preserve output volume when the microphone is silent. Saturation
-            // bounds coincident peaks instead of wrapping signed PCM samples.
-            i16::try_from(value.clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
-                .expect("clamped PCM sample")
-        });
+        let mut system_samples = [0_i32; FRAME_SAMPLES];
+        let mut microphone_samples = [0_i32; FRAME_SAMPLES];
+        system.add_frame(timestamp, &mut system_samples, cancel)?;
+        input.add_frame(timestamp, &mut microphone_samples, cancel)?;
+        let pcm = mix_with_microphone_headroom(
+            &system_samples,
+            &microphone_samples,
+            &mut microphone_gain,
+        );
         let packet = encoder.encode_frame(timestamp, &pcm).map_err(audio_error)?;
         bytes = bytes.saturating_add(packet.bytes.len());
         if bytes > super::replay_audio::MAX_AUDIO_BUFFER_BYTES
@@ -82,6 +83,41 @@ pub(crate) fn mix_audio_tracks(
             packets,
         },
         microphone: None,
+    })
+}
+
+/// Preserve system sound and reduce only microphone contribution when the mix
+/// runs out of headroom. One envelope for the whole stereo frame avoids hard
+/// clipping and channel imbalance; recovery is gradual, like capture limiting.
+#[allow(clippy::cast_possible_truncation)]
+fn mix_with_microphone_headroom(
+    system: &[i32; FRAME_SAMPLES],
+    microphone: &[i32; FRAME_SAMPLES],
+    gain: &mut f64,
+) -> [i16; FRAME_SAMPLES] {
+    let bound = |sample: i32| sample.clamp(i32::from(i16::MIN), i32::from(i16::MAX));
+    let required =
+        system
+            .iter()
+            .zip(microphone)
+            .fold(1.0_f64, |allowed, (&system, &microphone)| {
+                let system = bound(system);
+                let headroom = if microphone > 0 {
+                    i32::from(i16::MAX) - system
+                } else {
+                    system - i32::from(i16::MIN)
+                };
+                if microphone == 0 {
+                    allowed
+                } else {
+                    allowed.min(f64::from(headroom) / f64::from(microphone).abs())
+                }
+            });
+    *gain = required.min(*gain + (1.0 - *gain) * 0.1);
+    std::array::from_fn(|index| {
+        (f64::from(bound(system[index])) + f64::from(microphone[index]) * *gain)
+            .round()
+            .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
     })
 }
 
@@ -354,5 +390,29 @@ mod tests {
         let mut malformed = tracks;
         malformed.microphone.as_mut().unwrap().packets[0].bytes = vec![0xff];
         assert!(mix_audio_tracks(malformed, (0, 20_000_000), &AtomicBool::new(false)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod microphone_headroom_tests {
+    use super::*;
+    #[test]
+    fn protects_mix_by_reducing_only_voice_and_preserves_silent_voice() {
+        let system = [25_000; FRAME_SAMPLES];
+        let mut gain = 1.0;
+        let mix = mix_with_microphone_headroom(&system, &[20_000; FRAME_SAMPLES], &mut gain);
+        assert!(gain < 0.4);
+        assert!(mix.iter().all(|&sample| sample == i16::MAX));
+        let unchanged = mix_with_microphone_headroom(&system, &[0; FRAME_SAMPLES], &mut gain);
+        assert!(unchanged.iter().all(|&sample| sample == 25_000));
+        let mut system = [0; FRAME_SAMPLES];
+        let mut voice = [0; FRAME_SAMPLES];
+        system[0] = -30_000;
+        voice[0] = -15_000;
+        system[1] = 10_000;
+        voice[1] = 5_000;
+        let result = mix_with_microphone_headroom(&system, &voice, &mut 1.0);
+        assert_eq!(result[0], i16::MIN);
+        assert!((10_000..15_000).contains(&result[1]));
     }
 }

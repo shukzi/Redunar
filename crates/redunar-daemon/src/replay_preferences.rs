@@ -19,6 +19,7 @@ const PREFERENCES_HEADER_V4: &str = "redunar-replay-preferences-v4";
 const PREFERENCES_HEADER_V5: &str = "redunar-replay-preferences-v5";
 const PREFERENCES_HEADER_V6: &str = "redunar-replay-preferences-v6";
 const PREFERENCES_HEADER_V7: &str = "redunar-replay-preferences-v7";
+const PREFERENCES_HEADER_V8: &str = "redunar-replay-preferences-v8";
 
 const DEFAULT_OVERLAY_SHORTCUT: &str = "Alt+Shift+Z";
 const LEGACY_OVERLAY_SHORTCUT: &str = "Shift+Tab";
@@ -80,6 +81,8 @@ pub struct ReplayPreferences {
     pub initial_save_duration: ReplayDuration,
     pub save_shortcuts: Vec<ReplayShortcutBinding>,
     pub microphone: MicrophoneMode,
+    /// Recording-only gain. System and voice-chat input volume are untouched.
+    pub microphone_gain_db: i16,
 }
 
 impl Default for ReplayPreferences {
@@ -92,6 +95,7 @@ impl Default for ReplayPreferences {
             initial_save_duration: ReplayDuration::Seconds30,
             save_shortcuts: Vec::new(),
             microphone: MicrophoneMode::DefaultInput,
+            microphone_gain_db: 0,
         }
     }
 }
@@ -220,6 +224,25 @@ pub(crate) fn set_microphone(
     let _operation = lock_operations();
     let mut preferences = load_unlocked(state_directory)?;
     preferences.microphone = microphone;
+    save_unlocked(state_directory, &preferences)?;
+    Ok(preferences)
+}
+
+pub(crate) fn set_microphone_gain(
+    state_directory: &Path,
+    gain_db: i16,
+) -> Result<ReplayPreferences, ReplayPreferencesError> {
+    if !(redunar_capture_audio::MIN_MICROPHONE_GAIN_DB
+        ..=redunar_capture_audio::MAX_MICROPHONE_GAIN_DB)
+        .contains(&gain_db)
+    {
+        return Err(ReplayPreferencesError::new(
+            "Microphone recording level must be between -12 and +24 dB.",
+        ));
+    }
+    let _operation = lock_operations();
+    let mut preferences = load_unlocked(state_directory)?;
+    preferences.microphone_gain_db = gain_db;
     save_unlocked(state_directory, &preferences)?;
     Ok(preferences)
 }
@@ -361,12 +384,13 @@ fn serialize(preferences: &ReplayPreferences) -> String {
         |path| hex(path.as_os_str().as_bytes()),
     );
     let mut output = format!(
-        "{PREFERENCES_HEADER_V7}\nsave-parent={parent}\noutput-format={}\noverlay-shortcut={}\nclose-on-outside-click={}\ninitial-save-duration={}\nmicrophone={}\nbinding-count={}\n",
+        "{PREFERENCES_HEADER_V8}\nsave-parent={parent}\noutput-format={}\noverlay-shortcut={}\nclose-on-outside-click={}\ninitial-save-duration={}\nmicrophone={}\nmicrophone-gain-db={}\nbinding-count={}\n",
         output_format_token(preferences.output_format),
         preferences.overlay_shortcut,
         preferences.close_overlay_on_outside_click,
         duration_token(preferences.initial_save_duration),
         microphone_token(&preferences.microphone),
+        preferences.microphone_gain_db,
         preferences.save_shortcuts.len()
     );
     for binding in &preferences.save_shortcuts {
@@ -392,6 +416,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
             | PREFERENCES_HEADER_V5
             | PREFERENCES_HEADER_V6
             | PREFERENCES_HEADER_V7
+            | PREFERENCES_HEADER_V8
     ) {
         return Err("unsupported preferences version");
     }
@@ -404,6 +429,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
             | PREFERENCES_HEADER_V5
             | PREFERENCES_HEADER_V6
             | PREFERENCES_HEADER_V7
+            | PREFERENCES_HEADER_V8
     ) {
         parse_output_format(field(lines.next(), "output-format")?)?
     } else {
@@ -415,6 +441,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
             | PREFERENCES_HEADER_V5
             | PREFERENCES_HEADER_V6
             | PREFERENCES_HEADER_V7
+            | PREFERENCES_HEADER_V8
     ) {
         field(lines.next(), "overlay-shortcut")?.to_owned()
     } else {
@@ -424,22 +451,41 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
     };
     let close_overlay_on_outside_click = if matches!(
         version,
-        PREFERENCES_HEADER_V5 | PREFERENCES_HEADER_V6 | PREFERENCES_HEADER_V7
+        PREFERENCES_HEADER_V5
+            | PREFERENCES_HEADER_V6
+            | PREFERENCES_HEADER_V7
+            | PREFERENCES_HEADER_V8
     ) {
         parse_bool(field(lines.next(), "close-on-outside-click")?)?
     } else {
         true
     };
-    let initial_save_duration = if matches!(version, PREFERENCES_HEADER_V6 | PREFERENCES_HEADER_V7)
-    {
+    let initial_save_duration = if matches!(
+        version,
+        PREFERENCES_HEADER_V6 | PREFERENCES_HEADER_V7 | PREFERENCES_HEADER_V8
+    ) {
         parse_duration_token(field(lines.next(), "initial-save-duration")?)?
     } else {
         ReplayDuration::Seconds30
     };
-    let microphone = if version == PREFERENCES_HEADER_V7 {
+    let microphone = if matches!(version, PREFERENCES_HEADER_V7 | PREFERENCES_HEADER_V8) {
         parse_microphone(field(lines.next(), "microphone")?)?
     } else {
         MicrophoneMode::Off
+    };
+    let microphone_gain_db = if version == PREFERENCES_HEADER_V8 {
+        let gain = field(lines.next(), "microphone-gain-db")?
+            .parse::<i16>()
+            .map_err(|_| "microphone recording level is invalid")?;
+        if !(redunar_capture_audio::MIN_MICROPHONE_GAIN_DB
+            ..=redunar_capture_audio::MAX_MICROPHONE_GAIN_DB)
+            .contains(&gain)
+        {
+            return Err("microphone recording level is invalid");
+        }
+        gain
+    } else {
+        0
     };
     let save_shortcuts = if version == PREFERENCES_HEADER_V1 {
         let shortcut = field(lines.next(), "save-shortcut")?;
@@ -482,6 +528,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
         initial_save_duration,
         save_shortcuts,
         microphone,
+        microphone_gain_db,
     })
 }
 
@@ -694,6 +741,37 @@ mod tests {
             "redunar-replay-preferences-{}-{id}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn recording_gain_migrates_and_rejects_invalid_writes_without_losing_other_fields() {
+        let state = fixture();
+        set_microphone(
+            &state,
+            MicrophoneMode::SelectedInput("fixture-input".into()),
+        )
+        .unwrap();
+        let saved = set_microphone_gain(&state, 12).unwrap();
+        assert_eq!(load(&state).unwrap(), saved);
+        assert_eq!(saved.microphone_gain_db, 12);
+        let before = fs::read(state.join(PREFERENCES_FILE)).unwrap();
+        for gain in [-13, 25, i16::MAX] {
+            assert!(set_microphone_gain(&state, gain).is_err());
+        }
+        assert_eq!(fs::read(state.join(PREFERENCES_FILE)).unwrap(), before);
+        let legacy = serialize(&saved)
+            .replace(PREFERENCES_HEADER_V8, PREFERENCES_HEADER_V7)
+            .replace("microphone-gain-db=12\n", "");
+        let migrated = parse(&legacy).unwrap();
+        assert_eq!(migrated.microphone_gain_db, 0);
+        assert_eq!(migrated.microphone, saved.microphone);
+        assert!(
+            parse(&serialize(&saved).replace("microphone-gain-db=12", "microphone-gain-db=25"))
+                .is_err()
+        );
+        set_output_format(&state, ReplayOutputFormat::Mp4).unwrap();
+        assert_eq!(load(&state).unwrap().microphone_gain_db, 12);
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

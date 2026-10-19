@@ -200,6 +200,19 @@ right of a wide settings row, below its label on narrow screens. Refresh inputs
 uses a neutral secondary button. With Microphone off, explain how to enable
 input selection; during a game, explain the session lock. Discovery errors and
 missing-input feedback occupy a separate full-width line.
+Microphone recording level is a separate auto-saved control, from -12 to +24 dB,
+with 0 dB as the default. It changes only the microphone audio Redunar records.
+Group the slider, measured voice meter and **Test microphone** together, beside
+the short recording-only explanation. Keep test playback compact, with explicit
+play/pause, position and clear controls. Idle metering
+requires an explicit six-second test; never open an input just to draw a meter.
+The test offers local playback only after capture stops and never plays
+itself. Stop/clear, navigation, window focus loss, game launch and shutdown
+cancel its native capture owner. Disable gain changes during testing and
+through game launch, recording and teardown. Test audio stays temporary and
+is never added to the clip library. Peak protection always applies to the
+recorded voice; it does not change OS input or voice-chat volume.
+
 Input discovery starts on first opening this settings tab, with loading feedback
 and disabled input controls while pending. Completion and Refresh inputs update
 this field without replacing unrelated settings or clearing unsaved drafts.
@@ -305,8 +318,12 @@ visible without cropping, rounded boundaries, and playback controls directly
 underneath. Do not crop video just to remove letterboxing; black pixels recorded
 inside the file are part of the footage. Keep technical video details at top
 right, the actual filename in the bar above the player, and the game name
-once at bottom left. Playback volume and mute controls are omitted so they
-cannot be mistaken for changes to exported audio. No Storyboard preview caption
+once at bottom left. Keep an inline speaker/mute control and a slider labelled
+**Playback volume** beside the transport. Its persistent helper says, “Only
+changes what you hear. Saved clips and exports stay unchanged.” Remember this
+listening preference locally across clip changes, with immediate player feedback
+and coalesced persistence after input settles, independently of recording
+settings. It changes only the video player volume, never saved media or exports. No Storyboard preview caption
 or expand control belongs in production.
 
 The filmstrip has a time ruler, In/Out handles, playhead, selected duration and

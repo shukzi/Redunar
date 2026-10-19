@@ -1302,7 +1302,12 @@ mod tests {
             bytes: vec![1, 2, 3],
         };
         runtime.submit_audio(packet.clone()).unwrap();
-        runtime.submit_microphone_audio(packet.clone()).unwrap();
+        runtime
+            .submit_microphone_audio(
+                packet.clone(),
+                redunar_capture_audio::MicrophoneLevels::default(),
+            )
+            .unwrap();
         runtime
             .reset_backend(Box::new(FakeBackend::new(
                 1280,
@@ -1314,7 +1319,7 @@ mod tests {
             .submit_audio(packet.clone())
             .expect("system timestamp restarts in new epoch");
         runtime
-            .submit_microphone_audio(packet)
+            .submit_microphone_audio(packet, redunar_capture_audio::MicrophoneLevels::default())
             .expect("microphone timestamp restarts in new epoch");
         runtime.shutdown().unwrap();
     }

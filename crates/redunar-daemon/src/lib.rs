@@ -16,6 +16,7 @@ pub mod diagnostic_log;
 mod game_catalog;
 mod game_session;
 mod kms_replay_source;
+mod microphone_test;
 mod module_state;
 mod monitor;
 mod replay;
@@ -72,6 +73,7 @@ pub use game_session::{
     GameSessionRequest, GameSessionStatus, ProductionGameSessionCoordinator,
 };
 pub use kms_replay_source::KmsReplayLiveDiagnostic;
+pub use microphone_test::MicrophoneTestStatus;
 pub use module_state::{AppModule, ModuleStatus, ModuleStatuses};
 pub use monitor::{
     MonitorConfig, MonitorConfigError, MonitorDiagnostics, MonitorHandle, MonitorReader,
@@ -1106,6 +1108,55 @@ impl RedunarService {
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
         self.game_session_coordinator()
             .set_microphone_mode(microphone)
+    }
+
+    /// Set recording-only gain; active game sessions reject changes.
+    ///
+    /// # Errors
+    /// Returns an error for an active session, invalid gain or failed persistence.
+    pub fn set_microphone_gain(
+        &self,
+        gain_db: i16,
+    ) -> Result<ReplayPreferences, ReplayPreferencesError> {
+        self.game_session_coordinator().set_microphone_gain(gain_db)
+    }
+
+    /// Begin one explicit six-second microphone test, serialized with game launch.
+    ///
+    /// # Errors
+    /// Returns an error when capture is disabled, busy, or unavailable.
+    pub fn start_microphone_test(&self) -> Result<MicrophoneTestStatus, String> {
+        self.game_session_coordinator().start_microphone_test()
+    }
+
+    /// Read an existing test's cached state, without opening an audio input.
+    ///
+    /// # Errors
+    /// Returns an error for a stale or cancelled test identifier.
+    pub fn microphone_test_status(&self, id: u64) -> Result<MicrophoneTestStatus, String> {
+        self.game_session_coordinator().microphone_test_status(id)
+    }
+
+    /// Retrieve bounded local test audio once.
+    ///
+    /// # Errors
+    /// Returns an error for stale, unfinished or expired test audio.
+    pub fn microphone_test_audio(&self, id: u64) -> Result<Vec<u8>, String> {
+        self.game_session_coordinator().microphone_test_audio(id)
+    }
+
+    /// Snapshot the test identity for cancellation when the native window closes.
+    #[must_use]
+    pub fn microphone_test_id(&self) -> Option<u64> {
+        self.runtime
+            .game_session
+            .get()
+            .and_then(ProductionGameSessionCoordinator::microphone_test_id)
+    }
+
+    /// Cancel only the named test. A stale cancellation cannot affect a newer one.
+    pub fn stop_microphone_test(&self, id: u64) {
+        self.game_session_coordinator().stop_microphone_test(id);
     }
 
     /// Select the container used for future Replay saves, including this session.

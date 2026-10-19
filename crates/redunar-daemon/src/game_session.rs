@@ -153,6 +153,7 @@ struct CoordinatorInner {
     replay_menu_revision: std::sync::atomic::AtomicU64,
     /// Private state directory holding the clip-to-game attribution ledger.
     clip_games_state: PathBuf,
+    microphone_test_id: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -165,6 +166,7 @@ struct CoordinatorState {
     recorded_save_revision: u64,
     pending_replay_releases: VecDeque<u64>,
     replay_pump: Option<ReplayExportPump>,
+    microphone_test: Option<crate::microphone_test::MicrophoneTest>,
 }
 
 struct ReplayExportPump {
@@ -267,6 +269,7 @@ impl ProductionGameSessionCoordinator {
                 replay_preferences: Mutex::new(preferences),
                 replay_menu_revision: std::sync::atomic::AtomicU64::new(2),
                 clip_games_state: state_directory,
+                microphone_test_id: std::sync::atomic::AtomicU64::new(0),
             }),
         }
     }
@@ -404,7 +407,7 @@ impl ProductionGameSessionCoordinator {
     ) -> Result<ReplayPreferences, crate::ReplayPreferencesError> {
         // Serialize the preference write with session preparation; checking a
         // status snapshot alone allows a launch to race the setting change.
-        let state = lock_unpoisoned(&self.inner.state);
+        let mut state = lock_unpoisoned(&self.inner.state);
         if matches!(
             state.status.phase,
             GameSessionPhase::Launching | GameSessionPhase::Running | GameSessionPhase::Ending
@@ -413,6 +416,8 @@ impl ProductionGameSessionCoordinator {
                 "End the game session before changing microphone capture.",
             ));
         }
+        self.inner.microphone_test_id.store(0, Ordering::Release);
+        drop(state.microphone_test.take());
         let preferences = replay_preferences::set_microphone(&self.inner.clip_games_state, mode)?;
         *lock_unpoisoned(&self.inner.replay_preferences) = preferences.clone();
         drop(state);
@@ -420,10 +425,105 @@ impl ProductionGameSessionCoordinator {
         Ok(preferences)
     }
 
-    pub(crate) fn update_replay_preferences(&self, preferences: ReplayPreferences) {
+    pub(crate) fn set_microphone_gain(
+        &self,
+        gain_db: i16,
+    ) -> Result<ReplayPreferences, crate::ReplayPreferencesError> {
+        let mut state = lock_unpoisoned(&self.inner.state);
+        if !matches!(
+            state.status.phase,
+            GameSessionPhase::Idle | GameSessionPhase::Ended
+        ) {
+            return Err(crate::ReplayPreferencesError::new(
+                "End the game session before changing microphone recording level.",
+            ));
+        }
+        self.inner.microphone_test_id.store(0, Ordering::Release);
+        drop(state.microphone_test.take());
+        let preferences =
+            replay_preferences::set_microphone_gain(&self.inner.clip_games_state, gain_db)?;
+        *lock_unpoisoned(&self.inner.replay_preferences) = preferences.clone();
+        Ok(preferences)
+    }
+
+    pub(crate) fn start_microphone_test(&self) -> Result<crate::MicrophoneTestStatus, String> {
+        let mut state = lock_unpoisoned(&self.inner.state);
+        if !matches!(
+            state.status.phase,
+            GameSessionPhase::Idle | GameSessionPhase::Ended
+        ) {
+            return Err("End the game session before testing the microphone".into());
+        }
+        if state.microphone_test.is_some() {
+            return Err("A microphone test is already open".into());
+        }
+        let preferences = lock_unpoisoned(&self.inner.replay_preferences);
+        if preferences.microphone == MicrophoneMode::Off {
+            return Err("Enable microphone recording before testing".into());
+        }
+        let test = crate::microphone_test::MicrophoneTest::start(
+            preferences.microphone.clone(),
+            preferences.microphone_gain_db,
+        )?;
+        let status = test.status();
+        state.microphone_test = Some(test);
+        self.inner
+            .microphone_test_id
+            .store(status.id, Ordering::Release);
+        Ok(status)
+    }
+
+    pub(crate) fn microphone_test_status(
+        &self,
+        id: u64,
+    ) -> Result<crate::MicrophoneTestStatus, String> {
+        lock_unpoisoned(&self.inner.state)
+            .microphone_test
+            .as_ref()
+            .filter(|test| test.id() == id)
+            .map(crate::microphone_test::MicrophoneTest::status)
+            .ok_or_else(|| "Microphone test is no longer active".into())
+    }
+
+    pub(crate) fn microphone_test_audio(&self, id: u64) -> Result<Vec<u8>, String> {
+        lock_unpoisoned(&self.inner.state)
+            .microphone_test
+            .as_ref()
+            .filter(|test| test.id() == id)
+            .ok_or_else(|| "Microphone test is no longer active".to_owned())?
+            .take_audio()
+    }
+
+    pub(crate) fn microphone_test_id(&self) -> Option<u64> {
+        // Window focus/close handlers must never wait for capture cleanup.
+        let id = self.inner.microphone_test_id.load(Ordering::Acquire);
+        (id != 0).then_some(id)
+    }
+
+    pub(crate) fn stop_microphone_test(&self, id: u64) {
+        let mut state = lock_unpoisoned(&self.inner.state);
+        if state
+            .microphone_test
+            .as_ref()
+            .is_some_and(|test| test.id() == id)
+        {
+            self.inner.microphone_test_id.store(0, Ordering::Release);
+            drop(state.microphone_test.take());
+        }
+    }
+
+    pub(crate) fn update_replay_preferences(&self, mut preferences: ReplayPreferences) {
         lock_unpoisoned(&self.inner.replay_menu)
             .set_initial_duration(preferences.initial_save_duration);
-        *lock_unpoisoned(&self.inner.replay_preferences) = preferences;
+        {
+            let mut current = lock_unpoisoned(&self.inner.replay_preferences);
+            // Other preference writers can publish an older snapshot after a
+            // microphone write. Only the session-serialized microphone setters
+            // own these fields; unrelated publication must not roll them back.
+            preferences.microphone.clone_from(&current.microphone);
+            preferences.microphone_gain_db = current.microphone_gain_db;
+            *current = preferences;
+        }
         self.publish_replay_menu();
     }
 
@@ -685,6 +785,9 @@ impl ProductionGameSessionCoordinator {
                 "another daemon-owned game session is already active",
             ));
         }
+        // Reap an explicit microphone test before admitting game capture.
+        self.inner.microphone_test_id.store(0, Ordering::Release);
+        drop(state.microphone_test.take());
         let capture_attached = capture.is_some();
         state.request = Some(request.clone());
         state.capture = capture;
@@ -1069,11 +1172,16 @@ fn run_replay_export_pump(
                 // still owns its existing microphone helper. Resume that track.
                 replay.enable_microphone_recording();
             } else {
-                let microphone = coordinator.upgrade().map_or(MicrophoneMode::Off, |inner| {
-                    lock_unpoisoned(&inner.replay_preferences)
-                        .microphone
-                        .clone()
-                });
+                let (microphone, gain_db) =
+                    coordinator
+                        .upgrade()
+                        .map_or((MicrophoneMode::Off, 0), |inner| {
+                            let preferences = lock_unpoisoned(&inner.replay_preferences);
+                            (
+                                preferences.microphone.clone(),
+                                preferences.microphone_gain_db,
+                            )
+                        });
                 if !matches!(microphone, MicrophoneMode::Off) {
                     replay.enable_microphone_recording();
                     microphone_worker = microphone::start(
@@ -1081,6 +1189,7 @@ fn run_replay_export_pump(
                         replay.clone(),
                         frame.timestamp_ns,
                         microphone,
+                        gain_db,
                     );
                 }
             }
@@ -1608,6 +1717,55 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_preference_publication_cannot_revert_microphone_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "redunar-mic-preference-publication-{}",
+            std::process::id()
+        ));
+        let coordinator = ProductionGameSessionCoordinator::new(root.clone());
+        let mut stale = replay_preferences::load(&root).unwrap();
+        coordinator
+            .set_microphone_mode(MicrophoneMode::SelectedInput("fixture-input".into()))
+            .unwrap();
+        coordinator.set_microphone_gain(12).unwrap();
+        stale.initial_save_duration = ReplayDuration::Seconds60;
+        coordinator.update_replay_preferences(stale);
+        let cached = lock_unpoisoned(&coordinator.inner.replay_preferences);
+        assert_eq!(cached.microphone_gain_db, 12);
+        assert_eq!(
+            cached.microphone,
+            MicrophoneMode::SelectedInput("fixture-input".into())
+        );
+        assert_eq!(cached.initial_save_duration, ReplayDuration::Seconds60);
+        drop(cached);
+        drop(coordinator);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_identity_prevents_stale_cancellation_and_launch_reaps_the_test() {
+        let root =
+            std::env::temp_dir().join(format!("redunar-mic-test-owner-{}", std::process::id()));
+        let coordinator = ProductionGameSessionCoordinator::new(root.clone());
+        lock_unpoisoned(&coordinator.inner.state).microphone_test =
+            Some(crate::microphone_test::MicrophoneTest::fixture(7));
+        coordinator
+            .inner
+            .microphone_test_id
+            .store(7, Ordering::Release);
+        assert!(coordinator.start_microphone_test().is_err());
+        coordinator.stop_microphone_test(6);
+        assert_eq!(coordinator.microphone_test_id(), Some(7));
+        assert!(coordinator.microphone_test_audio(6).is_err());
+        assert!(coordinator.microphone_test_status(6).is_err());
+        coordinator
+            .begin(request(), None, coordinator.replay_runtime().status())
+            .unwrap();
+        assert_eq!(coordinator.microphone_test_id(), None);
+        assert!(coordinator.microphone_test_status(7).is_err());
+    }
+
+    #[test]
     fn microphone_setting_is_locked_through_launch_run_and_teardown() {
         let root = std::env::temp_dir().join(format!("redunar-mic-mode-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -1615,12 +1773,20 @@ mod tests {
         coordinator
             .set_microphone_mode(MicrophoneMode::Off)
             .unwrap();
+        coordinator.set_microphone_gain(6).unwrap();
+        assert!(coordinator.start_microphone_test().is_err()); // Disabled input: never opens hardware.
         for phase in [
             GameSessionPhase::Launching,
             GameSessionPhase::Running,
             GameSessionPhase::Ending,
         ] {
             lock_unpoisoned(&coordinator.inner.state).status.phase = phase;
+            assert!(coordinator.set_microphone_gain(12).is_err());
+            assert!(coordinator.start_microphone_test().is_err());
+            assert_eq!(
+                replay_preferences::load(&root).unwrap().microphone_gain_db,
+                6
+            );
             assert!(
                 coordinator
                     .set_microphone_mode(MicrophoneMode::DefaultInput)
