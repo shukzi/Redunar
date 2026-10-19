@@ -30,7 +30,7 @@
       "release": "v0.1.26",
       "id": 650326367,
       "name": "redunar-app-linux-x86_64.pkg.tar.zst",
-      "downloads": 2,
+      "downloads": 3,
       "created_at": "2026-10-17T11:43:08Z",
       "first_seen": "2026-10-18T10:44:18Z"
     },
@@ -929,6 +929,46 @@
       "downloads": 0,
       "created_at": "2026-09-20T12:01:24Z",
       "first_seen": "2026-10-18T10:44:18Z"
+    },
+    "656846559": {
+      "release": "v0.1.27",
+      "id": 656846559,
+      "name": "redunar-app-linux-amd64.deb",
+      "downloads": 1,
+      "created_at": "2026-10-19T16:52:59Z",
+      "first_seen": "2026-10-19T17:11:27+00:00"
+    },
+    "656846566": {
+      "release": "v0.1.27",
+      "id": 656846566,
+      "name": "redunar-app-linux-opensuse-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-19T16:52:59Z",
+      "first_seen": "2026-10-19T17:11:27+00:00"
+    },
+    "656846565": {
+      "release": "v0.1.27",
+      "id": 656846565,
+      "name": "redunar-app-linux-x86_64.pkg.tar.zst",
+      "downloads": 2,
+      "created_at": "2026-10-19T16:52:59Z",
+      "first_seen": "2026-10-19T17:11:27+00:00"
+    },
+    "656846598": {
+      "release": "v0.1.27",
+      "id": 656846598,
+      "name": "redunar-app-linux-x86_64.rpm",
+      "downloads": 1,
+      "created_at": "2026-10-19T16:53:00Z",
+      "first_seen": "2026-10-19T17:11:27+00:00"
+    },
+    "656846617": {
+      "release": "v0.1.27",
+      "id": 656846617,
+      "name": "redunar-app-linux-x86_64.tar.gz",
+      "downloads": 1,
+      "created_at": "2026-10-19T16:53:00Z",
+      "first_seen": "2026-10-19T17:11:27+00:00"
     }
   },
   "observations": [
@@ -955,6 +995,37 @@
       "recorded_downloads": 0,
       "github_lifetime_total": 98,
       "changes": []
+    },
+    {
+      "checked_at": "2026-10-19T17:11:27+00:00",
+      "recorded_downloads": 7,
+      "github_lifetime_total": 105,
+      "changes": [
+        {
+          "asset_id": 656846559,
+          "downloads": 1
+        },
+        {
+          "asset_id": 656846566,
+          "downloads": 1
+        },
+        {
+          "asset_id": 656846565,
+          "downloads": 2
+        },
+        {
+          "asset_id": 656846598,
+          "downloads": 1
+        },
+        {
+          "asset_id": 656846617,
+          "downloads": 1
+        },
+        {
+          "asset_id": 650326367,
+          "downloads": 1
+        }
+      ]
     }
   ]
 }
