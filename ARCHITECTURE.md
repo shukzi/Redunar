@@ -25,6 +25,19 @@ the webview never writes hardware, accepts arbitrary playback paths, or decides
 that capture succeeded. A second app cannot take over an occupied live replay
 coordinator. Hidden webviews must not stop native supervision or shortcuts.
 
+Linux native startup selects display-backend order before GTK initialization
+or service threads, through `src-tauri/src/display_backend.rs`. A Wayland session
+tries `wayland,x11`; an X11 session stays on X11. When session type is absent,
+a nonempty `WAYLAND_DISPLAY` also enables Wayland-first selection. An explicit
+`GDK_BACKEND` value remains authoritative. GDK owns connection attempts and
+fallback; the preference is process-local and does not rewrite the environment
+passed to games or helpers. Desktop, terminal and Steam background launches all
+enter this same function. Steam forwards the desktop session variables and
+explicit backend override through its existing literal environment allowlist.
+Opt-in diagnostics record the actual chosen backend without display addresses.
+An existing primary keeps its backend during secondary activation; a new launch
+does not restart the owner or change a live game's session.
+
 Before cleanup or mutable startup, the Tauri service acquires an exclusive
 kernel lock on `backend-owner-v1.lock` in its state directory. All service clones
 retain the lease until their coordinator/listener resources are dropped. The lock
@@ -76,6 +89,7 @@ Paths below are relative to `output/tauri-redunar/`:
 | Flow | Main files |
 | --- | --- |
 | Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs`, `activation.rs`, `window_lifecycle.rs` |
+| Native display selection | `src-tauri/src/display_backend.rs` runs first for desktop and Steam startup; native Wayland preference, X11 fallback and explicit overrides |
 | Main-window native scrolling | `src-tauri/src/webview_settings.rs` restores native WebKit smooth scrolling once during setup; the UI delegates wheel input to the engine |
 | Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `session_lifecycle.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
@@ -450,6 +464,21 @@ and compatibility obligations. Microphone input enumeration is owned by the audi
 library, exposed read-only through the service/runtime command.
 
 ## Workspace refinement ownership
+
+`ui/overlay-settings.mjs` owns the mounted Appearance/Metrics editor and its
+instant tab selection. `ui/draft-feedback.mjs` describes existing draft owners
+without changing save scope. `ui/workspace-presentation.mjs` owns bounded control
+indicators, input modality and transient tooltips. It observes mounted selection
+groups and their buttons for resize, disconnects detached groups and has no
+whole-document mutation observer or scrolling animation. Once a control uses a
+custom tooltip, dynamic labels update that owner without restoring a competing
+native title. Precision selectors retain native select/form
+ownership, including inherited-value cues and their neutral hover plate.
+
+`ui/clip-visibility.mjs` observes the mounted Saved clips rail and reports exposed
+cards to the existing bounded preview loader. It disconnects on rail replacement
+or navigation and rejects callbacks from older generations. Scroll input does
+not synchronously scan every card's geometry.
 
 `ui/disclosure-motion.mjs` owns delegated desktop details animation, including
 reversal and immediate action dismissal. `ui/clip-motion.mjs` owns new-recording

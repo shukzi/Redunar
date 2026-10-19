@@ -57,12 +57,26 @@ render visits the artwork collection once rather than rescanning it for every
 cached poster. The existing two-request queue and bounded cache stay in place;
 results for detached content can warm the cache without painting that content.
 
+Saved clip previews use engine visibility notifications for the mounted rail.
+The viewport root respects both nested rail clipping and responsive page scroll. Preview
+priority remains selected-clip first, then exposed cards in catalog order. A
+touching-edge intersection may prefetch an adjacent card so WebKit's zero-area
+threshold transition cannot strand its preview. A
+warm scroll performs no synchronous card-bound reads and does not re-request
+cached previews. Replacing the rail or leaving Replay disconnects its observer
+and invalidates queued visibility callbacks. This is a scripting-work bound,
+not a claim about frame rate on every compositor or during video playback.
+
 The main Linux webview enables WebKit's original native smooth scrolling once
 at setup, using the supported getter for its own settings object. The UI does
 not intercept wheel input, read geometry for wheel classification or run a
 JavaScript scroll animation. No scroll timers, polling, permanent layers or idle
 callbacks are added. WebKit owns timing, input handling and system motion
-preferences; Redunar does not change GTK/system preferences or renderer flags.
+preferences; this per-view setup does not change GTK/system preferences.
+The existing process-level renderer workaround defaults
+`WEBKIT_DISABLE_DMABUF_RENDERER` to `1` when the caller has not explicitly set it.
+Keep that policy fixed when comparing dependency upgrades, and distinguish
+native GTK paint callbacks from physical screen presentation.
 
 Capture-status presentation retains the last generated markup on its mounted
 container. Compare generated strings rather than serialized `innerHTML`, which
@@ -81,6 +95,11 @@ animate only opacity and small transforms. They have no frame callbacks,
 recurring work, persistent layer hints or delayed close/cleanup. A visible draft
 bar tracks its logical owner across renders so polling and edits cannot restart
 its animation. Dialogs remain untransformed to preserve fixed-menu positioning.
+Selection indicators may animate for at most 190 ms after an action; dropdown
+hover plates move over 85 ms. Their geometry is bounded to mounted control
+groups, with no per-frame JavaScript, whole-document mutation observer or scan of
+every element for scrolling. Detached resize observers are disconnected on the
+next render/action. Overlay editor panels switch instantly.
 Reduced motion disables these effects. The refresh/DOM-retention rules above
 still apply; compositor cost requires testing on the actual desktop.
 

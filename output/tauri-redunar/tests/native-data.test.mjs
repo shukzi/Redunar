@@ -176,7 +176,7 @@ test('global preview applies select changes and keeps FPS only on one row',()=>{
  assert.match(source,/draft\.metrics=t\.checked\?\[\.\.\.new Set\(\[\.\.\.draft\.metrics,t\.dataset\.metric\]\)\]/);
  assert.match(source,/const emptyCustom=globalTab==='overlay'&&draft\.preset==='Custom'&&!draft\.metrics\.length/);
  assert.match(source,/Select at least one metric to save a Custom layout/);
- assert.match(source,/Preset controlled · choose Custom to edit individual metrics/);
+ assert.match(source,/Choose Custom to change individual metrics/);
  assert.match(source,/25\+\(frame\?38:0\)\+\(lows\?26:0\)\+\(hardware\?26:0\)/);
  assert.match(css,/.hud-native-frame\{position:relative;height:38px/);
  assert.match(css,/.hud-native-value\{position:absolute;top:6px/);

@@ -1,4 +1,4 @@
-/* Size first dialog, shared by whole-clip compression and selection export. */
+/* Unified copy dialog, shared by whole-source and selection export. */
 #dialog:has(.clip-export-options,.clip-export-running){box-sizing:border-box;width:min(440px,calc(100vw - 32px));padding:24px;max-height:calc(100dvh - 32px);overflow:auto;background:#111;border-color:#414141;border-radius:12px}
 #dialog:has(.clip-export-options,.clip-export-running) .dialog-head{margin-bottom:24px}
 #dialog .clip-export-options{display:grid;gap:20px}
@@ -63,3 +63,11 @@
 .clip-export-compress-toggle[aria-expanded=true] svg{transform:rotate(180deg)}
 .clip-export-foldout .clip-export-size-heading{padding-top:20px}
 @media(prefers-reduced-motion:reduce){.clip-export-compress-toggle svg{transition:none}}
+
+.clip-copy-range{display:flex;justify-content:space-between;align-items:center;gap:16px;color:var(--muted);font-size:12px}
+.clip-copy-range .precision-select{width:170px;min-width:0}
+.clip-copy-range>span:last-child{color:var(--text)}
+.clip-copy-original-note{font-size:11px;color:var(--muted);margin:0}
+.clip-copy-compression-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding-top:16px;font-size:12px}
+.clip-copy-compression-row .switch{height:32px}
+@media(pointer:coarse){.clip-copy-compression-row .switch{min-height:44px}}

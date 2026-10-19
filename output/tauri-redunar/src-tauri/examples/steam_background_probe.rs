@@ -5,6 +5,8 @@
 mod activation;
 #[path = "../src/background_start.rs"]
 mod background_start;
+#[path = "../src/display_backend.rs"]
+mod display_backend;
 #[path = "steam_background/host.rs"]
 mod host;
 #[path = "steam_background/parking.rs"]
@@ -37,6 +39,7 @@ mod backend {
 static PASSED: AtomicBool = AtomicBool::new(false);
 
 fn main() {
+    display_backend::configure();
     if std::env::args().nth(1).as_deref() == Some("--activation-client") {
         let path = std::env::args_os().nth(2).unwrap();
         activation::request(std::path::Path::new(&path)).unwrap();
@@ -46,6 +49,7 @@ fn main() {
     let park = std::env::args().any(|argument| argument == "--park");
     let cancel = std::env::args().any(|argument| argument == "--cancel-close");
     let automatic = !std::env::args().any(|argument| argument == "--manual-owner");
+    let display_startup = std::env::args().any(|argument| argument == "--display-startup");
     let (tray_enabled, auto_focus, input, with_host) = match std::env::args().nth(1).as_deref() {
         Some("--tray-off") => (false, false, None, false),
         Some("--tray-fallback") => (true, false, None, false),
@@ -71,8 +75,32 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(background_start::State::new(automatic))
         .setup(move |app| {
+            if let Ok(expected) = std::env::var("REDUNAR_EXPECT_DISPLAY_TYPE") {
+                let native = app.get_webview_window("main").unwrap().gtk_window().unwrap();
+                assert_eq!(native.display().type_().name(), expected);
+            }
+            display_backend::record_selected();
             let host = with_host.then(host::start);
             tray::setup(app)?;
+            if display_startup {
+                assert!(automatic && with_host && !reopen && !park && !cancel && !auto_focus);
+                // The bare-Xvfb focus-anchor contract below depends on X11.
+                // This separate backend case retains hidden startup, ownership,
+                // tray, explicit Open and cleanup assertions on either server.
+                background_start::prepare_window(app.handle());
+                let handle = app.handle().clone();
+                gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(1_500), move || {
+                    let main = handle.get_webview_window("main").unwrap();
+                    assert!(!main.is_visible().unwrap());
+                    assert!(!main.is_focused().unwrap());
+                    assert!(tray::registered(&handle) && tray::has_item(&handle));
+                    assert!(handle.state::<background_start::State>().may_auto_exit());
+                    assert_eq!(backend::service().app_preferences().unwrap().close_to_tray, tray_enabled);
+                    println!("PASS: native backend keeps Steam startup hidden, tray registered and automatic owner exit eligible");
+                    finish(&handle, host);
+                });
+                return Ok(());
+            }
             // Xvfb has no WM: pointer-root focus can activate the first mapped
             // surface. Anchor actual focus on an existing fixture window before
             // mapping Redunar, matching Steam/game startup on a desktop.

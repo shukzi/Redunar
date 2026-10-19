@@ -6,6 +6,7 @@ fn persistent_app_is_started_by_the_user_manager_with_literal_desktop_environmen
     let inherited = BTreeMap::from([
         ("DISPLAY".into(), ":1".into()),
         ("WAYLAND_DISPLAY".into(), "wayland-1".into()),
+        ("XDG_SESSION_TYPE".into(), "wayland".into()),
         ("XDG_RUNTIME_DIR".into(), "/private/runtime".into()),
         (
             "PULSE_SERVER".into(),
@@ -42,6 +43,20 @@ fn persistent_app_is_started_by_the_user_manager_with_literal_desktop_environmen
         "--setenv=GTK_THEME=$(touch /tmp/must-not-exist) ${HOME}"
     )));
     let environment = command.get_envs().collect::<BTreeMap<_, _>>();
+    for (key, value) in [
+        ("WAYLAND_DISPLAY", "wayland-1"),
+        ("XDG_SESSION_TYPE", "wayland"),
+    ] {
+        assert_eq!(
+            environment.get(OsStr::new(key)),
+            Some(&Some(OsStr::new(value)))
+        );
+        assert!(
+            arguments
+                .iter()
+                .any(|argument| *argument == OsStr::new(&format!("--setenv={key}={value}")))
+        );
+    }
     assert_eq!(
         environment.get(OsStr::new("DISPLAY")),
         Some(&Some(OsStr::new(":1")))
@@ -69,6 +84,43 @@ fn persistent_app_is_started_by_the_user_manager_with_literal_desktop_environmen
             .starts_with("--property=UnsetEnvironment=")
             && arg.to_string_lossy().contains("REDUNAR_CAPTURE_SESSION")
     }));
+}
+
+#[test]
+fn steam_startup_preserves_an_explicit_backend_override_without_inventing_one() {
+    for value in [None, Some("x11"), Some("wayland,x11")] {
+        let mut inherited = BTreeMap::from([
+            (
+                OsString::from("XDG_SESSION_TYPE"),
+                OsString::from("wayland"),
+            ),
+            (
+                OsString::from("WAYLAND_DISPLAY"),
+                OsString::from("wayland-1"),
+            ),
+        ]);
+        if let Some(value) = value {
+            inherited.insert("GDK_BACKEND".into(), value.into());
+        }
+        let command = startup_command(
+            Path::new(USER_SERVICE_RUNNER),
+            Path::new("/fixture/redunar-tauri"),
+            inherited,
+        );
+        let environment = command.get_envs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            environment
+                .get(OsStr::new("GDK_BACKEND"))
+                .copied()
+                .flatten(),
+            value.map(OsStr::new)
+        );
+        let backend_arguments = command
+            .get_args()
+            .filter(|arg| arg.to_string_lossy().starts_with("--setenv=GDK_BACKEND="))
+            .collect::<Vec<_>>();
+        assert_eq!(backend_arguments.len(), usize::from(value.is_some()));
+    }
 }
 
 #[test]
