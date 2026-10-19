@@ -27,6 +27,16 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.28" date="2026-10-19">
+      <description>
+        <ul>
+          <li>Added a microphone recording level slider, measured voice meter and six-second microphone test with compact local playback.</li>
+          <li>Protected recorded voice against loud peaks while keeping system microphone and voice-chat levels unchanged.</li>
+          <li>Added Playback volume and mute for listening to clips in Redunar, with immediate slider feedback and reliable controls when switching clips. Recordings and exports keep their original volume.</li>
+        </ul>
+        <p>Replay preferences use an updated format that older releases cannot read. Keep a backup of the previous Replay preferences before downgrading.</p>
+      </description>
+    </release>
     <release version="0.1.27" date="2026-10-19">
       <description>
         <ul>
