@@ -300,8 +300,12 @@ impl Encoding<'_> {
         command.args([
             "-map_metadata",
             "-1",
+            // Sparse VFR frames can give B-frames multi-second negative decode
+            // preroll. Shifting that DTS to zero also shifts presentation/audio
+            // forward and inflates the selected duration. MP4/MKV handle the
+            // preroll; keep the selected timeline and relative stream offsets.
             "-avoid_negative_ts",
-            "make_zero",
+            "disabled",
             "-progress",
             "pipe:2",
             "-nostats",
@@ -456,3 +460,7 @@ pub(super) fn read_ffmpeg_progress(
 #[cfg(test)]
 #[path = "encoding_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "timestamp_tests.rs"]
+mod timestamp_tests;
