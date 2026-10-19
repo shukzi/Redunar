@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 19 sparse-frame export duration](2026-10-19-export-duration.md):
+  reproduced timestamp-shift inflation, retained duration guard and generated
+  MP4/MKV, multi-audio and two-pass regression coverage.
+
 - [October 19 native Wayland startup](2026-10-19-wayland-startup.md): shared
   desktop/Steam backend preference, real display-connection fallback and
   override checks, preserved child environment and lifecycle regressions.

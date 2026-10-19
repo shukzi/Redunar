@@ -415,6 +415,11 @@ size and duration before commit. A ceiling is not a target: a source range that
 already fits is first encoded at the normal quality setting. A bounded retry
 lowers video bitrate for muxing overshoot; an impossible limit fails with guidance
 to increase it or shorten the range. Outputs are never truncated to fit.
+Export keeps the selected presentation timeline without shifting negative
+decoder preroll to zero. With sparse video frames, that shift can otherwise
+insert seconds before both video and audio and fail the final duration check.
+MP4/MKV retain their native preroll handling, relative audio offsets and video
+frame holds. The final duration, audio-track and size checks remain required.
 The dialogs show the original recording's measured byte size. Progress reports
 the current output file's actual bytes, resetting for each encoding attempt;
 the analysis pass reports its phase without exposing a previous attempt's size.

@@ -148,6 +148,14 @@ production build source/binary manifests belong to `.redunar-build/linux`.
 
 ## Workspace polish fixture
 
+The native `clip_export` tests also generate sparse VFR video with a two-second
+frame hold and two audio tracks, one delayed. MP4/MKV inputs and outputs cover
+normal trims, two-pass size-limited trims and whole-clip compression. They check
+duration, leading timestamps, the retained frame hold, relative audio timing,
+decode success, size caps, source immutability and private pass-file cleanup.
+See the [October 19 duration repair](docs/verification/2026-10-19-export-duration.md)
+for the reproduced failure and verification scope.
+
 After the production frontend build, run:
 
 ```sh
