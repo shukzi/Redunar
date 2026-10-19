@@ -1,4 +1,9 @@
-"""Interaction motion and cancellation in production WebKit with private state."""
+"""Interaction motion and cancellation in production WebKit with private state.
+
+Use --source-controls for only the current control modules, without a UI build.
+"""
+import base64
+import sys
 from webview_fixture import *
 
 # Change only this fixture process's GTK preference, never desktop settings.
@@ -14,10 +19,69 @@ window.editScale=value=>{const input=q('[data-global=scale]');input.value=value;
 window.key=(target,key)=>target.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
 """
 manager.add_script(WebKit2.UserScript.new(extra,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
+
+def source_control_checks():
+    """Exercise the current control modules without rebuilding or trusting ui/dist."""
+    def module_url(name):
+        return 'data:text/javascript;base64,' + base64.b64encode((NATIVE/'ui'/name).read_bytes()).decode()
+    styles = '\n'.join((NATIVE/'ui'/name).read_text() for name in
+                       ['app.css', 'controls.css', 'precision-selects.css', 'workspace-motion.css', 'workspace-polish.css'])
+    html = '''<!doctype html><html data-page="global"><head><style>''' + styles + '''
+      body { padding:32px; } .tabbar { margin-bottom:24px; }
+      #dirty[hidden] { display:none; } #dirty { margin-left:12px; }
+      </style></head><body>
+      <div class="tabbar"><button data-global-tab="overlay" class="active">Overlay<span id="dirty" hidden>●</span></button><button data-global-tab="replay">Replay</button></div>
+      <div class="clip-collection"><button data-clip-scope="all" aria-pressed="true">All</button><button data-clip-scope="favorites">Favorites</button></div>
+      <button id="unrelated">Unrelated action</button>
+      <select id="source-select" aria-label="Source control">''' + ''.join(
+          f'<option value="{n}">Option {n}</option>' for n in range(10)) + '''</select>
+      <select id="short-select" aria-label="Short control"><option>One</option><option>Two</option></select>
+      <script>window.presentationFrames=0;const originalRaf=requestAnimationFrame;
+      window.requestAnimationFrame=callback=>{presentationFrames++;return originalRaf.call(window,callback);};</script>
+      <script type="module">
+      import {enhancePrecisionSelects} from "''' + module_url('precision-selects.js') + '''";
+      import {refreshWorkspacePresentation} from "''' + module_url('workspace-presentation.mjs') + '''";
+      enhancePrecisionSelects();refreshWorkspacePresentation();window.sourceControlsReady=true;
+      document.addEventListener('click',event=>{
+       const tab=event.target.closest('.tabbar>button');
+       if(tab)for(const button of document.querySelectorAll('.tabbar>button'))button.classList.toggle('active',button===tab);
+      });
+      </script></body></html>'''
+    # A distinct document URI makes the later /#global load a full navigation.
+    # Using / here lets WebKit treat it as a fragment change and retain this DOM.
+    view.load_html(html, f'http://127.0.0.1:{server.server_port}/__source-controls')
+    wait_for('window.sourceControlsReady')
+    pump(300)
+    js("window.initialFrames=presentationFrames;click('#unrelated');click('#source-select+.precision-select-trigger');")
+    pump(250)
+    test('Source unrelated actions and dropdown opening do not schedule indicator frames', "check(presentationFrames===initialFrames,'unrelated click refreshed indicators');check(q('.precision-select-menu.precision-select-scrolls'),'long menu overflow detected');window.trigger=q('#source-select+.precision-select-trigger');window.pageTop=document.scrollingElement.scrollTop;key(trigger,'End');")
+    pump(120)
+    test('Source highlight keeps the last option visible and its hover plate aligned', "const menu=q('.precision-select-menu'),item=menu.querySelector('.active'),box=item.getBoundingClientRect(),bounds=menu.getBoundingClientRect();check(menu.scrollTop>0&&box.top>=bounds.top&&box.bottom<=bounds.bottom+1,'keyboard scroll stays in popup');check(Math.abs(new DOMMatrix(getComputedStyle(menu,'::before').transform).m42-item.offsetTop)<2,'plate tracks option');check(document.scrollingElement.scrollTop===pageTop,'page did not scroll');key(trigger,'Enter');window.value=trigger.querySelector('.precision-select-value');window.feedback=value.getAnimations().find(a=>a.id==='control-value-commit');check(feedback&&feedback.effect.getTiming().duration===150,'bounded WAAPI commit');feedback.pause();")
+    test('Source commits preserve selection, focus and immediate dismissal', "check(q('#source-select').value==='9'&&!q('.precision-select-menu'),'selected value committed');check(document.activeElement===trigger,'focus restored');trigger.click();key(trigger,'Home');key(trigger,'Enter');check(feedback.playState==='idle','previous feedback cancelled');check(value.getAnimations().filter(a=>a.id==='control-value-commit').length===1,'only latest feedback retained');")
+    pump(250)
+    test('Source feedback finishes without retained transforms or animations', "check(!value.getAnimations().length&&getComputedStyle(value).transform==='none','feedback released');click('#short-select+.precision-select-trigger');check(!q('.precision-select-menu').classList.contains('precision-select-scrolls'),'short menu has no reserved gutter');key(q('#short-select+.precision-select-trigger'),'Escape');")
+    js("window.initialFrames=presentationFrames;click('[data-global-tab=replay]');")
+    pump(250)
+    test('Source selection clicks still refresh the indicator', "check(presentationFrames>initialFrames,'selection click refreshed');const tab=q('.tabbar button.active'),line=q('.selection-indicator-tabs');check(Math.abs(tab.getBoundingClientRect().left-line.getBoundingClientRect().left)<2,'selection geometry current');q('#dirty').hidden=false;")
+    pump(250)
+    test('Source child resize refreshes geometry without a click', "const tab=q('.tabbar button.active'),line=q('.selection-indicator-tabs');check(Math.abs(tab.getBoundingClientRect().left-line.getBoundingClientRect().left)<2,'preceding dirty marker moves active underline');trigger.click();key(trigger,'End');key(trigger,'Enter');window.feedback=value.getAnimations().find(a=>a.id==='control-value-commit');feedback.pause();")
+    gtk_settings.set_property('gtk-enable-animations', False)
+    wait_for("matchMedia('(prefers-reduced-motion: reduce)').matches&&feedback.playState==='idle'")
+    test('Source reduced-motion change cancels running commit feedback', "check(!value.getAnimations().length,'running commit cancelled');trigger.click();key(trigger,'Home');key(trigger,'Enter');check(q('#source-select').value==='0'&&!value.getAnimations().length,'reduced motion commits immediately');check(!q('.precision-select-menu')&&document.activeElement===trigger,'dismissal and focus preserved');check(!bridge.errors.length,bridge.errors.join('; '));window.initialFrames=presentationFrames;")
+    pump(250)
+    test('Source controls settle without recurring frame work', "check(presentationFrames===initialFrames,'no idle frame loop');")
+
 try:
+    source_control_checks()
+    if '--source-controls' in sys.argv:
+        (ARTIFACTS/'source-control-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
+        print(f'PASS: {len(checks)} direct-source control checks (no frontend build).')
+        raise SystemExit(0)
+    gtk_settings.set_property('gtk-enable-animations', True)
+    wait_for("matchMedia('(prefers-reduced-motion: no-preference)').matches")
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#global')
     pump(500)
-    wait_for("q('[data-global=scale]')?.value==='100'&&matchMedia('(prefers-reduced-motion: no-preference)').matches")
+    wait_for("!window.sourceControlsReady&&q('[data-global=scale]')?.value==='100'&&matchMedia('(prefers-reduced-motion: no-preference)').matches")
     pump()
     test('Clean settings have no draft entry animation', "check(q('.settings-save-bar').hidden,'clean bar hidden');check(!motion(q('.settings-save-bar'),'save-bar-enter'),'no hidden animation');")
     test('First edit animates usable draft actions', "editScale('105');window.bar=q('.settings-save-bar');const a=motion(bar,'save-bar-enter');check(a,'entry exists');check(a.effect.getTiming().duration<=140,'bounded duration');check(!bar.hidden&&!q('[data-action=save-global]').disabled,'actions immediately usable');a.pause();a.currentTime=70;")
@@ -43,7 +107,7 @@ try:
     snap('motion-dialog-ready')
     js("click('#dialog [data-close]')")
     route('global')
-    test('Dropdown entry preserves placement and keyboard ownership', "window.select=q('[data-global=position]');window.trigger=select.nextElementSibling;trigger.focus();key(trigger,'ArrowDown');const menu=q('.precision-select-menu'),a=motion(menu,'dropdown-enter');check(a,'menu entry');check(a.effect.getTiming().duration<=100,'bounded menu');check(document.activeElement===trigger,'keyboard focus retained');const r=trigger.getBoundingClientRect(),m=menu.getBoundingClientRect();check(m.left>=6&&m.right<=innerWidth-6,'menu fits horizontally');check(m.top>=r.bottom,'menu below trigger');a.pause();a.currentTime=50;")
+    test('Dropdown entry preserves placement and keyboard ownership', "window.select=q('[data-global=position]');window.trigger=select.nextElementSibling;trigger.focus();key(trigger,'ArrowDown');const menu=q('.precision-select-menu'),a=motion(menu,'dropdown-enter');check(a,'menu entry');check(a.effect.getTiming().duration<=80,'menu entry bounded to 80 ms');check(document.activeElement===trigger,'keyboard focus retained');const r=trigger.getBoundingClientRect(),m=menu.getBoundingClientRect();check(m.left>=6&&m.right<=innerWidth-6,'menu fits horizontally');check(m.top>=r.bottom-2||m.bottom<=r.top+2,'menu placed outside trigger');check(m.top>=0&&m.bottom<=innerHeight,'menu fits vertically');a.pause();a.currentTime=0;check(parseFloat(getComputedStyle(menu).opacity)>=.85,'menu readable at first paint');a.currentTime=50;")
     snap('motion-dropdown-entry')
     test('Keyboard selection commits during entry and removes the menu', "key(trigger,'End');key(trigger,'Enter');check(select.value==='Bottom right','selection committed');check(!q('.precision-select-menu'),'no delayed removal');check(document.activeElement===trigger,'focus retained');trigger.click();check(motion(q('.precision-select-menu'),'dropdown-enter'),'new opening animates');key(trigger,'Escape');check(!q('.precision-select-menu'),'Escape immediate');check(trigger.getAttribute('aria-expanded')==='false','accessible state closed');")
     test('Scroll dismisses a dropdown even during entry', "trigger.click();check(q('.precision-select-menu'),'open');q('.window-content').dispatchEvent(new Event('scroll'));check(!q('.precision-select-menu'),'scroll closes menu');click('[data-action=discard-global]');")

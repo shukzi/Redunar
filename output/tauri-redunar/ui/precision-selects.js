@@ -3,6 +3,23 @@
 const controls = new WeakMap();
 let popup = null;
 let serial = 0;
+const reducedCommitMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const commitAnimations = new Map();
+reducedCommitMotion.addEventListener('change',()=>{
+  if(!reducedCommitMotion.matches)return;
+  for(const animation of commitAnimations.values())animation.cancel();
+  commitAnimations.clear();
+});
+function animateValueCommit(value) {
+  commitAnimations.get(value)?.cancel();
+  commitAnimations.delete(value);
+  if(reducedCommitMotion.matches||document.documentElement.dataset.page==='replay-menu')return;
+  // Restart feedback without forcing layout to remove/re-add a CSS animation.
+  const animation=value.animate([{opacity:.5,transform:'translateY(2px)'},{opacity:1,transform:'none'}],{duration:150,easing:'cubic-bezier(.2,.8,.2,1)'});
+  animation.id='control-value-commit';
+  commitAnimations.set(value,animation);
+  animation.onfinish=animation.oncancel=()=>{if(commitAnimations.get(value)===animation)commitAnimations.delete(value);};
+}
 const chevron = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>';
 function labelFor(select) {
   if(select.getAttribute('aria-label'))return select.getAttribute('aria-label');
@@ -24,6 +41,7 @@ function sync(select,control) {
   control.value.textContent=select.selectedOptions[0]?.textContent||'Choose an option';
   control.trigger.disabled=select.matches(':disabled');
   control.trigger.setAttribute('aria-label',labelFor(select));
+  if(control.link)control.link.hidden=select.value!=='inherit';
   if(select.getAttribute('aria-describedby'))control.trigger.setAttribute('aria-describedby',select.getAttribute('aria-describedby'));
   if(popup?.select===select&&(control.trigger.disabled||popup.signature!==signature(select)))closePrecisionSelect();
 }
@@ -39,11 +57,13 @@ export function enhancePrecisionSelects(root=document) {
       trigger.setAttribute('role','combobox');trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');
       const id=`precision-options-${++serial}`;trigger.setAttribute('aria-controls',id);
       const value=document.createElement('span');value.className='precision-select-value';
+      let link=null;
+      if(select.hasAttribute('data-override')){link=document.createElement('span');link.className='inheritance-link';link.setAttribute('aria-hidden','true');trigger.append(link);}
       trigger.append(value);trigger.insertAdjacentHTML('beforeend',chevron);
       const wasFocused=document.activeElement===select;
       select.before(wrapper);wrapper.append(select,trigger);
       select.hidden=true;select.tabIndex=-1;
-      control={trigger,value,id};controls.set(select,control);
+      control={trigger,value,id,link};controls.set(select,control);
       trigger.addEventListener('click',()=>{if(popup?.select===select)closePrecisionSelect();else open(select);});
       trigger.addEventListener('keydown',event=>onKey(event,select));
       if(wasFocused)trigger.focus({preventScroll:true});
@@ -57,40 +77,52 @@ export function focusPrecisionSelect(select) {
   (controls.get(select)?.trigger||select).focus({preventScroll:true});
 }
 function highlight(index) {
-  if(!popup||index<0)return;
+  if(!popup||index<0||popup.active===index)return;
   popup.active=index;
-  [...popup.list.children].forEach((item,i)=>item.classList.toggle('active',i===index));
-  const item=popup.list.children[index];
-  popup.trigger.setAttribute('aria-activedescendant',item.id);
+  const {list,trigger}=popup,item=list.children[index];
+  // Active styling changes only color. Read the final option/viewport geometry
+  // together before changing classes, inherited plate properties or scroll.
+  const geometry={x:item.offsetLeft,y:item.offsetTop,w:item.offsetWidth,h:item.offsetHeight};
+  const top=list.scrollTop,height=list.clientHeight;
+  const nextTop=geometry.y<top?geometry.y:geometry.y+geometry.h>top+height?geometry.y+geometry.h-height:top;
+  [...list.children].forEach((item,i)=>item.classList.toggle('active',i===index));
+  for(const [key,value] of Object.entries(geometry))list.style.setProperty(`--select-active-${key}`,`${value}px`);
+  list.style.setProperty('--select-active-visible',item.getAttribute('aria-selected')==='true'?'0':'1');
+  trigger.setAttribute('aria-activedescendant',item.id);
   // Scroll the popup only, never the document or clip rail.
-  if(item.offsetTop<popup.list.scrollTop)popup.list.scrollTop=item.offsetTop;
-  else if(item.offsetTop+item.offsetHeight>popup.list.scrollTop+popup.list.clientHeight)popup.list.scrollTop=item.offsetTop+item.offsetHeight-popup.list.clientHeight;
+  if(nextTop!==top)list.scrollTop=nextTop;
 }
 function open(select) {
   closePrecisionSelect();
   const control=controls.get(select),options=[...select.options];
   if(!control||select.matches(':disabled')||!options.length)return;
   sync(select,control);
-  const list=document.createElement('ul');list.className='precision-select-menu';list.id=control.id;list.setAttribute('role','listbox');list.setAttribute('aria-label',labelFor(select));
+  const list=document.createElement('ul');list.className='precision-select-menu';list.id=control.id;list.dataset.focusPlate='';list.setAttribute('role','listbox');list.setAttribute('aria-label',labelFor(select));
   options.forEach((option,index)=>{
     const item=document.createElement('li');item.className='precision-select-option';item.id=`${control.id}-${index}`;
     item.setAttribute('role','option');item.setAttribute('aria-selected',String(option.selected));item.setAttribute('aria-disabled',String(disabled(option)));
     const text=document.createElement('span');text.textContent=option.textContent;
+    if(select.hasAttribute('data-override')&&option.value==='inherit'){const link=document.createElement('span');link.className='inheritance-link';link.setAttribute('aria-hidden','true');item.classList.add('inherited-option');item.append(link);}
     const check=document.createElement('span');check.className='precision-select-check';check.textContent='✓';check.setAttribute('aria-hidden','true');item.append(text,check);
     item.addEventListener('pointerdown',event=>event.preventDefault());
     item.addEventListener('click',()=>commit(index));
     item.addEventListener('pointermove',()=>{if(!disabled(option))highlight(index);});
     list.append(item);
   });
+  const rect=control.trigger.getBoundingClientRect(),margin=8;
+  const width=Math.min(Math.max(rect.width,200),innerWidth-margin*2);
+  list.style.width=`${width}px`;list.style.left=`${Math.max(margin,Math.min(rect.right-width,innerWidth-width-margin))}px`;
   (select.closest('dialog')||document.body).append(list);
   popup={select,trigger:control.trigger,list,active:-1,typed:'',lastType:0,signature:signature(select)};
-  const rect=control.trigger.getBoundingClientRect(),margin=8;
-  const width=Math.min(Math.max(rect.width,170),innerWidth-margin*2);
-  list.style.width=`${width}px`;list.style.left=`${Math.max(margin,Math.min(rect.right-width,innerWidth-width-margin))}px`;
+  const contentHeight=list.scrollHeight,inset=list.offsetHeight-list.clientHeight;
   const below=innerHeight-rect.bottom-margin,above=rect.top-margin;
-  const up=below<Math.min(list.scrollHeight,300)&&above>below;
-  list.style.maxHeight=`${Math.max(40,Math.min(300,(up?above:below)-margin))}px`;
+  const up=below<Math.min(contentHeight,300)&&above>below;
+  const maxHeight=Math.max(40,Math.min(300,(up?above:below)-margin));
+  list.style.maxHeight=`${maxHeight}px`;
   if(up)list.style.bottom=`${innerHeight-rect.top+margin}px`;else list.style.top=`${rect.bottom+margin}px`;
+  // Decide overflow from the measured content and final height before the
+  // highlight pass reads geometry with the final scrollbar gutter in place.
+  list.classList.toggle('precision-select-scrolls',contentHeight>maxHeight-inset+1);
   control.trigger.setAttribute('aria-expanded','true');
   highlight(select.selectedIndex>=0&&!disabled(options[select.selectedIndex])?select.selectedIndex:options.findIndex(o=>!disabled(o)));
 }
@@ -101,6 +133,7 @@ function commit(index) {
   const label=labelFor(select),id=select.id,changed=select.selectedIndex!==index;
   closePrecisionSelect();select.selectedIndex=index;
   sync(select,controls.get(select));
+  animateValueCommit(controls.get(select).value);
   if(changed)select.dispatchEvent(new Event('change',{bubbles:true}));
   // A settings change may rebuild the field. Restore focus to its replacement.
   enhancePrecisionSelects();

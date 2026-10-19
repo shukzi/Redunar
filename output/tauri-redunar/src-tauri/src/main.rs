@@ -8,6 +8,8 @@ mod clip_details;
 mod clip_export;
 mod clip_metadata;
 mod diagnostic_startup;
+#[cfg(target_os = "linux")]
+mod display_backend;
 mod hotkeys;
 mod installation;
 mod launch_plan;
@@ -172,6 +174,8 @@ mod tests {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    display_backend::configure();
     let background = background_start::requested(std::env::args_os().skip(1));
     if let Err(message) = backend::initialize() {
         eprintln!("{message}");
@@ -241,6 +245,8 @@ fn main() {
             app.state::<hotkeys::ShortcutMonitor>()
                 .set_app_handle(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "linux")]
+                display_backend::record_selected();
                 #[cfg(target_os = "linux")]
                 if let Err(error) = webview_settings::configure(&window) {
                     redunar_daemon::log_op!("Window scrolling configuration unavailable: {error}");

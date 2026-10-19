@@ -1,5 +1,13 @@
 # Verification evidence
 
+- [October 19 native Wayland startup](2026-10-19-wayland-startup.md): shared
+  desktop/Steam backend preference, real display-connection fallback and
+  override checks, preserved child environment and lifecycle regressions.
+
+- [October 19 stable Tauri comparison](2026-10-19-tauri-stable.md): released
+  dependency update, matched native paused/playing rendering samples, retained
+  fallback and no demonstrated full-refresh improvement from the update alone.
+
 - [October 18 clip compression](2026-10-18-clip-compression.md): Size first
   whole-clip compression, optional trimmed-export foldout, MP4/MKV and verified
   size ceilings; offline tests, WebKit inspection and an uninstalled local build.

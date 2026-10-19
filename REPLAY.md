@@ -396,11 +396,19 @@ muted decoder; timeouts or missing previews must not disable valid playback.
 See PERFORMANCE for worker/decoder bounds.
 
 Export re-encodes the selected range for accurate boundaries, reports progress,
-supports cancellation, and commits a separate MP4 or MKV. **Compress clip** uses
-the whole recording, with its duration inspected natively; **Export selection**
-retains the editor range and offers size limiting inside its Compress foldout.
-Both use software H.264/AAC encoding, preserve source dimensions and video cadence,
-and keep all supported audio tracks. The optional maximum is 0.1–500 decimal MB
+supports cancellation, and commits a separate MP4 or MKV. The shared **Export**
+dialog chooses the entire recording or the exact selected editor range, with an optional **Compress copy** limit. The source identity and selection are
+snapshotted when opening/submitting the dialog and retained through Retry.
+The native compression flag still means the inspected whole recording: a
+size-limited selection sends its exact range and maximum with that flag false.
+An unlimited entire copy uses the validated source duration. The native host
+remains authoritative for admission, duration, cancellation and commit.
+The Cancel request is independent of progress polling. A request made before
+native admission retains its intent only for that export generation. Cancellation
+errors offer Retry cancellation, and completion clears its pending timer. A
+cancel request never substitutes for native confirmation of the result.
+Both range choices use software H.264/AAC encoding, preserve source dimensions
+and video cadence, and keep all supported audio tracks. The optional maximum is 0.1–500 decimal MB
 (1 MB = 1,000,000 bytes). Limited encoding budgets every audio track and container
 overhead, uses two video passes when needed, and checks the complete output's
 size and duration before commit. A ceiling is not a target: a source range that

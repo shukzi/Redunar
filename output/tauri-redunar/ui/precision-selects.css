@@ -8,7 +8,7 @@
 .precision-select-trigger[aria-expanded=true]>svg { transform:rotate(180deg); color:var(--red); }
 .precision-select-trigger:disabled { opacity:1; color:#777; background:#101010; border-color:#282828; cursor:default; }
 .precision-select-value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.precision-select-menu { position:fixed; z-index:100; box-sizing:border-box; max-height:300px; overflow-y:auto; overscroll-behavior:contain; padding:5px; margin:0; list-style:none; border:1px solid #494949; border-radius:8px; background:#161616; box-shadow:0 16px 35px #000b; scrollbar-width:thin; font:12px/1.5 var(--sans); color:var(--text); }
+.precision-select-menu { position:fixed; z-index:100; box-sizing:border-box; max-height:300px; overflow-y:auto; overscroll-behavior:contain; padding:5px; margin:0; list-style:none; border:1px solid #494949; border-radius:8px; background:#161616; box-shadow:0 16px 35px #000b;  font:12px/1.5 var(--sans); color:var(--text); }
 .precision-select-option { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:40px; padding:10px; border:1px solid transparent; border-radius:4px; cursor:pointer; }
 .precision-select-option.active { background:#292929; border-color:#494949; }
 .precision-select-option[aria-selected=true] { background:#271516; }

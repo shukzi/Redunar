@@ -121,6 +121,14 @@ tools/validate.sh release # also compatibility build and package/release gate
 ```
 
 Dependencies must already be available; Cargo validation is locked and offline.
+Dependency updates are deliberate changes: locked builds do not check for newer
+releases. For Tauri updates, compare the official stable Rust and JavaScript
+releases, update the native manifest and both lockfiles, regenerate the license
+inventory, and retain a known-good build for comparison. Validate the actual
+native window, playback and cleanup in addition to the frontend. Rendering
+comparisons must keep UI inputs, renderer flags and display backend matched;
+an update alone is not evidence of improved frame pacing.
+
 Quick validation is for iteration. Documentation-only changes require link,
 command, and consistency checks. Implementation changes require full validation
 before merge; release validation is required for a release candidate. Add focused

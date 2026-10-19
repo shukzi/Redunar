@@ -146,7 +146,47 @@ live-game capture. Those remain separately authorized acceptance. Current run
 results and exact source manifests are kept under `.redunar-build/reports`;
 production build source/binary manifests belong to `.redunar-build/linux`.
 
+## Workspace polish fixture
+
+After the production frontend build, run:
+
+```sh
+xvfb-run -a -s '-screen 0 1920x1200x24' env REDUNAR_PRIVATE_DESKTOP_FIXTURE=1 \
+  python3 output/tauri-redunar/tests/ui-polish-webview.py
+```
+
+The private fixture covers mounted Appearance/Metrics draft retention, saved
+FPS-only layout/branding restoration, explicit Save/Discard scope, plain metric
+groups and the same feature-card placement while idle, running or awaiting
+cleanup. Session-status failures preserve controls and drafts. It checks
+keyboard-driven dirty-marker geometry, quiet pointer focus on switches and
+sliders, singular tooltips across polling and long dropdown scrolling. Library
+coverage includes a larger synthetic catalog, custom and inherited profile
+feedback. Replay panels share a bottom edge. Export appears only for an adjusted
+trim beside the trim controls, with whole-clip compression in the far-right menu
+and no thumbnail selection checkmark. The existing Replay fixture also covers exact-range and
+whole-clip copy, optional size limits, native completion, cancellation and Retry.
+It verifies compact Export-row stability, clip-menu dismissal/focus, discovery
+and playback of a distinct exported filename, and cancellation during failed or
+unresolved status reads, including admission races and rejected cancellation.
+Fixture games, media and native substitutes are never bundled with the app.
+
 ## Overview scroll stability
+
+Saved-clips visibility and scrolling regressions run after the frontend build:
+
+```sh
+node --test output/tauri-redunar/tests/clip-visibility.test.mjs
+xvfb-run -a -s '-screen 0 1920x1200x24' python3 output/tauri-redunar/tests/clip-scrolling-webview.py
+xvfb-run -a -s '-screen 0 2560x1600x24' python3 output/tauri-redunar/tests/clip-rail-layout-webview.py
+```
+
+The scrolling fixture warms 20, 200 and 1,000 synthetic clips, then checks zero
+synchronous card-bound reads, no new cached-preview requests, retained player and
+rail nodes, and cleanup on navigation. Frame intervals are recorded as fixture
+measurements rather than hardware or compositor acceptance.
+The rail-layout fixture covers small and overflowing inventories, complete card
+details, available-space use, narrow layouts, and empty/error recovery.
 
 After a production frontend build, run
 `xvfb-run -a python3 output/tauri-redunar/tests/overview-scroll-webview.py`.
@@ -177,6 +217,52 @@ incognito views and temporary XDG state. It checks no panic, repeated setup,
 restored native easing and independent-view isolation, without starting the
 backend, tray, hotkeys or games. Python WebKit fixtures alone cannot certify the Rust API
 path. See the [startup-crash repair](docs/verification/2026-10-17-webview-startup.md).
+
+## Native display-backend startup
+
+Backend policy fixtures cover Wayland-first order, an unavailable or absent
+Wayland socket, explicit X11 sessions, launchers missing session type and preserved
+`GDK_BACKEND` overrides. The native connection matrix runs the production
+selection function before GTK against private Xvfb and a headless
+Wayland compositor:
+
+```sh
+cargo build --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --examples --target-dir .redunar-build/checks/tauri
+python3 tools/check-display-backend.py
+```
+
+It requires `mutter`, `Xvfb` and `dbus-daemon`, starts no real game or production
+service, and retains logs under `.redunar-build/reports/wayland-startup/`. Tests
+assert the actual connected display type and unchanged caller environment,
+including Wayland-to-X11 fallback and explicit reverse-order overrides. Steam
+background and ordinary foreground Tauri views also run against these private
+servers, asserting their actual backend, hidden startup, tray/ownership state,
+explicit Open and cleanup. Focus-anchor/input assertions remain in the existing
+X11 fixture; a headless server does not qualify live-game compositor focus.
+Steam launcher tests separately verify literal forwarding of session/display variables
+and optional backend overrides. `check-steam-background.py` exercises production
+window/tray/activation cleanup using the same startup selection function.
+
+## Native rendering comparisons
+
+The `rendering_probe` example embeds the built frontend in a real Tauri window.
+Its native handler supplies generated command data and a generated local clip;
+it starts no service, game monitor, shortcuts or updater. It keeps Tauri's IPC
+transport and the production webview settings intact. Run the wrapper only on
+a private desktop, or explicitly request a visible desktop comparison:
+
+```sh
+cargo build --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --example rendering_probe --target-dir .redunar-build/checks/tauri
+dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 REDUNAR_PRIVATE_DESKTOP_FIXTURE=1 python3 tools/check-native-rendering.py .redunar-build/checks/tauri/debug/examples/rendering_probe --output .redunar-build/reports/rendering.json
+```
+
+The wrapper generates private media, captures four paused/playing scroll/menu
+phases, and retains reports and logs. `--desktop` permits a short visible window;
+the window must remain focused. Compare identical examples built against the
+old and new lockfiles. Xvfb qualifies loading/IPC only; desktop timing must
+exclude hidden or unfocused phases. Scripted rail movement, dropdown clicks,
+requestAnimationFrame and GTK after-paint callbacks do not measure physical
+input latency or prove scanout at the system refresh rate.
 
 ## Keyboard reconnect fixtures
 

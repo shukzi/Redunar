@@ -19,7 +19,13 @@ fade/rise 4 px over 140 ms when first shown. Continued edits, polling and tab
 changes do not restart a visible draft bar. Dismissal stays immediate, controls
 remain usable during entry, and the system reduced-motion preference disables
 these effects. Do not add decorative page, live-data or in-game overlay motion.
-Workspace scrolling uses the native WebKit behavior described below.
+Workspace scrolling uses the native WebKit behavior described below. Dropdown
+hover moves its neutral focus plate over 85 ms while retaining the selected
+option's red fill. Options have room around their text and checkmark.
+Dropdown entry motion is at most 80 ms and starts readable rather than fading
+up from invisible. Selection feedback never waits for the animation to finish.
+Small sidebar, tab-underline and collection indicators may move for up to 190 ms.
+Overlay editor panels switch instantly and retain a stable shared height.
 Sidebar width, workspace offset and the draft bar's left edge share a 220 ms
 transition. The draft bar fills the available workspace in either sidebar state.
 Newly discovered recordings fade in over 180 ms; visible existing cards settle
@@ -65,6 +71,15 @@ ratio and must not shrink into squeezed shapes.
   Close as the default action. Preserve accessible keyboard focus, Escape,
   focus containment, and restoration to the invoking control.
 
+Desktop controls remain matte and retain their original radii and color roles.
+All desktop scrolling stays engine-owned. Red scrollbars have inset thumbs and
+reserved gutters where content can scroll; they do not cover controls. Pointer
+interaction must not leave a focus outline behind after using a control. Existing
+keyboard behavior stays available without an additional stronger focus treatment.
+Save/Discard feedback identifies pending categories and the selected game. It
+must distinguish shortcut drafts from profile drafts without changing which Save
+action commits them. Hidden bars remain absent when the draft is clean.
+
 ## Overview
 
 Give the frame graph more space than the active-session banner. The chosen
@@ -86,7 +101,13 @@ The engine owns scrolling and its interaction with system motion preferences.
 
 ## Library
 
-Keep the compact searchable game catalog beside selected-game details. Use
+Keep the compact searchable game catalog beside selected-game details. The
+catalog never extends below the adjacent details panel on desktop; extra games
+scroll within it using an inset red rail and reserved gutter. On narrow windows
+the catalog has a bounded scrolling area above the details. List rows emphasize
+game names, retain launcher metadata where useful, and mark custom settings or
+unsaved drafts instead of repeating Local game and Global defaults. Selected-game
+details retain explicit inheritance. Use
 poster artwork in the catalog and landscape banner artwork in the header;
 never stretch a poster into a banner. Missing artwork has a neutral fallback.
 Retain the game, profile, and cached artwork after uninstall. Disable Launch
@@ -147,8 +168,19 @@ its inherited/custom setting; hiding must not remove the runtime.
 Overlay preview reflects the real renderer's layout, metric order, scale, and
 background-only opacity over a soft gradient. Compact, FPS only, Detailed, and
 Custom previews show their actual geometry. Custom selections remain valid and
-nonempty. Grid, Ribbon, and Telemetry change the structure independently of the
-information preset and Custom metric selection. The bounded palettes are
+nonempty. Appearance and Metrics occupy two mounted editor tabs to the right
+of the taller preview. The palette comes first. Independent Live overlay and
+Session metrics cards stack below the preview and align with the editor's bottom.
+Both cards remain in place without an active game. Idle overlay visibility is a
+saved default; during a session it auto-saves and updates a prepared running
+overlay when available. Native completion reports whether it updated. Update that explanation
+in place when session state changes, retaining focus and unsaved edits.
+Metric choices use plain checkbox rows grouped by Frame metrics and Hardware,
+with one separator instead of nested boxed tiles. Switching editor tabs preserves
+drafts. Grid, Ribbon, and Telemetry change the structure independently of the
+information preset and Custom metric selection. FPS only disables layout and
+branding controls with a short explanation, preserves their saved/draft values,
+and restores their controls when another preset is chosen. The bounded palettes are
 Redunar, Glacier, Ember, Mint, Mono, Amethyst, Solar, and Rose. The preview must
 use the same palette roles, rounded panel bounds, and layout dimensions as the
 in-game renderer. Redunar branding is an optional global appearance setting;
@@ -277,19 +309,29 @@ once at bottom left. Playback volume and mute controls are omitted so they
 cannot be mistaken for changes to exported audio. No Storyboard preview caption
 or expand control belongs in production.
 
-The filmstrip has a time ruler, In/Out handles, playhead, selected duration, and
-Export selection. Export uses a compact dialog with the source thumbnail and
-selected range, Format, Filename and a collapsed **Compress** section. Expanding
-Compress smoothly reveals the centered maximum-size field and slider; collapsing
-it disables size limiting while retaining the entered value. Clip actions also
-offers **Compress clip**, using the entire recording and showing these Size first
-controls immediately. Both forms use the shared Precision MP4/MKV selector,
-default to the source container and hide numeric spinner arrows. Resolution and
-frame rate remain automatic. The filename edits its stem only, and outputs go
-to the configured Replay folder as separate files. Omit advanced video controls
-and repeated original-preservation notes. Reduced motion skips the 220 ms
-foldout animation. Saving/exporting reports success only after native completion;
-failures retain filename, range, format and size for Retry.
+The filmstrip has a time ruler, In/Out handles, playhead, selected duration and
+one quiet **Export** action beside the trim controls below the video. Show it
+only when the selected trim differs from the original clip. Reserve its action
+row height so showing it does not move the timeline. Keep the three-dot clip menu at the far right of the header. Its **Compress clip**
+action opens the same form for the entire source with size limiting enabled.
+Selected clips retain their red border without an added thumbnail checkmark. The editor and Saved clips
+panel share top and bottom edges on desktop; media keeps its decoded aspect ratio
+and the storage summary remains at the bottom of the clip panel.
+The scrolling clip rail uses the available space above storage, with no separate
+viewport-height cap that hides details while leaving unused panel space.
+
+Export uses a compact source-aware dialog with Entire clip/Selected range,
+Format, Filename and a **Compress copy** switch. Offer Selected range only when
+there is an actual trim, and preserve its exact boundaries. Enabling compression
+reveals the maximum-size field and slider; disabling it preserves the value while
+omitting the limit. Use the shared Precision MP4/MKV selector, default to the source
+container and hide numeric spinner arrows. Resolution and frame rate remain
+automatic. The filename edits its stem only, and outputs go to the configured
+Replay folder as separate files. State once that the original is unchanged.
+Reduced motion skips the 220 ms foldout animation. Saving/exporting reports
+success only after native completion. Failures and cancellation retain the exact
+source, selected range, format, filename and limit for Retry, independent of later
+player changes.
 Show the original recording's measured size beside its source details and in
 progress. During encoding, show actual output bytes; analysis has no output-size
 counter. Completion reports the final committed file size.
