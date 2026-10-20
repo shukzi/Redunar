@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "repository": "shukzi/Redunar",
-  "checked_at": "2026-10-19T17:11:27+00:00",
+  "checked_at": "2026-10-20T15:23:43+00:00",
   "tracking_started_at": "2026-10-18T10:44:18Z",
   "included_filenames": [
     "redunar-app-linux-amd64.deb",
@@ -10,17 +10,17 @@
     "redunar-app-linux-x86_64.rpm",
     "redunar-app-linux-x86_64.tar.gz"
   ],
-  "recorded_downloads": 7,
-  "lifetime_downloads": 105,
+  "recorded_downloads": 14,
+  "lifetime_downloads": 112,
   "display": {
     "kind": "lifetime",
-    "value": 105,
-    "number": "105",
-    "badge_number": "105",
+    "value": 112,
+    "number": "112",
+    "badge_number": "112",
     "label": "Total downloads",
     "badge_label": "Total downloads",
     "title": "Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs."
   },
   "policy": "Published stable app packages only; includes updates and repeat downloads, not unique users or confirmed installs.",
-  "snapshot_id": "79c5490b2c4b5166d578d51e895822e46fcb39db644441d55ccb97dc6c18ad49"
+  "snapshot_id": "c0f6356e0f70424fd214c9924517395c43458b59be09a5fe53f907ce906cca0c"
 }
