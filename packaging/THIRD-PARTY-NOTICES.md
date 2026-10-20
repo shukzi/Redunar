@@ -50,10 +50,10 @@ choice is compatible with GPL-3.0-or-later. Both upstream texts are retained in
 `output/tauri-redunar/licenses/libc` and included in this local RPM. No upstream
 source was copied or modified. This does not replace the full release inventory.
 
-Optional Steam artwork is read from the user's existing local cache at runtime
-and preserved in Redunar's private artwork store for later display, including
-after uninstall. These remain user-local third-party game assets, not newly
-licensed bundled artwork.
+Steam artwork is read automatically at runtime from the user's existing local
+cache when available and preserved in Redunar's private artwork store for later
+display, including after uninstall. These remain user-local third-party game
+assets, not newly licensed bundled artwork.
 No game posters, banners, or fictional game images are included in the package;
 missing, unsupported, or oversized artwork falls back to Redunar's neutral icon.
 

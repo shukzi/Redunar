@@ -4,7 +4,9 @@
 
 <h1 align="center">Redunar</h1>
 
-<p align="center">Instant replay and in-game metrics for Linux.</p>
+<p align="center"><strong>Instant replay and in-game metrics for Linux.</strong></p>
+
+<p align="center">Save recent gameplay, trim your clips, and track performance.</p>
 
 <p align="center">
   <a href="https://github.com/shukzi/Redunar/releases/latest"><img src="https://img.shields.io/github/v/release/shukzi/Redunar?label=release&amp;color=b93646" alt="Latest release"></a>
@@ -15,170 +17,63 @@
 <p align="center">
   <a href="https://github.com/shukzi/Redunar/releases/latest">Download</a> ·
   <a href="#documentation">Documentation</a> ·
+  <a href="https://discord.gg/n5UkDEMQMX">Discord</a> ·
   <a href="https://github.com/shukzi/Redunar/issues/new/choose">Report a bug</a>
 </p>
 
+## Features
+
+- **Instant Replay** — save recent gameplay from a rolling buffer.
+- **In-game overlay** — view FPS, frame times, and system metrics. Customize colors, layout, and detail.
+- **In-app playback** — play back, trim, compress, and export clips.
+- **Session history** — compare frame pacing, temperatures, and load across each session.
+- **Game profiles** — use global defaults or customize settings for individual games.
+
 ## Install
 
-For x86_64 Linux with AMD/RADV graphics and Steam games. Check
-[hardware support](HARDWARE-SUPPORT.md) for requirements and current limits.
+For x86_64 Linux with AMD/RADV graphics and native Steam.
+See [hardware support](HARDWARE-SUPPORT.md) for requirements and current limitations.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL https://redunar.com/install.sh | sh
 ```
 
-The installer detects the Linux package format, verifies the signed release
-manifest, and uses the system package manager. Initial package support covers
-x86_64 glibc Linux in the Fedora/RHEL, Debian/Ubuntu, Arch, and openSUSE
-families.
+The installer selects your distribution’s package format, verifies the
+signed release manifest, and installs through your system package manager.
 
-## Features
+## Getting started
 
-- Instant replay recording with a rolling buffer
-- An in-game metrics overlay
-- Session history with frame and hardware readings
-- Clip trimming and playback in Redunar
-- Steam game discovery and launch profiles
+For a native Steam game:
 
-<details>
-<summary>Set up a native Steam game</summary>
+1. Open Redunar and scan for installed games in Library.
+2. Copy its Launch Options from **Play from Steam**.
+3. Paste them into Steam’s **Properties → General → Launch Options**.
+4. Launch the game from Steam or through Redunar.
 
-For a native Steam game, import it into Library. Its **Play from Steam** panel
-shows the required app-specific Launch Options and a **Copy**
-button above Game settings. Paste the value into that game's Steam
-**Properties → General → Launch Options**, then click **Play in Steam**. Redunar
-prepares the saved game profile and starts in the background if closed, using the
-Linux user service manager. If that manager is unavailable, open Redunar before
-pressing Play. Automatic startup stays in the tray. With Close to tray disabled,
-its temporary icon disappears when the game closes and session cleanup succeeds.
-Opening Redunar removes the temporary icon and keeps its window available.
-With Close to tray enabled, it remains in the tray after game exit. A desktop
-without a working tray uses a window fallback without requesting focus.
-Closing Redunar's window during a running game also keeps it in the tray until
-the game ends. With Close to tray disabled, it then quits unless reopened.
-See [DESIGN](DESIGN.md) for the complete lifetime rules.
-Replay still depends on
-actual hardware/runtime capabilities. Flatpak Steam capture remains unsupported.
-See [architecture](ARCHITECTURE.md) and [hardware support](HARDWARE-SUPPORT.md).
-
-</details>
-
-## Updates
-
-<details>
-<summary>Update Redunar and keep your settings and clips</summary>
-
-Redunar checks signed GitHub release metadata from Settings. Manual checks are
-available, and automatic checks run when the app starts by default. The native
-process verifies the manifest and package checksum before retaining a verified
-package. Update now requests polkit authorization; a fixed helper verifies the
-cached package again and installs it with the system package manager. Settings,
-clips, and history remain in place across an update.
-
-</details>
-
-## Uninstall
-
-<details>
-<summary>Remove the app or its local data</summary>
-
-Quit Redunar completely before removing the package.
-
-Remove Redunar with your distribution’s package manager:
-
-```sh
-# Fedora/RHEL-like
-sudo dnf remove redunar-app
-
-# Debian/Ubuntu-like
-sudo apt remove redunar-app
-
-# Arch-like
-sudo pacman -R redunar-app
-
-# openSUSE-like
-sudo zypper remove redunar-app
-```
-
-Removing the package leaves Redunar settings, history, cached artwork, and
-saved clips in place.
-
-To remove Redunar’s non-clip data too, then run:
-
-```sh
-rm -rf -- ~/.local/state/redunar/
-rm -rf -- ~/.local/share/redunar/artwork-v1
-rm -rf -- ~/.local/share/com.redunar.Redunar
-rm -rf -- ~/.cache/redunar/updates
-```
-
-This removes Redunar’s state, artwork cache, and update cache while preserving
-saved clips in `~/Videos/Redunar Replays`. Clips saved in another location are
-also untouched unless that location is inside `~/.local/state/redunar/`.
-
-</details>
-
-## Build and run locally
-
-<details>
-<summary>Build, launch, and check a local release build</summary>
-
-From the repository root:
-
-```sh
-tools/build-linux-release.sh
-# Explicit manual launch; uses real user state:
-tools/run-tauri-release-local.sh
-```
-
-Run the release checks without installing:
-
-```sh
-tools/check-tauri-release.sh
-```
-
-</details>
+Replay and metrics depend on your GPU, game, and driver.
+Flatpak Steam capture is currently unsupported.
 
 ## Documentation
 
-- [Development workflow](CONTRIBUTING.md) — branches, worktrees, checks, and review
-- [Release procedure](docs/RELEASING.md) — qualify candidates before publication
-- [Architecture](ARCHITECTURE.md) — components, lifecycle, persistence, and recovery
-- [Replay](REPLAY.md) — recording, shortcuts, playback, and audio behavior
-- [OpenGL completion](OPENGL-COMPLETION.md) — production parity checklist and acceptance gates
-- [Hardware support](HARDWARE-SUPPORT.md) — implemented platform scope and limits
-- [Testing](TESTING.md) — automated and manual verification
-- [Packaging](packaging/README.md) — package formats and dependency obligations
-- [Third-party notices](packaging/THIRD-PARTY-NOTICES.md) — dependency licenses and attribution
-- [Download statistics](docs/download-stats/README.md) — package counter policy and shared badge data
-- [Tauri application guide](output/tauri-redunar/README.md) — native development entry points
+- [Replay](REPLAY.md) — recording, shortcuts, playback, and audio.
+- [Hardware support](HARDWARE-SUPPORT.md) — requirements and compatibility.
+- [Development](CONTRIBUTING.md) — building, contributing, and local checks.
+- [Architecture](ARCHITECTURE.md) — how Redunar works.
 
-## Scope
+## Feedback
 
-Redunar does not require an account or collect telemetry. Steam discovery and
-artwork use files already present on the system. Capture and overlay features
-are capability-gated and report when required hardware or media support is
-unavailable.
+Join the [Discord community](https://discord.gg/n5UkDEMQMX) for questions, ideas, and shared setups.
 
-Initial support covers x86_64 Linux, AMD/RADV graphics, and Steam games.
-Compatibility may vary by game and system configuration; broader hardware,
-distribution, launcher, and game support is not claimed.
+Bug reports and feature suggestions are welcome.
+Use the [issue forms](https://github.com/shukzi/Redunar/issues/new/choose).
 
-## Contributions
-
-Redunar is open-source software licensed under GPL-3.0-or-later. Forks, bug
-reports, and feature suggestions are welcome. Contributions to the official
-repository are invitation-only.
-
-Use the [issue forms](https://github.com/shukzi/Redunar/issues/new/choose) to
-report a bug or suggest a feature. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-reporting guidance and the invited-contributor workflow.
+Contributions to the official repository are invitation-only.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-Redunar is licensed under the [GNU General Public License v3 or later](LICENSE).
-Third-party components retain their own licenses and notices; see
-[THIRD-PARTY-NOTICES.md](packaging/THIRD-PARTY-NOTICES.md).
+Redunar is licensed under [GPL-3.0-or-later](LICENSE).
 
-For use of the Redunar name and logo, see the [branding policy](TRADEMARKS.md).
-The policy does not change the software license or claim trademark registration.
+See [third-party notices](packaging/THIRD-PARTY-NOTICES.md)
+for dependency licenses and the [branding policy](TRADEMARKS.md)
+for use of the Redunar name and logo.
