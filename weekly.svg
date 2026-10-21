@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="161" height="22" viewBox="0 0 161 22" role="img" aria-label="Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.">
-<title>Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.</title><metadata>sha256:c0f6356e0f70424fd214c9924517395c43458b59be09a5fe53f907ce906cca0c</metadata>
+<title>Total observed app-package downloads across published stable releases. Includes updates and repeat downloads, not unique people or confirmed installs.</title><metadata>sha256:05cec51d887ebed06ecca99a2e70b78eb194255910c30e4a6270fdfb24319540</metadata>
 <defs><clipPath id="badge"><rect width="161" height="22" rx="5"/></clipPath></defs>
 <g clip-path="url(#badge)"><path fill="#171a1e" d="M0 0h121v22H0z"/><path fill="#672536" d="M121 0h40v22H121z"/></g>
 <rect x=".5" y=".5" width="160" height="21" rx="4.5" fill="none" stroke="#5b606944"/>
-<g font-family="DejaVu Sans,Arial,sans-serif" font-size="11" text-anchor="middle"><text x="60.5" y="15" fill="#bdc3cc">Total downloads</text><text x="141.0" y="15" fill="#fff0f2">112</text></g></svg>
+<g font-family="DejaVu Sans,Arial,sans-serif" font-size="11" text-anchor="middle"><text x="60.5" y="15" fill="#bdc3cc">Total downloads</text><text x="141.0" y="15" fill="#fff0f2">238</text></g></svg>
