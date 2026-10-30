@@ -160,10 +160,9 @@ for uncommitted work and confirming its result is retained.
 
 ## Documentation and releases
 
-Update facts in their owning guide. Keep significant decisions in
-[docs/decisions](docs/decisions/README.md), dated evidence in
-[docs/verification](docs/verification/README.md), and current priorities in ROADMAP.
-A historical pass does not certify a later commit.
+Update facts in their owning guide. Keep current guides concise and neutral.
+Release notes may summarize user-visible changes; dated test evidence belongs
+with the private qualification record and does not certify a later commit.
 
 Follow the [release procedure](docs/RELEASING.md) to qualify candidates, configure
 release controls, and publish reviewed packages.

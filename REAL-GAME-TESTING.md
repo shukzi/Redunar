@@ -1,58 +1,57 @@
 # Real-game validation
 
-Current Tauri procedure, reviewed September 13, 2026. These are explicit
-owner-controlled runs, separate from fake-hardware and browser fixture tests.
-Use only a game/test mode whose capture and overlay policy is approved.
+Use this procedure for a supported native Steam game after the exact build and
+package have passed automated checks. Real-game runs are separate from fake
+hardware, browser, and fixture tests.
 
-## Scope and prerequisites
+## Before the run
 
-The initial Steam scope is ARC Raiders and PEAK on the validated Fedora/AMD
-development host. Retained records cover owner runs with both. Counter-Strike 2
-and another Linux/WebKit environment are deferred from the initial release; do
-not describe them as supported evidence or launch incidental multiplayer tests.
-A new runtime change may require repeating an affected previously tested flow.
+Record the build or package identifier, source commit, distribution, desktop
+session, GPU and driver, game, and test date. If using an installed package,
+compare the installed executable, sidecars, helpers, resources, and permissions
+with that exact package. A build or package alone does not prove installation
+or a fresh process.
 
-Build the active Tauri release, verify installed binary and sidecars with
-`tools/check-installed-tauri-runtime.sh` when using the installed app, and fully
-quit/reopen it. Only one instance may own the live coordinator. Keep build,
-distribution, desktop/compositor, kernel, GPU/driver, mode, and test dates with
-results. A package build is not proof of installation or a fresh process.
+Use one Redunar instance and one session coordinator. Do not run a game test against
+an already-owned live coordinator. Keep recordings and existing user data
+outside disposable test state.
 
-Use the current
-[real-game acceptance checklist](output/tauri-redunar/REAL-GAME-ACCEPTANCE.md)
-for launch, visibility, shortcuts, capture, replay, history, and cleanup.
+## Launch and capture
 
-## Deferred performance and audio qualification
+1. Launch Redunar and confirm the game is detected with the intended profile.
+2. Launch the game through the supported native Steam path.
+3. Confirm the overlay and measurements show actual data or an honest
+   unavailable state.
+4. Start Instant Replay, wait for a buffer, and save a short clip.
+5. Check the saved file, audio result, playback, trimming, export, and history.
+6. Exercise the configured shortcuts, window visibility, and any affected
+   settings.
+7. End the game normally, then confirm session cleanup, process exit, and
+   resource release.
 
-Representative overhead, long-session measurements, and additional audio
-source/provider validation are deferred from the initial release. Keep the
-existing bounded probes and document the actual output-monitor fallback; do not
-claim game-only audio isolation or a completed performance study.
+Record failures and missing capabilities with the exact build and environment.
+Do not generalize a single game or GPU result to all Linux systems.
 
-For audio, verify the active default output and change outputs during the run.
-The implementation captures the mixed system output and can include other
-applications; do not claim game-only isolation. Use controlled nonsensitive
-sounds and record the selected backend, output, and mixed-audio result.
-[REPLAY.md](REPLAY.md) defines the behavior.
+## Audio and performance
 
-## Optional isolated diagnostics
+Redunar captures the mixed system output and may include other applications.
+Do not describe it as game-only audio. Record the selected output and audio
+backend when audio matters.
 
-After a production build, these existing runners exercise finite local Vulkan
-fixtures and isolate their session/replay state:
+Use `PERFORMANCE.md` for collection budgets and measurement procedures. Record
+measured overhead, frame pacing, drops, CPU/GPU use, and memory when the test
+covers performance. Synthetic results and successful startup do not establish
+real-game acceptance.
+
+## Isolated runners
+
+After a production build, these finite local runners exercise isolated Vulkan
+session and Replay paths:
 
 ```sh
 tools/run-tauri-vulkan-session-acceptance.sh
 tools/run-tauri-vulkan-replay-acceptance.sh
 ```
 
-They need a working local Vulkan display and, for replay, a supported hardware
-encoder. Read the selected runner before use; neither is a blanket instruction
-to execute ignored tests or open real games.
-
-Read-only corpus helpers are `tools/check-local-replay-codecs.sh` and
-`tools/check-flatpak-replay-codecs.sh`. They test decode/seek with available
-local runtimes; they do not establish a Flatpak game-capture bridge or another
-host's WebKit integration. See [TESTING.md](TESTING.md) for the isolated native
-WebKit playback probe and ordinary regression checks.
-
-Only current Tauri controls and runtime behavior are acceptance requirements.
+They require a working local Vulkan display and, for Replay, a supported
+hardware encoder. They do not replace a real-game run or qualify Flatpak Steam.
