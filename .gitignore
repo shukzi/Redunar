@@ -1,0 +1,28 @@
+# Local build products, including compatibility symlinks.
+/target
+/.redunar-build/
+**/target
+**/node_modules
+**/dist
+**/capture-runtime-build
+**/gen
+**/__pycache__
+*.pyc
+*.log
+*.pid
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+# Private credentials and signing material.
+*.key
+*-private.pem
+private*.pem
+*.p12
+*.pfx
+.secrets/
+# Keep external workspace material outside this repo.
+archive/
+site/
+website/

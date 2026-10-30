@@ -1,0 +1,55 @@
+#version 450
+
+// Direct KMS framebuffer image sampling. The imported VkImage format maps the
+// DRM byte layout into semantic RGBA, so texelFetch returns normalized RGB
+// without a host copy or a game-queue command.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D source_image;
+layout(r8, binding = 1) uniform writeonly image2D output_y;
+layout(rg8, binding = 2) uniform writeonly image2D output_uv;
+
+layout(push_constant) uniform SourceLayout {
+    uint width;
+    uint height;
+    uint unused_stride_words;
+    uint unused_offset_words;
+    uint unused_format;
+} source_layout;
+
+vec3 source_rgb(ivec2 position) {
+    return texelFetch(source_image, position, 0).rgb;
+}
+
+vec3 limited_bt709(vec3 rgb) {
+    float y = 0.0627451 + dot(rgb, vec3(0.182586, 0.614231, 0.062007));
+    float u = 0.501961 + dot(rgb, vec3(-0.100644, -0.338572, 0.439216));
+    float v = 0.501961 + dot(rgb, vec3(0.439216, -0.398942, -0.040274));
+    return clamp(vec3(y, u, v), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 chroma_position = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 source_size = ivec2(source_layout.width, source_layout.height);
+    ivec2 source_origin = chroma_position * 2;
+    if (source_origin.x >= source_size.x || source_origin.y >= source_size.y) {
+        return;
+    }
+
+    ivec2 p00 = source_origin;
+    ivec2 p10 = min(source_origin + ivec2(1, 0), source_size - 1);
+    ivec2 p01 = min(source_origin + ivec2(0, 1), source_size - 1);
+    ivec2 p11 = min(source_origin + ivec2(1, 1), source_size - 1);
+    vec3 c00 = limited_bt709(source_rgb(p00));
+    vec3 c10 = limited_bt709(source_rgb(p10));
+    vec3 c01 = limited_bt709(source_rgb(p01));
+    vec3 c11 = limited_bt709(source_rgb(p11));
+
+    imageStore(output_y, p00, vec4(c00.x, 0.0, 0.0, 1.0));
+    imageStore(output_y, p10, vec4(c10.x, 0.0, 0.0, 1.0));
+    imageStore(output_y, p01, vec4(c01.x, 0.0, 0.0, 1.0));
+    imageStore(output_y, p11, vec4(c11.x, 0.0, 0.0, 1.0));
+
+    vec2 uv = (c00.yz + c10.yz + c01.yz + c11.yz) * 0.25;
+    imageStore(output_uv, chroma_position, vec4(uv, 0.0, 1.0));
+}

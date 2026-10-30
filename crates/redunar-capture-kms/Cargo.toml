@@ -1,0 +1,18 @@
+[package]
+name = "redunar-capture-kms"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+redunar-core = { path = "../redunar-core" }
+
+# libdrm FFI and DMA-BUF descriptor ownership are isolated to this crate.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

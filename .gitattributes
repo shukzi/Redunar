@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.png binary
+*.ttf binary
+*.spv binary
+packaging/DEPENDENCY-LICENSES.md -text -whitespace
+output/tauri-redunar/licenses/** -text -whitespace
+# Preserve this upstream license verbatim, including its final blank line.
+vendor/glib/LICENSE whitespace=-blank-at-eof

@@ -1,0 +1,42 @@
+/* Draft actions belong to the viewport, outside individual setting panels. */
+.change-save-bar[hidden] { display: none !important; }
+#workspace .change-save-bar {
+  position: fixed;
+  left: calc(var(--sidebar-width) + 20px);
+  right: 20px;
+  bottom: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 0;
+  padding: 16px 20px;
+  border: 1px solid #333;
+  border-radius: 9px;
+  background: #141414;
+  box-shadow: 0 10px 28px #0008;
+}
+body[data-unsaved=true] #workspace { padding-bottom: 150px; }
+body[data-unsaved=true] #toast { bottom: 112px; }
+.change-save-bar .heading-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.game-profile-footer + .small-note { margin-top: 24px; }
+#dialog-title:focus { outline: none; }
+#dialog .dialog-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+@media(max-width:700px) {
+  #workspace .change-save-bar { left: 12px; right: 12px; bottom: 12px; padding: 14px; }
+  body[data-unsaved=true] #workspace { padding-bottom: 180px; }
+  body[data-unsaved=true] #toast { bottom: 164px; }
+}
+/* WebKit's dark canvas must not paint around the native transparent menu. */
+html[data-page=replay-menu] { color-scheme: normal; overflow: hidden; }
+html[data-page=replay-menu], body[data-page=replay-menu] { width: 100%; height: 100%; }
+body[data-page=replay-menu] .app-shell { min-height: 0; height: 100%; }
+body[data-page=replay-menu] #workspace { height: 100%; min-height: 0; overflow: auto; }
+
+/* Desktop preview shares the menu contents without a transparent native window. */
+#replay-preview{padding:0;border:0;border-radius:16px;background:transparent;color:var(--text);width:min(680px,calc(100vw - 48px));max-width:none;max-height:calc(100dvh - 32px);overflow:auto}
+#replay-preview::backdrop{background:#0008}
+#replay-preview .replay-menu-panel{box-sizing:border-box;width:100%;margin:0}
+#replay-preview h1:focus{outline:none}

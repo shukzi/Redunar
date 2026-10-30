@@ -1,0 +1,73 @@
+#version 450
+
+// One invocation converts a 2x2 source block. The full-resolution luma plane
+// receives four samples; the half-resolution chroma plane receives the
+// average chroma for the same block. Values use BT.709 limited range, which
+// must match the H.264 VUI produced by the session-parameter builder.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer PackedSource {
+    uint pixels[];
+} source_buffer;
+layout(r8, binding = 1) uniform writeonly image2D output_y;
+layout(rg8, binding = 2) uniform writeonly image2D output_uv;
+
+layout(push_constant) uniform SourceLayout {
+    uint width;
+    uint height;
+    uint stride_words;
+    uint offset_words;
+    uint format;
+} source_layout;
+
+vec3 source_rgb(ivec2 position) {
+    uint index = source_layout.offset_words
+        + uint(position.y) * source_layout.stride_words
+        + uint(position.x);
+    uint packed_word = source_buffer.pixels[index];
+    if (source_layout.format == 0 || source_layout.format == 1) {
+        vec4 packed = unpackUnorm4x8(packed_word);
+        return source_layout.format == 0 ? packed.rgb : packed.bgr;
+    }
+
+    float low = float(packed_word & 0x3ffu) / 1023.0;
+    float green = float((packed_word >> 10) & 0x3ffu) / 1023.0;
+    float high = float((packed_word >> 20) & 0x3ffu) / 1023.0;
+    // A2B10G10R10 stores R in the low ten bits; A2R10G10B10 stores B there.
+    return source_layout.format == 2
+        ? vec3(low, green, high)
+        : vec3(high, green, low);
+}
+
+vec3 limited_bt709(vec3 rgb) {
+    float y = 0.0627451 + dot(rgb, vec3(0.182586, 0.614231, 0.062007));
+    float u = 0.501961 + dot(rgb, vec3(-0.100644, -0.338572, 0.439216));
+    float v = 0.501961 + dot(rgb, vec3(0.439216, -0.398942, -0.040274));
+    return clamp(vec3(y, u, v), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 chroma_position = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 source_size = ivec2(source_layout.width, source_layout.height);
+    ivec2 source_origin = chroma_position * 2;
+    if (source_origin.x >= source_size.x || source_origin.y >= source_size.y) {
+        return;
+    }
+
+    ivec2 p00 = source_origin;
+    ivec2 p10 = min(source_origin + ivec2(1, 0), source_size - 1);
+    ivec2 p01 = min(source_origin + ivec2(0, 1), source_size - 1);
+    ivec2 p11 = min(source_origin + ivec2(1, 1), source_size - 1);
+    vec3 c00 = limited_bt709(source_rgb(p00));
+    vec3 c10 = limited_bt709(source_rgb(p10));
+    vec3 c01 = limited_bt709(source_rgb(p01));
+    vec3 c11 = limited_bt709(source_rgb(p11));
+
+    imageStore(output_y, p00, vec4(c00.x, 0.0, 0.0, 1.0));
+    imageStore(output_y, p10, vec4(c10.x, 0.0, 0.0, 1.0));
+    imageStore(output_y, p01, vec4(c01.x, 0.0, 0.0, 1.0));
+    imageStore(output_y, p11, vec4(c11.x, 0.0, 0.0, 1.0));
+
+    vec2 uv = (c00.yz + c10.yz + c01.yz + c11.yz) * 0.25;
+    imageStore(output_uv, chroma_position, vec4(uv, 0.0, 1.0));
+}

@@ -1,0 +1,37 @@
+name: Feature suggestion
+description: Suggest an improvement to Redunar.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/shukzi/Redunar/issues) before submitting a new suggestion.
+        Explain the problem and the outcome you need. Suggestions are welcome; implementation and delivery dates are not guaranteed.
+        Reports are public. Remove personal data, tokens, private recordings, and local filesystem paths from any text or attachments.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what makes it difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe how the improvement would help. You do not need to propose an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround or alternatives
+      description: How do you handle this now? Mention other approaches you considered, if any.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Optional. Add relevant examples, system or game details, or redacted screenshots.
+    validations:
+      required: false

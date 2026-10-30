@@ -1,0 +1,209 @@
+# Packaging contract
+
+Production Tauri packaging, reviewed October 24, 2026. The active package
+is `redunar-app`, with version/release owned by
+[`redunar-app.spec`](redunar-app.spec).
+
+## Build and verify
+
+Use [the release procedure](../docs/RELEASING.md) for qualification before
+publication. Compatibility binaries now live under
+`.redunar-build/linux/native/tauri/release` and their source/hash records under
+`.redunar-build/linux`. Packaging verifies the completed build manifest before
+staging. `REDUNAR_RELEASE_ROOT` is an explicit absolute-path override for a
+deliberate alternative payload; it does not establish compatibility validation.
+
+
+From the repository root:
+
+```sh
+tools/build-linux-release.sh
+tools/stage-tauri-package.sh /absolute/empty/staging/root
+tools/build-local-tauri-rpm.sh target/packages
+tools/build-tauri-deb.sh target/packages
+tools/build-tauri-arch-package.sh target/packages
+tools/build-tauri-opensuse-rpm.sh target/packages
+tools/build-tauri-portable.sh target/packages
+REDUNAR_RELEASE_SIGNING_KEY=/absolute/private.pem tools/build-install-assets.sh target/install-assets
+tools/check-tauri-release.sh
+```
+
+Staging and building do not install or run the app. Local development uses one
+stable `target/packages/redunar-app.rpm`, overwritten by subsequent builds.
+The full gate stages into temporary directories and checks metadata, package
+contents, installer detection, scripts, helper permissions, and the native
+privilege boundary.
+
+Installation and restarting the app are separate maintainer-controlled actions.
+After an authorized upgrade, compare installed components with the exact native
+package selected for that distribution and verify a fresh process loaded them,
+as described in [the release procedure](../docs/RELEASING.md#qualify-before-publication).
+A new file on disk cannot update an already-running process.
+
+## Active layout and privilege boundary
+
+- `/usr/bin/redunar-tauri`, with its embedded frontend.
+- `/usr/bin/redunar-steam-launch`, `libredunar_capture_vulkan.so`, and
+  `libredunar_capture_opengl.so` beside the app, resolved into private
+  per-launch graphics capture configuration.
+- `/usr/libexec/redunar-hotkey-helper`, running as the logged-in user.
+- `/usr/libexec/redunar-update-helper` and
+  `/usr/share/polkit-1/actions/com.redunar.install-update.policy`, for the
+  explicitly authorized update installation described below.
+- `/usr/lib/udev/rules.d/70-redunar-hotkeys.rules`, giving the active graphical
+  session keyboard and mouse event access through logind `uaccess`.
+- `com.redunar.Redunar.desktop`, matching AppStream metadata, canonical
+  Comet R icons, and required notices/licenses.
+
+The production identity follows the owned `redunar.com` namespace. The optional
+local desktop-registration helper removes only a launcher carrying its own
+`X-Redunar-Local-Tauri=true` marker. It never removes an unmanaged user
+launcher. Redunar's application state and recordings remain under the shared
+`redunar` state paths.
+
+The only deliberate package post-install action reloads udev and retriggers
+existing keyboard and mouse event devices so access can apply without reconnecting
+them.
+The application, capture components, and hotkey helper run as the logged-in user.
+Only an explicit update installation may request polkit authorization for the
+fixed update helper; the package sets no setuid/setgid bits or file capabilities.
+Package scripts must not install a global Vulkan layer, edit Steam settings,
+start monitoring, change hardware policy, or make network requests.
+
+Steam Launch Options are derived from the verified absolute wrapper path. Keep
+that path representable safely by the existing bridge format. Wrapper presence
+is not proof the game is configured; verify its saved local options read-only.
+
+## Runtime dependencies
+
+The current spec explicitly requires GTK3, WebKitGTK 4.1, libdrm, PulseAudio
+client utilities (`pactl` and `parec`), Opus, the `/usr/bin/ffmpeg` and
+`/usr/bin/ffprobe` files, and the architecture-specific
+`libavcodec-freeworld` capability, and the GStreamer `libgstlibav.so` plugin used
+by WebKit, in addition to discovered binary dependencies. The native tray uses existing GTK/GIO dependencies and does not require AppIndicator. KDE and DMS need an active StatusNotifier host; GNOME needs a compatible tray extension. Missing registration must leave normal window closing usable.
+
+Replay capture uses the hardware Vulkan Video path. An FFmpeg encoder name is
+not evidence that live hardware recording is supported. Audio prefers native
+PipeWire default-output capture through `pw-cat` when its node is available,
+then falls back to the output monitor through `parec` against PulseAudio or
+PipeWire's Pulse server. Opus encoding uses `libopus.so.0`; see
+[REPLAY.md](../REPLAY.md).
+
+Playback preparation and trimmed export invoke FFmpeg separately from recording.
+The executable file dependencies accept either `ffmpeg` or `ffmpeg-free` packages.
+RPM Fusion's `ffmpeg-libs` also provides `libavcodec-freeworld(x86-64)`; that same
+capability is provided by its standalone `libavcodec-freeworld` package used with
+Fedora's free tools. Requiring the capability, rather than a specific FFmpeg
+package, preserves a compatible installed stack while allowing the package
+manager to install missing requirements. Redunar declares no multimedia package
+Conflicts/Obsoletes and runs no package-swap command.
+
+The complete codec capability covers the current H.264 decoding/libx264 export
+and AAC needs; the app still checks actual encoder availability and reports
+clip-specific missing support. WebKit uses the GStreamer libav plugin with those system codecs for embedded
+playback; command-line FFmpeg alone does not install this plugin. Conversely,
+codec plugins for another framework are not automatically usable by FFmpeg. Do not claim a limited provider is fully
+compatible merely because an executable exists. A repository offering a required
+provider must already be available; the app does not add repositories or install
+missing codec packages. Explicit signed application updates use the separate
+update-helper boundary below. Provider/version synchronization remains the
+distribution's package-manager responsibility.
+
+## One-command installer and release assets
+
+The source-root [`install.sh`](../install.sh) is a publication template. Render
+it for public distribution with `shukzi/Redunar` and the release verification
+key:
+
+```sh
+tools/render-public-installer.sh shukzi/Redunar /absolute/output/install.sh packaging/release-signing-public.pem
+```
+
+The source template can also use `REDUNAR_GITHUB_REPOSITORY` for local plan
+checks. It runs through POSIX `sh`, including Debian/Ubuntu's `dash`; the
+Arch dependency path preserves each package as a literal argument and reuses
+an installed PipeWire or PulseAudio provider.
+
+The installer accepts no prompts of its own. It may still require the normal
+sudo or doas authentication required for a system installation. It downloads
+one asset, `SHA256SUMS`, and `SHA256SUMS.sig` over HTTPS. OpenSSL verifies the
+manifest with the public key embedded in the rendered installer before the
+selected package checksum is trusted.
+
+Running the installer explicitly selects that signed release even when its
+version is lower than the installed package. Debian/Ubuntu uses APT's
+`--allow-downgrades`; openSUSE uses Zypper's `--oldpackage`. DNF/Yum and Pacman
+install the exact local package through their normal package transaction.
+Selecting a lower package version does not make older code compatible with newer
+saved state: check release notes before choosing historical versions. Restart
+Redunar and any game using its capture components after installation. The
+installer does not restart them automatically.
+Pending packages use a channel-specific cache so packages retained by another
+channel cannot override current update selection. Other cache generations remain
+intact; profiles, history and recordings keep their existing paths.
+RPM authenticity comes from that pinned-key signed manifest and matching package
+hash. Since these RPMs have no separate OpenPGP header signature, the openSUSE
+transaction permits the authenticated local file with `--allow-unsigned-rpm`.
+System-wide repository trust and key settings are unchanged.
+
+In-app Update now uses the packaged polkit policy and fixed
+`/usr/libexec/redunar-update-helper`. The user-owned updater retains the signed
+manifest, signature, VERSION, and package under digest-named cache files. After
+authorization, the helper copies them into a private root-owned directory,
+checks the signature and both checksums again, then invokes the matching system
+package manager. A cancelled prompt leaves the package ready to retry. Existing
+cached packages without the signed metadata need a fresh update check before
+direct installation. A package installed before this helper requires one normal
+package-manager upgrade to acquire it.
+
+| Family | Release asset | Installation path |
+| --- | --- | --- |
+| Fedora/RHEL-like | `redunar-app-linux-x86_64.rpm` | `dnf` or `yum`, including dependency resolution |
+| Debian/Ubuntu-like | `redunar-app-linux-amd64.deb` | noninteractive `apt-get`, including dependency resolution |
+| Arch-like | `redunar-app-linux-x86_64.pkg.tar.zst` | dependency installation followed by native `pacman -U` ownership |
+| openSUSE-like | `redunar-app-linux-opensuse-x86_64.rpm` | noninteractive `zypper`, including dependency resolution |
+
+Current assets require x86_64 and glibc 2.36 or newer. The release binaries are
+built with networking disabled in the pinned Debian 12 build image after its
+one-time construction; their current highest referenced glibc symbol is 2.34.
+Debian 12 is the support floor because it also supplies WebKitGTK 4.1. Alpine/musl, ARM,
+NixOS, SteamOS, Bazzite, and other immutable/OSTree installations are rejected
+before download because the current payload and host integration do not support
+them safely. Distribution detection and archive construction are automated;
+only Fedora 44 has installed-runtime evidence. Other families still require VM
+installation, upgrade, uninstall, WebKit, codec, udev, Steam, and capture
+validation before release support can be claimed.
+
+The Fedora package requires a compatible complete codec provider already
+available to DNF. The installer never enables RPM Fusion, Packman, or another
+third-party repository. Arch and openSUSE now receive native package-manager
+ownership for upgrade and removal, while the portable archive remains a manual
+fallback artifact. Native package construction does not replace the outstanding
+installation/runtime validation on those systems.
+
+`tools/build-install-assets.sh` builds five stable asset names, adjacent checksum
+files, a `VERSION` file matching the Tauri and RPM package versions,
+`SHA256SUMS`, and its RSA/SHA-256 signature. The native updater requires
+`VERSION` to have an entry in the signed manifest before offering a package.
+The build requires a private-key
+path and refuses a key that does not match
+[`release-signing-public.pem`](release-signing-public.pem). The private key stays
+outside the source tree. The installer authenticates the manifest before using
+its checksum, and corrupted assets or signatures fail before package installation.
+
+The active RPM, DEB, Arch, and openSUSE package builders package the same staged
+glibc-baseline payload. The portable archive exercises the common staged layout
+but is not selected by the supported-family installer. A raw binary alone does
+not supply WebKit, codecs, shortcut access, or desktop integration.
+
+The app's capability checks stay independent of RPM or distribution names. Each
+future platform needs appropriate dependency metadata and validation. Preserve
+compatible installed providers, do not silently swap codecs or add repositories,
+and verify the download before execution. Public hosting, GitHub automation,
+and real cross-distribution acceptance remain separate release work.
+Keep [third-party notices](THIRD-PARTY-NOTICES.md) and an exact locked dependency
+inventory with distribution artifacts; preserve legal notices verbatim.
+Regenerate [the dependency inventory](DEPENDENCY-LICENSES.md) with
+`python3 tools/generate-license-inventory.py` after either Cargo lockfile or the
+Tauri npm lockfile changes. Release checks reject a stale inventory and run the
+shared `cargo-deny` license policy against both Rust workspaces.

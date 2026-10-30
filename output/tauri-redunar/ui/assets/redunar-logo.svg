@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" role="img" aria-labelledby="title desc">
+<title id="title">Redunar Comet R</title><desc id="desc">Redunar's crescent and comet tail mark on a black rounded-square background.</desc>
+<rect width="500" height="500" rx="100" fill="#000000"/>
+<!-- Optical alignment: the crescent carries more visual weight on the right. -->
+<g transform="translate(-65 54) scale(0.96)">
+<path d="M160 124C250 54 382 42 447 104c40 39 31 108-40 160l-42-44c44-30 61-62 39-88-36-42-145-41-244-8Z" fill="#F4F1EC"/>
+<path d="M65 198h257l137 148H345L226 220c-25-22-67-22-161-22Z" fill="#8F1F35"/>
+</g>
+</svg>

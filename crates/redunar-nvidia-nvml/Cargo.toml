@@ -1,0 +1,20 @@
+[package]
+name = "redunar-nvidia-nvml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = "0.2"
+redunar-core = { path = "../redunar-core" }
+
+# NVML is a native driver ABI. Keep its unsafe code in this small optional
+# adapter; the platform monitor and UI remain safe Rust.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

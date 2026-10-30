@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$workspace_root/tools/lib/release-paths.sh"
+verify_release_artifacts
+binary="$release_root/redunar-tauri"
+helper="$release_root/redunar-hotkey-helper"
+
+if [[ ! -x "$binary" || ! -x "$helper" || ! -x "$release_root/redunar-update-helper" || ! -f "$release_root/libredunar_capture_vulkan.so" || ! -f "$release_root/libredunar_capture_opengl.so" || ! -x "$release_root/redunar-steam-launch" ]]; then
+  printf '%s\n' 'Build the Tauri release first; one or more local runtime components are missing.' >&2
+  exit 1
+fi
+
+# The release directory already contains the capture layer and Steam bridge.
+# Point only the same-user shortcut monitor at its adjacent helper so this
+# checkout can be tested without copying files into /usr or requesting auth.
+exec env REDUNAR_HOTKEY_HELPER="$helper" "$binary" "$@"

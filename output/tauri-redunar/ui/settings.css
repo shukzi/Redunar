@@ -1,0 +1,32 @@
+/* Settings keeps the desktop choices together and uses one visual rhythm for
+   every preference. This file follows the shared control styles in index.html. */
+.settings-page{grid-template-columns:minmax(0,1.12fr) minmax(0,.88fr);gap:20px;align-items:start}
+.settings-page .panel{padding:28px}
+.settings-card-heading h2,.settings-page .updates-heading h2{font-size:19px;line-height:1.3}
+.settings-card-heading p,.settings-page .updates-heading p{margin-top:7px;font-size:12px;line-height:1.5;color:var(--muted)}
+.settings-option{padding:21px 0;border-top:1px solid var(--border)}
+.settings-card-heading+.settings-option{margin-top:24px}
+.settings-option:last-child{padding-bottom:0}
+.settings-option-main{display:flex;align-items:center;justify-content:space-between;gap:24px}
+.settings-option-copy{min-width:0}
+.settings-option h3{font-size:14px;font-weight:500;line-height:1.45;color:var(--text)}
+.settings-option-copy p{margin-top:5px;font-size:12px;line-height:1.55;color:#c1c1c1}
+.settings-option-note{margin:10px 64px 0 0;font-size:11px;line-height:1.6;color:var(--muted)}
+.settings-option .switch,.settings-page .updates-panel .switch{width:54px;min-width:54px;height:44px}
+.settings-option .switch span,.settings-page .updates-panel .switch span{width:44px;height:24px;border-color:#656168;background:#171719;transition:background .15s ease,border-color .15s ease}
+.settings-option .switch span:before,.settings-page .updates-panel .switch span:before{width:16px;height:16px;left:3px;top:3px;border-width:2px;border-color:#aaa4ac;background:#171719}
+.settings-option .switch input:checked+span,.settings-page .updates-panel .switch input:checked+span{background:#391b20;border-color:#a43d47}
+.settings-option .switch input:checked+span:before,.settings-page .updates-panel .switch input:checked+span:before{border-color:#f16870;background:#29171a;transform:translateX(20px)}
+.settings-option .switch:hover:not(:has(input:disabled)) span,.settings-page .updates-panel .switch:hover:not(:has(input:disabled)) span{border-color:#c6676e}
+.settings-log-action{min-height:34px;margin-top:12px;padding:6px 11px;font-size:11px}
+.settings-page .updates-heading{align-items:center}
+.settings-page .updates-heading .pill{white-space:nowrap;flex:none}
+.settings-page .update-check-row{margin-top:24px;padding:22px 0}
+.settings-page .update-check-row strong{white-space:normal;font-size:13px}
+.settings-page .update-check-row p{font-size:11px}
+.settings-page .updates-panel>.field{padding:20px 0;border-bottom:1px solid var(--border)}
+.settings-page .updates-panel>.field label{font-size:13px}
+.settings-page .updates-panel>.field p{font-size:11px}
+.settings-page .update-note{padding-top:19px;font-size:11px}
+@media(max-width:1200px){.settings-page{grid-template-columns:1fr}}
+@media(max-width:700px){.settings-page .panel{padding:21px}.settings-option-note{margin-right:0}.settings-page .update-check-row{grid-template-columns:auto minmax(0,1fr)}.settings-page .update-check-actions{grid-column:1/-1}.settings-page .update-check-actions .button{width:100%}.settings-page .updates-heading{align-items:start;flex-wrap:wrap}}
