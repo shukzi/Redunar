@@ -112,6 +112,12 @@ ends Redunar after cleanup.
 
 ## Metrics, capture, and overlay
 
+The shared service caches capture-runtime and encoder discovery for capability
+reads. Diagnostics refreshes that snapshot, including on its existing slow UI
+poll; explicit invalidation makes the next capability read discover again.
+Discovery, refresh and invalidation are serialized separately from live monitor,
+session and Replay state, whose readings continue to update independently.
+
 The monitor discovers sensors once, samples cached paths at 1 Hz, and publishes
 bounded latest snapshots. Missing sensors affect only their own values. Frame
 producers batch monotonic intervals over private transport and identify the

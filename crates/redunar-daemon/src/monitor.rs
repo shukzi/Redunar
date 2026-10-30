@@ -458,7 +458,7 @@ mod tests {
 
     impl TelemetrySource for FakeTelemetry {
         fn sample(&mut self) -> SystemSnapshot {
-            self.samples.fetch_add(1, Ordering::Relaxed);
+            let sample = self.samples.fetch_add(1, Ordering::Relaxed);
             self.used_named_thread.store(
                 thread::current().name() == Some("redunar-monitor"),
                 Ordering::Relaxed,
@@ -470,7 +470,7 @@ mod tests {
                     model: "Fixture CPU".into(),
                     logical_cpus: 8,
                     temperature_celsius: Some(50.0),
-                    utilization_percent: Some(10.0),
+                    utilization_percent: Some(f64::from(u32::try_from(sample % 100).unwrap())),
                     scaling_driver: Some("amd-pstate".into()),
                     governor: Some("performance".into()),
                     energy_performance_preference: Some("performance".into()),
@@ -523,6 +523,83 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert!(monitor.snapshot().revision > 0, "monitor did not publish");
+    }
+
+    fn wait_for_next_snapshot(
+        monitor: &MonitorHandle,
+        previous: &MonitorSnapshot,
+    ) -> Arc<MonitorSnapshot> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let latest = monitor.snapshot();
+            if latest.revision > previous.revision {
+                assert!(
+                    latest.diagnostics.hardware_samples > previous.diagnostics.hardware_samples
+                );
+                assert!(latest.diagnostics.game_scans > previous.diagnostics.game_scans);
+                assert_ne!(
+                    latest.hardware.as_ref().unwrap().cpu.utilization_percent,
+                    previous.hardware.as_ref().unwrap().cpu.utilization_percent
+                );
+                return latest;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "monitor stopped publishing live readings"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn live_monitor_advances_during_blocked_discovery_refresh_and_invalidation() {
+        use crate::capability_cache_tests::{fixture_service, snapshot};
+        use std::sync::mpsc;
+        let fixture = crate::tests::Fixture::new();
+        let (entered, started) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let resume = Mutex::new(resume);
+        let discoveries = AtomicU64::new(0);
+        let service = fixture_service(fixture.root.join("state"), move || {
+            let revision = discoveries.fetch_add(1, Ordering::Relaxed) + 1;
+            if revision == 2 {
+                entered.send(()).unwrap();
+                resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            }
+            snapshot(revision)
+        });
+        let _ = service.module_statuses();
+        let (monitor, _, _, _) = fake_monitor(MINIMUM_INTERVAL);
+        wait_for_first_snapshot(&monitor);
+        let before = monitor.snapshot();
+        let mut latest = thread::scope(|scope| {
+            let refresh = scope.spawn(|| service.refresh_capability_snapshot());
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            // Discovery is deliberately blocked while the real monitor loop
+            // samples changing fake telemetry and publishes a new revision.
+            let latest = wait_for_next_snapshot(&monitor, &before);
+            release.send(()).unwrap();
+            refresh.join().unwrap();
+            latest
+        });
+        for action in 0..3 {
+            match action {
+                0 => {
+                    let _ = service.module_statuses();
+                }
+                1 => service.invalidate_capability_snapshot(),
+                _ => service.refresh_capability_snapshot(),
+            }
+            let _ = service.module_statuses();
+            latest = wait_for_next_snapshot(&monitor, &latest);
+        }
+        assert!(latest.revision >= before.revision + 4);
+        assert!(before.diagnostics.hardware_samples < latest.diagnostics.hardware_samples);
+        assert_eq!(service.capability_discovery_revision(), 4);
     }
 
     #[test]
