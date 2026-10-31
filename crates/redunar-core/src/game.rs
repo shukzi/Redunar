@@ -339,32 +339,21 @@ impl ReplayQuality {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ReplayStorageLimit {
-    GiB5,
+    /// Legacy catalog quotas are migrated to this current policy on load.
     #[default]
-    GiB10,
-    GiB25,
-    GiB50,
     Unlimited,
 }
 
 impl ReplayStorageLimit {
     #[must_use]
     pub const fn gibibytes(self) -> u8 {
-        match self {
-            Self::GiB5 => 5,
-            Self::GiB10 => 10,
-            Self::GiB25 => 25,
-            Self::GiB50 => 50,
-            Self::Unlimited => 0,
-        }
+        0
     }
 
     #[must_use]
     pub const fn storage_bytes(self, bytes_per_gibibyte: u64) -> u64 {
-        match self {
-            Self::Unlimited => u64::MAX,
-            _ => (self.gibibytes() as u64).saturating_mul(bytes_per_gibibyte),
-        }
+        let _ = bytes_per_gibibyte;
+        u64::MAX
     }
 }
 
@@ -788,7 +777,7 @@ mod tests {
         assert_eq!(profile.replay.duration.seconds(), 30);
         assert_eq!(profile.replay.frame_rate.frames_per_second(), 60);
         assert_eq!(profile.replay.quality.target_megabits_per_second(), 24);
-        assert_eq!(profile.replay.storage_limit.gibibytes(), 10);
+        assert_eq!(profile.replay.storage_limit, ReplayStorageLimit::Unlimited);
         assert_eq!(OverlayOpacity::new(0).map(OverlayOpacity::percent), Ok(0));
         assert_eq!(
             OverlayOpacity::new(100).map(OverlayOpacity::percent),

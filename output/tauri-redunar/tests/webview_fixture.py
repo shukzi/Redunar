@@ -29,7 +29,7 @@ function artworkFixture(width,height,label,mime='image/png'){const canvas=docume
 const posterFixture=artworkFixture(300,450,'Poster');
 const bannerFixture=artworkFixture(1200,350,'Landscape banner');
 const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
-const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
+const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replay:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
 function replayPreferencesFixture(){return {microphone_mode:bridge.microphone||'off',microphone_source:bridge.source||null,microphone_gain_db:bridge.microphoneGain??0,initial_save_duration_seconds:30,resolved_directory:(bridge.folder??'/fixture/Videos')+'/Redunar Replays',custom_save_parent:bridge.folder??null,close_overlay_on_outside_click:bridge.outsideClick!==false};}
 const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/usr/bin/steam',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',launch_revision:'launch-1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',launch_revision:'launch-2',overrides:{overlay:false}}];
 const catalogCase=new URLSearchParams(location.search).get('catalog');

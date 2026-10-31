@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .as_deref()
         == Some("1");
     let nvidia = parse_nvidia(env::var_os(NVIDIA_ENV).as_deref())?;
-    let service = probe_service(&probe_state.directory, production_replay_requested, nvidia)?;
+    let service = probe_service(&probe_state.directory, production_replay_requested)?;
     if production_replay_requested {
         service.set_diagnostic_log_enabled(true)?;
         service.start_diagnostic_log_if_enabled();
@@ -271,14 +271,7 @@ fn parse_nvidia(value: Option<&std::ffi::OsStr>) -> io::Result<bool> {
     }
 }
 
-fn probe_service(
-    state: &Path,
-    production: bool,
-    nvidia: bool,
-) -> Result<RedunarService, Box<dyn Error>> {
-    // Retain legacy preference fixture coverage without changing admission.
-    // The production service relies on hardware capabilities for either value.
-    RedunarService::with_state_directory(state).set_beta_access_enabled(nvidia)?;
+fn probe_service(state: &Path, production: bool) -> Result<RedunarService, Box<dyn Error>> {
     RedunarService::with_state_directory(state)
         .set_replay_microphone(redunar_daemon::MicrophoneMode::Off)?;
     let service = if production {
@@ -1079,6 +1072,7 @@ fn default_arguments(executable: &Path) -> Result<Vec<OsString>, Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::{ProbeState, parse_nvidia, probe_service};
+    use redunar_daemon::AppPreferences;
     use std::ffi::OsStr;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1096,23 +1090,19 @@ mod tests {
     }
 
     #[test]
-    fn legacy_preferences_are_retained_without_a_runtime_opt_in() {
+    fn probe_service_uses_current_preferences() {
         let root = std::env::temp_dir().join(format!(
-            "redunar-capture-probe-beta-{}-{}",
+            "redunar-capture-probe-{}-{}",
             std::process::id(),
             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));
         for production in [false, true] {
-            for beta in [false, true, false] {
-                let service =
-                    probe_service(&root, production, beta).expect("configure isolated probe");
-                assert_eq!(
-                    service.app_preferences().expect("preferences").beta_access,
-                    beta
-                );
-                assert!(!format!("{service:?}").contains("beta_access_at_start"));
-                drop(service);
-            }
+            let service = probe_service(&root, production).expect("configure isolated probe");
+            assert_eq!(
+                service.app_preferences().expect("current preferences"),
+                AppPreferences::default()
+            );
+            drop(service);
         }
         fs::remove_dir_all(root).expect("remove fixture preferences");
     }

@@ -354,19 +354,6 @@ impl RedunarService {
         app_preferences::set_diagnostic_log(&self.state_directory, enabled)
     }
 
-    /// Preserve the legacy preference for old saved-state consumers. This
-    /// value has no effect on hardware discovery or feature admission.
-    ///
-    /// # Errors
-    ///
-    /// Propagates preference persistence failures.
-    pub fn set_beta_access_enabled(
-        &self,
-        enabled: bool,
-    ) -> Result<AppPreferences, AppPreferencesError> {
-        app_preferences::set_beta_access(&self.state_directory, enabled)
-    }
-
     /// Start the bounded diagnostic log tee when the saved preference enables
     /// it. Silent on failure: diagnostics must never block startup.
     pub fn start_diagnostic_log_if_enabled(&self) {
@@ -1904,12 +1891,12 @@ mod tests {
         let identity = |vendor| {
             Some(redunar_capture::CaptureGpuIdentity::new(vendor, [1; 16], [2; 16]).unwrap())
         };
-        for beta in [false, true] {
+        for nvidia_candidate in [false, true] {
             assert_eq!(
-                validate_game_gpu_identity(identity(0x1002), beta, true),
+                validate_game_gpu_identity(identity(0x1002), nvidia_candidate, true),
                 Ok(false)
             );
-            assert!(validate_game_gpu_identity(identity(0x8086), beta, true).is_err());
+            assert!(validate_game_gpu_identity(identity(0x8086), nvidia_candidate, true).is_err());
         }
         assert!(validate_game_gpu_identity(identity(0x10de), false, true).is_err());
         assert_eq!(
@@ -1936,11 +1923,11 @@ mod tests {
             }],
         )
         .unwrap();
-        for beta in [false, true] {
+        for nvidia_candidate in [false, true] {
             let error = vulkan_replay_backend_with_nvidia(
                 &frame,
                 redunar_core::ReplaySettings::default(),
-                beta,
+                nvidia_candidate,
             )
             .err()
             .unwrap();
@@ -2112,7 +2099,7 @@ mod tests {
                     duration: redunar_core::ReplayDuration::Seconds60,
                     frame_rate: redunar_core::ReplayFrameRate::Fps60,
                     quality: redunar_core::ReplayQuality::Efficient,
-                    storage_limit: redunar_core::ReplayStorageLimit::GiB5,
+                    storage_limit: redunar_core::ReplayStorageLimit::Unlimited,
                 },
                 ..redunar_core::GlobalGameProfile::default()
             })
@@ -2122,7 +2109,7 @@ mod tests {
             duration: redunar_core::ReplayDuration::Seconds120,
             frame_rate: redunar_core::ReplayFrameRate::Fps60,
             quality: redunar_core::ReplayQuality::High,
-            storage_limit: redunar_core::ReplayStorageLimit::GiB25,
+            storage_limit: redunar_core::ReplayStorageLimit::Unlimited,
         };
         let catalog = service
             .update_global_replay_settings(replay_settings)

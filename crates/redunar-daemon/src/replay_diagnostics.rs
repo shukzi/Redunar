@@ -226,7 +226,7 @@ mod tests {
             duration: ReplayDuration::Seconds15,
             frame_rate: ReplayFrameRate::Fps60,
             quality: ReplayQuality::Efficient,
-            storage_limit: ReplayStorageLimit::GiB5,
+            storage_limit: ReplayStorageLimit::Unlimited,
         };
         let report = run_replay_foundation_self_test(&fixture.0, settings).expect("self-test");
         assert_eq!(report.packet_count, 120);

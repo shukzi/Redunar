@@ -26,7 +26,8 @@ metainfo_version=$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' "$workspace_
 
 for component in spec_version tauri_version tauri_config_version metainfo_version; do
   if [[ "${!component}" != "$release_version" ]]; then
-    printf 'release version mismatch: tag=%s %s=%s\n' "$release_version" "${component%_version}" "${!component}" >&2
+    printf 'release version mismatch: tag=%s %s=%s; run tools/sync-release-version.sh %s\n' \
+      "$release_version" "${component%_version}" "${!component}" "$release_version" >&2
     exit 1
   fi
 done

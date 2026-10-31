@@ -123,7 +123,7 @@ test('catalog identifiers retain precision and edits do not mutate backend respo
  assert.equal(game.id,source[0].id);assert.equal(source[0].overrides.overlay,false);
 });
 test('defaults round-trip real backend values, including frame metrics, zero opacity and temperatures',()=>{
- const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replayEnabled:false,fps:60,quality:'Efficient',format:'MP4',storageLimit:'Unlimited',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
+ const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replay:true,fps:60,quality:'Efficient',format:'MP4',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
  const result=profilePayload(mapDefaults({values}),values.shortcuts);
  for(const key of Object.keys(values))assert.deepEqual(result[key],values[key]);
 });

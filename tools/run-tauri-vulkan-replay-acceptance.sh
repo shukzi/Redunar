@@ -4,12 +4,10 @@ set -euo pipefail
 
 workspace_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 tool_home=${HOME:?HOME must be set before running this acceptance test}
-beta_access=0
-if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --legacy-beta-on ) ]]; then
-  printf '%s\n' 'usage: tools/run-tauri-vulkan-replay-acceptance.sh [--legacy-beta-on]' >&2
+if [[ $# -ne 0 ]]; then
+  printf '%s\n' 'usage: tools/run-tauri-vulkan-replay-acceptance.sh' >&2
   exit 2
 fi
-if [[ $# -eq 1 ]]; then beta_access=1; fi
 source "$workspace_root/tools/lib/release-paths.sh"
 verify_release_artifacts
 layer="$release_root/libredunar_capture_vulkan.so"
@@ -62,7 +60,6 @@ XDG_CONFIG_HOME="$test_config" \
 XDG_RUNTIME_DIR="$test_runtime" \
 XDG_CACHE_HOME="$test_root/cache" \
 REDUNAR_TAURI_TEST_STATE="$test_state/redunar" \
-REDUNAR_TAURI_LEGACY_BETA_ACCESS="$beta_access" \
 RUSTUP_HOME="${RUSTUP_HOME:-$tool_home/.rustup}" \
 CARGO_HOME="${CARGO_HOME:-$tool_home/.cargo}" \
 REDUNAR_TAURI_CAPTURE_LAYER="$layer" \
