@@ -157,6 +157,7 @@ fn duration_millis(value: Option<std::time::Duration>) -> Option<u64> {
 pub async fn diagnostics_snapshot(
     monitor: tauri::State<'_, Monitor>,
     shortcuts: tauri::State<'_, crate::hotkeys::ShortcutMonitor>,
+    refresh_capabilities: Option<bool>,
 ) -> Result<DiagnosticsStatus, String> {
     let snapshot = monitor
         .0
@@ -164,6 +165,7 @@ pub async fn diagnostics_snapshot(
         .map_err(|_| "Monitor is unavailable")?
         .snapshot();
     let shortcut_status = shortcuts.snapshot();
+    let refresh_capabilities = refresh_capabilities.unwrap_or(false);
     // DRM/encoder discovery performs filesystem access independently of painting.
     tauri::async_runtime::spawn_blocking(move || {
         let diagnostics = &snapshot.diagnostics;
@@ -173,7 +175,9 @@ pub async fn diagnostics_snapshot(
             .ok()
             .and_then(|duration| u64::try_from(duration.as_millis()).ok());
         let service = service();
-        service.refresh_capability_snapshot();
+        if refresh_capabilities {
+            service.refresh_capability_snapshot();
+        }
         let readiness = service.replay_backend_readiness();
         let probe = service.replay_hardware_encoder_probe();
         let capture_runtime = format!("{:?}", service.capture_runtime_status());

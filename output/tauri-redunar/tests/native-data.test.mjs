@@ -306,6 +306,7 @@ test('Runtime polling keeps expensive diagnostics and display probing off the on
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  assert.match(source,/const slowRefresh=Date\.now\(\)-lastSlowRuntimeRefresh>=10000/);
  assert.match(source,/Promise\.allSettled\(\[call\('diagnostics_snapshot'\),call\('replay_display_capability'\)\]\)/);
+ assert.match(source,/reload-diagnostics.*diagnostics_snapshot.*refreshCapabilities:true/);
  assert.match(source,/filter\(\(\[name\]\)=>name!==['"]reload-diagnostics['"]\)/);
  assert.match(source,/function pollDelay\(\)/);
  assert.match(source,/1000:2500/);

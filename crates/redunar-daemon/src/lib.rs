@@ -1240,6 +1240,10 @@ impl RedunarService {
         &self,
         config: &CaptureSessionConfig,
     ) -> Result<CaptureSessionHandle, CaptureSessionError> {
+        // A new capture attempt is an explicit retry boundary. Discard the
+        // previous filesystem-backed evidence before evaluating the gates so a
+        // recovered runtime can become available without a polling refresh.
+        self.invalidate_capability_snapshot();
         let statuses = self.module_statuses();
         let gates = capture_session::CaptureModuleGates {
             frame_metrics: statuses.frame_metrics.allows_runtime(),

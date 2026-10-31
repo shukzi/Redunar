@@ -528,19 +528,28 @@ impl ProductionReplayRuntime {
             ));
         }
         let shared_audio = Arc::clone(&self.audio);
-        let result = pipeline.save_spooled_replay_as_with_audio_tracks(
-            duration,
-            output_format,
-            move |start, end| {
-                let audio = lock_unpoisoned(&shared_audio);
-                crate::ReplayAudioTracks {
-                    system: audio.buffer.snapshot_between(start, end),
-                    microphone: audio
-                        .microphone_recording
-                        .then(|| audio.microphone_buffer.snapshot_between(start, end)),
-                }
-            },
-        );
+        let audio_snapshot = move |start, end| {
+            let audio = lock_unpoisoned(&shared_audio);
+            crate::ReplayAudioTracks {
+                system: audio.buffer.snapshot_between(start, end),
+                microphone: audio
+                    .microphone_recording
+                    .then(|| audio.microphone_buffer.snapshot_between(start, end)),
+            }
+        };
+        let result = if pipeline.disk_history_available() {
+            pipeline.save_spooled_replay_as_with_audio_tracks(
+                duration,
+                output_format,
+                audio_snapshot,
+            )
+        } else {
+            pipeline.save_recent_replay_as_with_audio_tracks(
+                duration,
+                output_format,
+                audio_snapshot,
+            )
+        };
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(state, completed).is_err() {
             mark_failed(state, &self.audio, ReplayFailure::EncoderFailed);

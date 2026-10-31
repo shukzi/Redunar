@@ -1,6 +1,6 @@
 //! Capability discovery fixtures never inspect the host GPU or launch a game.
 use super::*;
-use redunar_core::ReplaySettings;
+use redunar_core::{ReplayDuration, ReplaySettings};
 use std::sync::{Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -291,6 +291,7 @@ fn live_session_and_replay_readings_advance_through_capability_changes() {
         )
         .unwrap();
         runtime.submit_frame(sequence, frame).unwrap();
+        runtime.take_completed_exports();
         runtime
             .submit_audio(redunar_capture_audio::EncodedOpusPacket {
                 timestamp_ns: (sequence - 1) * 20_000_000,
@@ -323,6 +324,89 @@ fn live_session_and_replay_readings_advance_through_capability_changes() {
     let ended = service.game_session_coordinator().status();
     assert_eq!(ended.phase, GameSessionPhase::Ended);
     assert!(ended.revision > running.revision);
+}
+
+#[test]
+fn runtime_save_uses_ram_history_when_disk_spool_fails() {
+    let fixture = crate::tests::Fixture::new();
+    let settings = ReplaySettings::default();
+    let runtime = ProductionReplayRuntime::unavailable(settings);
+    start_fake_replay(&runtime, &fixture.root, settings);
+
+    for sequence in 1..=60_u64 {
+        let frame = DmaBufReplayFrame::new_multi_object(
+            vec![std::fs::File::open("/dev/null").unwrap().into()],
+            320,
+            240,
+            u32::from_le_bytes(*b"XR24"),
+            0,
+            (sequence - 1) * 20_000_000,
+            20_000_000,
+            vec![DmaBufImagePlane {
+                object_index: 0,
+                offset: 0,
+                stride: 1_280,
+            }],
+        )
+        .unwrap();
+        runtime.submit_frame(sequence, frame).unwrap();
+        runtime.take_completed_exports();
+    }
+    let deadline = Instant::now() + WAIT;
+    while runtime.status().encoded_packet_count < 60 {
+        assert!(
+            Instant::now() < deadline,
+            "fake packets did not reach the spool"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let spool_directory = fixture.root.join("spool");
+    std::fs::remove_dir_all(&spool_directory).unwrap();
+    for (sequence, timestamp_ns) in [(101, 2_000_000_000), (102, 2_020_000_000)] {
+        let frame = DmaBufReplayFrame::new_multi_object(
+            vec![std::fs::File::open("/dev/null").unwrap().into()],
+            320,
+            240,
+            u32::from_le_bytes(*b"XR24"),
+            0,
+            timestamp_ns,
+            20_000_000,
+            vec![DmaBufImagePlane {
+                object_index: 0,
+                offset: 0,
+                stride: 1_280,
+            }],
+        )
+        .unwrap();
+        runtime.submit_frame(sequence, frame).unwrap();
+    }
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let stats = runtime
+            .diagnostic_counters()
+            .1
+            .expect("spool stats after failure");
+        if stats.segment_resyncs > 0 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "spool failure was not observed");
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    runtime
+        .save(ReplayDuration::Seconds15)
+        .expect("production save should use recent RAM history");
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let status = runtime.status();
+        if status.phase == ReplayPhase::Buffering && status.completed_save_revision == 1 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "RAM-backed save did not finish");
+        thread::sleep(Duration::from_millis(1));
+    }
+    runtime.shutdown().unwrap();
 }
 
 fn start_fake_replay(runtime: &ProductionReplayRuntime, root: &Path, settings: ReplaySettings) {

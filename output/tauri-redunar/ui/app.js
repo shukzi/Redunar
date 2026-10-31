@@ -1389,7 +1389,7 @@ const reloaders={
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
  'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
- 'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot');delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
+ 'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot',{refreshCapabilities:true});delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
 };
 document.addEventListener('pointerup',event=>{
  const toggle=event.target.closest?.('[data-player="toggle"]');

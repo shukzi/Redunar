@@ -1,4 +1,5 @@
 use crate::ReplayBudget;
+use redunar_core::ReplayDuration;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -7,6 +8,7 @@ use std::sync::Arc;
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MAX_PACKET_DURATION_NS: u64 = NANOSECONDS_PER_SECOND;
 const MAX_SINGLE_PACKET_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_IN_MEMORY_REPLAY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// One already-encoded video packet in capture order.
 ///
@@ -136,6 +138,7 @@ impl Error for ReplayRingError {}
 /// All limits are enforced synchronously on insertion. When eviction removes
 /// a keyframe, dependent packets are also removed so every non-empty snapshot
 /// begins at a decodable boundary.
+#[derive(Clone)]
 pub struct ReplayRing {
     duration_limit_ns: u64,
     packet_limit: u32,
@@ -156,7 +159,9 @@ impl ReplayRing {
             duration_limit_ns: u64::from(settings.duration.seconds())
                 .saturating_mul(NANOSECONDS_PER_SECOND),
             packet_limit: budget.frame_capacity.max(1),
-            byte_limit: budget.maximum_ring_bytes.max(1),
+            byte_limit: budget
+                .maximum_ring_bytes
+                .clamp(1, MAX_IN_MEMORY_REPLAY_BYTES),
             packets: VecDeque::new(),
             last_timestamp_ns: None,
             stored_bytes: 0,
@@ -217,6 +222,36 @@ impl ReplayRing {
     #[must_use]
     pub fn packets(&self) -> impl ExactSizeIterator<Item = &EncodedReplayPacket> {
         self.packets.iter()
+    }
+
+    /// Clone a keyframe-safe suffix for a bounded recent-history save.
+    pub(crate) fn snapshot_for_duration(&self, duration: ReplayDuration) -> Self {
+        let mut snapshot = self.clone();
+        let duration_limit_ns =
+            u64::from(duration.seconds()).saturating_mul(NANOSECONDS_PER_SECOND);
+        let mut evicted_packets = 0_u32;
+        let mut evicted_bytes = 0_u64;
+        while snapshot
+            .packets
+            .front()
+            .zip(snapshot.packets.back())
+            .is_some_and(|(first, last)| {
+                last.timestamp_ns
+                    .saturating_add(last.duration_ns)
+                    .saturating_sub(first.timestamp_ns)
+                    > duration_limit_ns
+            })
+        {
+            snapshot.evict_front(&mut evicted_packets, &mut evicted_bytes);
+            while snapshot
+                .packets
+                .front()
+                .is_some_and(|packet| !packet.keyframe)
+            {
+                snapshot.evict_front(&mut evicted_packets, &mut evicted_bytes);
+            }
+        }
+        snapshot
     }
 
     /// Maximum packet slots reserved for this bounded in-memory history.
@@ -401,6 +436,43 @@ mod tests {
                 .next()
                 .expect("packet retained")
                 .is_keyframe()
+        );
+    }
+
+    #[test]
+    fn high_variable_history_has_a_fixed_memory_ceiling() {
+        let settings = ReplaySettings {
+            duration: ReplayDuration::Seconds900,
+            frame_rate: ReplayFrameRate::Variable,
+            quality: ReplayQuality::High,
+            storage_limit: ReplayStorageLimit::GiB25,
+        };
+        let ring = ReplayRing::new(settings);
+        assert_eq!(ring.byte_capacity(), MAX_IN_MEMORY_REPLAY_BYTES);
+    }
+
+    #[test]
+    fn recent_snapshot_keeps_a_keyframe_safe_requested_suffix() {
+        let mut ring = ReplayRing::new(settings());
+        ring.duration_limit_ns = 60 * NANOSECONDS_PER_SECOND;
+        for index in 0..=20_u64 {
+            ring.push(packet(
+                index * NANOSECONDS_PER_SECOND,
+                index.is_multiple_of(2),
+                16,
+            ))
+            .expect("packet fits ring");
+        }
+
+        let snapshot = ring.snapshot_for_duration(ReplayDuration::Seconds15);
+        let first = snapshot.packets().next().expect("snapshot packet");
+        let last = snapshot.packets().last().expect("snapshot packet");
+        assert!(first.is_keyframe());
+        assert!(
+            last.timestamp_ns()
+                .saturating_add(last.duration_ns())
+                .saturating_sub(first.timestamp_ns())
+                <= 15 * NANOSECONDS_PER_SECOND
         );
     }
 

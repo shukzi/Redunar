@@ -66,6 +66,15 @@ Capture begins after encoder readiness. Accepted frames retain their timestamps.
 A rolling save starts at a retained keyframe, so actual duration can be shorter
 than the selected history window. Inspect the media result during acceptance.
 
+Disk-spool pressure is repaired from the bounded in-memory Replay window in
+timestamp order. The window is capped at 256 MiB, and transient queue pressure
+does not discard the active segment. If the repair window is exhausted, or a
+write, flush, rename, or retention operation fails, disk history becomes
+unavailable rather than publishing a clip with an unreported gap. Live capture
+continues in the bounded RAM window, recent RAM-backed saves remain available,
+and a disk-history save reports that it must be retried. A save may also ask
+for another attempt while deferred history is still catching up.
+
 ## Audio
 
 Replay records the mixed default system output through PulseAudio or PipeWire
