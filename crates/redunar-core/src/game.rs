@@ -339,12 +339,7 @@ impl ReplayQuality {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ReplayStorageLimit {
-    /// Retained for reading older profile values; current catalog persistence
-    /// normalizes every legacy quota to [`Self::Unlimited`].
-    GiB5,
-    GiB10,
-    GiB25,
-    GiB50,
+    /// Legacy catalog quotas are migrated to this current policy on load.
     #[default]
     Unlimited,
 }
@@ -352,21 +347,13 @@ pub enum ReplayStorageLimit {
 impl ReplayStorageLimit {
     #[must_use]
     pub const fn gibibytes(self) -> u8 {
-        match self {
-            Self::GiB5 => 5,
-            Self::GiB10 => 10,
-            Self::GiB25 => 25,
-            Self::GiB50 => 50,
-            Self::Unlimited => 0,
-        }
+        0
     }
 
     #[must_use]
     pub const fn storage_bytes(self, bytes_per_gibibyte: u64) -> u64 {
-        match self {
-            Self::Unlimited => u64::MAX,
-            _ => (self.gibibytes() as u64).saturating_mul(bytes_per_gibibyte),
-        }
+        let _ = bytes_per_gibibyte;
+        u64::MAX
     }
 }
 

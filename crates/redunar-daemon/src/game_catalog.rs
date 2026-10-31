@@ -1196,13 +1196,8 @@ fn parse_replay_quality(value: &str) -> Result<ReplayQuality, GameCatalogError> 
 }
 
 const fn replay_storage_token(value: ReplayStorageLimit) -> &'static str {
-    match value {
-        ReplayStorageLimit::GiB5 => "5",
-        ReplayStorageLimit::GiB10 => "10",
-        ReplayStorageLimit::GiB25 => "25",
-        ReplayStorageLimit::GiB50 => "50",
-        ReplayStorageLimit::Unlimited => "unlimited",
-    }
+    let _ = value;
+    "unlimited"
 }
 
 fn parse_replay_storage(value: &str) -> Result<ReplayStorageLimit, GameCatalogError> {
@@ -1210,8 +1205,7 @@ fn parse_replay_storage(value: &str) -> Result<ReplayStorageLimit, GameCatalogEr
         // Older catalogs exposed quota choices that the current replay budget
         // no longer applies. Keep those files readable, but normalize them to
         // the active unlimited policy so a stale value cannot imply a limit.
-        "5" | "10" | "25" | "50" => Ok(ReplayStorageLimit::Unlimited),
-        "unlimited" => Ok(ReplayStorageLimit::Unlimited),
+        "5" | "10" | "25" | "50" | "unlimited" => Ok(ReplayStorageLimit::Unlimited),
         _ => Err(GameCatalogError::new(
             "catalog replay storage limit is invalid",
         )),

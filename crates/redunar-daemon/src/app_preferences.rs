@@ -16,6 +16,7 @@ const PREFERENCES_HEADER_V5: &str = "redunar-app-preferences-v5";
 const PREFERENCES_HEADER_V6: &str = "redunar-app-preferences-v6";
 const PREFERENCES_HEADER_V7: &str = "redunar-app-preferences-v7";
 const PREFERENCES_HEADER_V8: &str = "redunar-app-preferences-v8";
+const PREFERENCES_HEADER_V9: &str = "redunar-app-preferences-v9";
 const MAX_PREFERENCES_BYTES: u64 = 1_024;
 const MIN_WINDOW_WIDTH: i32 = 800;
 const MAX_WINDOW_WIDTH: i32 = 7_680;
@@ -46,9 +47,6 @@ pub struct AppPreferences {
     /// bounded private file. Off by default; the file may contain game names,
     /// session identifiers, and failure detail useful for debugging.
     pub diagnostic_log: bool,
-    /// Legacy saved value retained for older builds and unrelated writes.
-    /// Hardware detection and Replay admission no longer consult it.
-    pub beta_access: bool,
 }
 
 impl Default for AppPreferences {
@@ -65,7 +63,6 @@ impl Default for AppPreferences {
             window_maximized: false,
             window_size_is_physical: false,
             diagnostic_log: false,
-            beta_access: false,
         }
     }
 }
@@ -125,17 +122,6 @@ pub(crate) fn set_diagnostic_log(
     let _operation = lock_operations();
     let mut preferences = load_unlocked(state_directory)?;
     preferences.diagnostic_log = enabled;
-    save_unlocked(state_directory, preferences)?;
-    Ok(preferences)
-}
-
-pub(crate) fn set_beta_access(
-    state_directory: &Path,
-    enabled: bool,
-) -> Result<AppPreferences, AppPreferencesError> {
-    let _operation = lock_operations();
-    let mut preferences = load_unlocked(state_directory)?;
-    preferences.beta_access = enabled;
     save_unlocked(state_directory, preferences)?;
     Ok(preferences)
 }
@@ -232,7 +218,7 @@ fn save_unlocked(
 
 fn serialize(preferences: AppPreferences) -> String {
     format!(
-        "{PREFERENCES_HEADER_V8}\nclose-to-tray={}\nwindow-width={}\nwindow-height={}\nwindow-maximized={}\nautomatic-updates={}\nwindow-size-units={}\ndiagnostic-log={}\nbeta-access={}\n",
+        "{PREFERENCES_HEADER_V9}\nclose-to-tray={}\nwindow-width={}\nwindow-height={}\nwindow-maximized={}\nautomatic-updates={}\nwindow-size-units={}\ndiagnostic-log={}\n",
         if preferences.close_to_tray {
             "on"
         } else {
@@ -260,7 +246,6 @@ fn serialize(preferences: AppPreferences) -> String {
         } else {
             "off"
         },
-        if preferences.beta_access { "on" } else { "off" },
     )
 }
 
@@ -295,6 +280,7 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         && version != PREFERENCES_HEADER_V6
         && version != PREFERENCES_HEADER_V7
         && version != PREFERENCES_HEADER_V8
+        && version != PREFERENCES_HEADER_V9
     {
         return Err("unsupported preferences version");
     }
@@ -310,6 +296,7 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         || version == PREFERENCES_HEADER_V6
         || version == PREFERENCES_HEADER_V7
         || version == PREFERENCES_HEADER_V8
+        || version == PREFERENCES_HEADER_V9
     {
         parse_bool(lines.next(), "automatic-updates")?
     } else {
@@ -318,6 +305,7 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
     let window_size_is_physical = if version == PREFERENCES_HEADER_V6
         || version == PREFERENCES_HEADER_V7
         || version == PREFERENCES_HEADER_V8
+        || version == PREFERENCES_HEADER_V9
     {
         match lines.next() {
             Some("window-size-units=physical") => true,
@@ -327,16 +315,19 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
     } else {
         true
     };
-    let diagnostic_log = if version == PREFERENCES_HEADER_V7 || version == PREFERENCES_HEADER_V8 {
+    let diagnostic_log = if version == PREFERENCES_HEADER_V7
+        || version == PREFERENCES_HEADER_V8
+        || version == PREFERENCES_HEADER_V9
+    {
         parse_bool(lines.next(), "diagnostic-log")?
     } else {
         false
     };
-    let beta_access = if version == PREFERENCES_HEADER_V8 {
-        parse_bool(lines.next(), "beta-access")?
-    } else {
-        false
-    };
+    // Version 8 carried the removed Beta access switch. Consume and discard
+    // it so an update can load old state and rewrite the current format.
+    if version == PREFERENCES_HEADER_V8 {
+        parse_bool(lines.next(), "beta-access")?;
+    }
     if lines.next().is_some()
         || !(MIN_WINDOW_WIDTH..=MAX_WINDOW_WIDTH).contains(&width)
         || !(MIN_WINDOW_HEIGHT..=MAX_WINDOW_HEIGHT).contains(&height)
@@ -351,7 +342,6 @@ fn parse(contents: &str) -> Result<AppPreferences, &'static str> {
         window_maximized: maximized,
         window_size_is_physical,
         diagnostic_log,
-        beta_access,
     })
 }
 
@@ -539,14 +529,36 @@ mod tests {
                 window_maximized: false,
                 window_size_is_physical: true,
                 diagnostic_log: false,
-                beta_access: false,
             }
         );
         let serialized = serialize(parsed);
-        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V8));
+        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V9));
         assert!(!serialized.contains("compatibility-switch"));
+        assert!(!serialized.contains("beta-access"));
         assert!(serialized.contains("automatic-updates=on"));
         assert!(serialized.contains("window-size-units=physical"));
+    }
+
+    #[test]
+    fn version_eight_beta_switch_is_discarded_and_current_format_omits_it() {
+        let parsed = parse(concat!(
+            "redunar-app-preferences-v8\n",
+            "close-to-tray=off\n",
+            "window-width=1280\n",
+            "window-height=720\n",
+            "window-maximized=off\n",
+            "automatic-updates=on\n",
+            "window-size-units=logical\n",
+            "diagnostic-log=off\n",
+            "beta-access=on\n",
+        ))
+        .expect("v8 preferences");
+        assert!(!parsed.close_to_tray);
+        assert!(parsed.automatic_updates);
+        assert!(!parsed.diagnostic_log);
+        let serialized = serialize(parsed);
+        assert_eq!(serialized.lines().next(), Some(PREFERENCES_HEADER_V9));
+        assert!(!serialized.contains("beta-access"));
     }
 
     #[test]
@@ -599,7 +611,6 @@ mod tests {
                 window_maximized: false,
                 window_size_is_physical: false,
                 diagnostic_log: false,
-                beta_access: false,
             }
         );
 
@@ -626,7 +637,6 @@ mod tests {
                 window_maximized: true,
                 window_size_is_physical: false,
                 diagnostic_log: false,
-                beta_access: false,
             }
         );
         assert!(tray.automatic_updates);

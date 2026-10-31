@@ -585,15 +585,7 @@ fn replay_enabled_vulkan_fixture_saves_clip_through_tauri_session_supervisor() {
         .expect("use the isolated Replay acceptance runner");
     let xdg_state = PathBuf::from(std::env::var_os("XDG_STATE_HOME").expect("isolated state"));
     assert_eq!(fixture_state, xdg_state.join("redunar"));
-    let beta = match std::env::var("REDUNAR_TAURI_LEGACY_BETA_ACCESS").as_deref() {
-        Ok("1") => true,
-        Ok("0") => false,
-        _ => panic!("runner must select the legacy saved-preference fixture"),
-    };
-    // Exercise old saved values without changing hardware admission.
-    // The normal production constructor must work with either legacy value.
     let preferences = RedunarService::with_state_directory(&fixture_state);
-    preferences.set_beta_access_enabled(beta).unwrap();
     preferences.set_diagnostic_log_enabled(true).unwrap();
     drop(preferences);
     let service = RedunarService::for_tauri().expect("backend ownership");

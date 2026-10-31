@@ -28,7 +28,7 @@ fn nvidia_only() -> Fixture {
 }
 
 #[test]
-fn nvidia_only_beta_retains_identity_with_unavailable_metrics() {
+fn nvidia_only_retains_identity_with_unavailable_metrics() {
     let fixture = nvidia_only();
     let (snapshot, readiness) = fixture
         .probe()
@@ -97,34 +97,35 @@ fn one_nvidia_alongside_amd_preserves_both_identities_and_amd_metrics() {
     let fixture = amd_fixture();
     render_card(&fixture, "card1", "renderD128", "0x1002\n");
     render_card(&fixture, "card2", "renderD129", "0x10de\n");
-    for beta in [false, true] {
-        let probe = fixture.probe().with_nvidia_discovery(beta);
+    for nvidia_candidate in [false, true] {
+        let probe = fixture.probe().with_nvidia_discovery(nvidia_candidate);
         let (snapshot, readiness) = probe.snapshot_with_nvidia_readiness().expect("probe");
         assert_eq!(
             readiness,
-            if beta {
+            if nvidia_candidate {
                 NvidiaReadiness::Ready
             } else {
                 NvidiaReadiness::NotRequested
             }
         );
-        assert_eq!(snapshot.gpus.len(), if beta { 2 } else { 1 });
+        assert_eq!(snapshot.gpus.len(), if nvidia_candidate { 2 } else { 1 });
         assert_eq!(snapshot.gpus[0].card, "card1");
         assert_eq!(snapshot.gpus[0].utilization_percent, Some(96.0));
         assert_eq!(snapshot.gpus[0].temperature_celsius, Some(62.0));
-        let mut sampler = LinuxTelemetrySampler::with_nvidia(probe.proc_root, probe.sys_root, beta)
-            .expect("sampler");
+        let mut sampler =
+            LinuxTelemetrySampler::with_nvidia(probe.proc_root, probe.sys_root, nvidia_candidate)
+                .expect("sampler");
         assert_eq!(sampler.sample().gpus[0].power_watts, Some(210.0));
         // The fixture has no PCI identity and must never load host NVML.
         assert_eq!(
             sampler.nvidia_diagnostics().readiness,
-            if beta {
+            if nvidia_candidate {
                 NvidiaReadiness::Unavailable
             } else {
                 NvidiaReadiness::NotRequested
             }
         );
-        if beta {
+        if nvidia_candidate {
             assert_eq!(
                 sampler.nvidia_diagnostics().failure,
                 Some(redunar_nvidia_nvml::NvmlFailure::PciIdentityUnavailable)

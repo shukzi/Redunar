@@ -344,9 +344,6 @@ impl DmaBufReplayFrame {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HardwareEncoderApi {
-    /// Compatibility label retained for older callers; production Replay uses
-    /// the Vulkan Video backend on supported hardware.
-    VaApi,
     VulkanVideo,
 }
 
@@ -354,8 +351,9 @@ pub enum HardwareEncoderApi {
 pub enum HardwareEncoderProbeBlocker {
     NoSupportedRenderNode,
     RenderNodeNotAccessible,
-    /// NVIDIA beta is withheld until the game's GPU can be matched on a
-    /// machine with multiple render nodes. Other candidates remain usable.
+    /// An ambiguous NVIDIA candidate is withheld until the game's GPU can be
+    /// matched on a machine with multiple render nodes. Other candidates
+    /// remain usable.
     NvidiaDeviceAttributionAmbiguous,
     EncodeProfileNotVerified,
     DmaBufImportNotVerified,
@@ -1191,11 +1189,11 @@ mod tests {
             .expect("driver fixture");
         }
 
-        fn probe(&self, beta: bool) -> HardwareEncoderProbe {
+        fn probe(&self, nvidia_candidate: bool) -> HardwareEncoderProbe {
             HardwareEncoderProbe::from_roots_with_nvidia(
                 &self.0.join("dev/dri"),
                 &self.0.join("sys/class/drm"),
-                beta,
+                nvidia_candidate,
             )
         }
     }
@@ -1207,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn nvidia_render_node_requires_beta_and_never_claims_production_ready() {
+    fn nvidia_render_node_requires_identification_and_never_claims_production_ready() {
         let fixture = ProbeFixture::new();
         fixture.node("renderD128", "nvidia", true);
         assert!(fixture.probe(false).candidates().is_empty());
@@ -1233,13 +1231,16 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_nvidia_probe_preserves_amd_candidates_with_beta_on_and_off() {
+    fn hybrid_nvidia_probe_preserves_amd_candidates_with_discovery_on_and_off() {
         let fixture = ProbeFixture::new();
         fixture.node("renderD128", "amdgpu", true);
         fixture.node("renderD129", "nvidia", true);
-        for beta in [false, true] {
-            let probe = fixture.probe(beta);
-            assert_eq!(probe.candidates().len(), if beta { 2 } else { 1 });
+        for nvidia_candidate in [false, true] {
+            let probe = fixture.probe(nvidia_candidate);
+            assert_eq!(
+                probe.candidates().len(),
+                if nvidia_candidate { 2 } else { 1 }
+            );
             assert_eq!(probe.candidates()[0].driver(), "amdgpu");
             assert!(probe.candidates()[0].is_accessible());
             assert!(probe.validation_allowed());

@@ -39,10 +39,10 @@ export function mapSessions(records) {
 }
 export function mapDefaults(workspace) {
   const s=workspace.values;
-  return {overlay:s.overlay,preset:s.preset,layout:s.layout,palette:s.palette,branding:s.branding!==false,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:s.replayEnabled,fps:s.fps,quality:s.quality,format:s.format};
+  return {overlay:s.overlay,preset:s.preset,layout:s.layout,palette:s.palette,branding:s.branding!==false,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:true,fps:s.fps,quality:s.quality,format:s.format};
 }
 export function profilePayload(draft, shortcuts) {
-  return {...draft,replayEnabled:draft.replay,storageLimit:'Unlimited',shortcuts};
+  return {...draft,shortcuts};
 }
 export function overridePayload(overrides) {
   return Object.fromEntries(['overlay','captureMetrics'].map(key=>[key,Object.hasOwn(overrides,key)?overrides[key]:null]));

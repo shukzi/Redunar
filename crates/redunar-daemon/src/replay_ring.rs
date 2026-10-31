@@ -331,7 +331,7 @@ mod tests {
             duration: ReplayDuration::Seconds15,
             frame_rate: ReplayFrameRate::Fps60,
             quality: ReplayQuality::Efficient,
-            storage_limit: ReplayStorageLimit::GiB5,
+            storage_limit: ReplayStorageLimit::Unlimited,
         }
     }
 
@@ -449,7 +449,7 @@ mod tests {
             duration: ReplayDuration::Seconds900,
             frame_rate: ReplayFrameRate::Variable,
             quality: ReplayQuality::High,
-            storage_limit: ReplayStorageLimit::GiB25,
+            storage_limit: ReplayStorageLimit::Unlimited,
         };
         let ring = ReplayRing::new(settings);
         assert_eq!(ring.byte_capacity(), MAX_IN_MEMORY_REPLAY_BYTES);

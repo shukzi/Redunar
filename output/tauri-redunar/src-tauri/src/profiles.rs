@@ -16,14 +16,9 @@ pub struct GlobalSettingsInput {
     metrics: Vec<String>,
     #[serde(rename = "captureMetrics")]
     capture_metrics: bool,
-    #[serde(rename = "replayEnabled")]
-    replay_enabled: bool,
     fps: u16,
     quality: String,
     format: String,
-    #[serde(rename = "storageLimit")]
-    #[serde(default = "default_storage_limit_input")]
-    storage_limit: String,
     shortcuts: std::collections::HashMap<String, String>,
 }
 
@@ -117,7 +112,6 @@ fn global_profile_from_input(
     // A visibility save must preserve recording fields that this form does not
     // edit. An unrelated recording change would correctly trip the active
     // recording lock before the live overlay update can run.
-    let storage_limit = current.replay.storage_limit;
     Ok(redunar_core::GlobalGameProfile {
         capture_metrics: input.capture_metrics,
         overlay_visible: input.overlay,
@@ -135,7 +129,7 @@ fn global_profile_from_input(
             duration: current.replay.duration,
             frame_rate,
             quality,
-            storage_limit,
+            storage_limit: redunar_core::ReplayStorageLimit::Unlimited,
         },
         // Replay activation is automatic in launch_plan. Preserve the stored
         // value so a visibility-only save never changes a locked recording field.
@@ -221,7 +215,6 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
             .map(|(label, _)| label.into())
             .collect(),
             capture_metrics: profile.capture_metrics,
-            replay_enabled: true,
             fps: replay_frame_rate_input(profile.replay.frame_rate),
             quality: match profile.replay.quality {
                 Q::Efficient => "Efficient",
@@ -230,15 +223,10 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
             }
             .into(),
             format: preferences.output_format.extension().to_uppercase(),
-            storage_limit: "Unlimited".into(),
             shortcuts,
         },
         live_notice: None,
     })
-}
-
-fn default_storage_limit_input() -> String {
-    "Unlimited".into()
 }
 
 #[tauri::command]
@@ -342,11 +330,9 @@ mod tests {
             opacity: 50,
             metrics: vec!["CPU temperature".into(), "GPU".into()],
             capture_metrics: true,
-            replay_enabled: false,
             fps: 60,
             quality: "Balanced".into(),
             format: "MKV".into(),
-            storage_limit: "10 GiB".into(),
             shortcuts: HashMap::new(),
         }
     }
@@ -385,7 +371,6 @@ mod tests {
         let service = RedunarService::with_state_directory(root.join("state"));
         let mut value = input();
         let mut current = global_profile_from_input(&value, Default::default()).unwrap();
-        current.replay.storage_limit = ReplayStorageLimit::GiB10;
         current.instant_replay = false;
         service.update_global_game_profile(current).unwrap();
         let format = service.replay_preferences().unwrap().output_format;
@@ -412,7 +397,7 @@ mod tests {
                 .unwrap();
             current = service.load_game_catalog().unwrap().global_profile;
             assert_eq!(current.overlay_visible, visible);
-            assert_eq!(current.replay.storage_limit, ReplayStorageLimit::GiB10);
+            assert_eq!(current.replay.storage_limit, ReplayStorageLimit::Unlimited);
             assert!(
                 !current.instant_replay,
                 "the stored replay flag is not rewritten by visibility"

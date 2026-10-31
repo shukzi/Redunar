@@ -179,7 +179,7 @@ try:
     test('Save shortcut works without a menu shortcut',"const input=document.querySelectorAll('[data-shortcut]')[1];input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'F8',bubbles:true}));click('[data-action=save-global]');",350)
     test('Menu can be reassigned after clearing all shortcuts',"const saved=bridge.calls.findLast(c=>c.command==='save_shortcuts');check(saved.args.shortcuts['15']==='F8'&&!saved.args.shortcuts.overlay,'save-only binding');const input=q('[data-shortcut]');input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'T',ctrlKey:true,shiftKey:true,bubbles:true}));click('[data-action=save-global]');",350)
     js("click('[data-global-tab=replay]')");pump()
-    test('Automatic replay replaces the global off control',"check(!q('[data-global=replayEnabled]'),'no replay off control');check(q('#workspace').textContent.includes('Automatic'),'automatic status');q('[data-replay-preference=outside]').click();",350)
+    test('Automatic replay replaces the global off control',"check(!q('[data-global=replay]'),'no replay off control');check(q('#workspace').textContent.includes('Automatic'),'automatic status');q('[data-replay-preference=outside]').click();",350)
     test('Outside click preference does not resend a stale shortcut',"const write=bridge.calls.findLast(c=>c.command==='set_replay_overlay_behavior');check(Object.keys(write.args).length===1&&Object.hasOwn(write.args,'closeOnOutsideClick'),'only changed preference sent');check(values.shortcuts.overlay==='Ctrl+Shift+T','new menu shortcut retained');")
     js("bridge.idle=false;window.dispatchEvent(new Event('focus'))")
     wait_for("q('[data-replay-preference=microphone]').disabled")

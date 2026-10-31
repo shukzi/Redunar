@@ -44,7 +44,7 @@ try:
     route('library');route('global')
     test('Global draft survives app navigation',"check(q('[data-global=scale]').value==='105','draft retained');check(!q('.settings-save-bar').hidden,'save action retained');click('[data-action=discard-global]');")
     route('settings')
-    test('Hardware features have no Stable or Beta selector',"check(!q('#feature-access')&&!q('.feature-access-row'),'no opt-in UI');check(!bridge.calls.some(c=>c.command==='set_beta_access'),'no opt-in command');check(q('[data-preference=automatic-updates]'),'automatic updates retained');bridge.installedUpdate=true;click('[data-action=check-for-updates]');",200)
+    test('Hardware features have no opt-in selector',"check(!q('#feature-access')&&!q('.feature-access-row'),'no opt-in UI');check(q('[data-preference=automatic-updates]'),'automatic updates retained');bridge.installedUpdate=true;click('[data-action=check-for-updates]');",200)
     test('Sidebar badge sits before readable version text',"const badge=q('.sidebar-update-badge'),version=q('.sidebar-version-number');check(badge&&version,'version state present');check(badge.getBoundingClientRect().right<version.getBoundingClientRect().left,'badge left with gap');check(version.closest('a').getAttribute('href')==='#settings','shared settings navigation');bridge.idle=true;window.dispatchEvent(new Event('focus'));",300)
     wait_for("!q('[data-action=restart-redunar]').disabled")
     test('Restart rejection clears pending state and remains recoverable',"click('[data-action=restart-redunar]');",300)

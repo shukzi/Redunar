@@ -60,7 +60,7 @@ const metricNames = ['FPS','Frame time','1% low','0.1% low','GPU','CPU','GPU tem
 
 const presetMetrics = preset => preset==='Compact'?['FPS','Frame time','GPU','CPU','GPU temperature','CPU temperature']:preset==='Detailed'?[...metricNames]:preset==='FPS only'?['FPS']:[];
 const effectiveMetrics = (preset,custom=[]) => preset==='Custom'?[...custom]:presetMetrics(preset||'Compact');
-const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,branding:true,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null,storage:null};
+const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,branding:true,position:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null};
 const durations = [15,30,60,120,180,300,600,900];
 let selectedSaveDuration = null;
 let defaults = structuredClone(initialDefaults);
