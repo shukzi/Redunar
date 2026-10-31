@@ -1,11 +1,11 @@
 use crate::replay_encoder::MAX_HARDWARE_INPUTS_IN_FLIGHT;
 use crate::{
     DmaBufReplayFrame, HardwareEncoderApi, HardwareEncoderBackend, ReplayAssemblyJob,
-    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayAudioTracks, ReplayClipStore,
-    ReplayEncoderError, ReplayOutputFormat, ReplayPacketFlow, ReplayPacketFlowPhase,
-    ReplayPushOutcome, ReplayRingStats, ReplaySegmentSpool, ReplaySpoolError, ReplaySpoolPhase,
-    ReplaySpoolStats, ReplaySpoolSubmitError, ReplayStoreError, ReplayVideoStream,
-    StoredReplayClip,
+    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayAudioTracks, ReplayBudget,
+    ReplayClipStore, ReplayEncoderError, ReplayOutputFormat, ReplayPacketFlow,
+    ReplayPacketFlowPhase, ReplayPushOutcome, ReplayRingStats, ReplaySegmentSpool,
+    ReplaySpoolError, ReplaySpoolPhase, ReplaySpoolStats, ReplaySpoolSubmitError, ReplayStoreError,
+    ReplayVideoStream, StoredReplayClip,
 };
 use redunar_core::{ReplayDuration, ReplayFrameRate, ReplaySettings};
 use std::collections::VecDeque;
@@ -454,8 +454,16 @@ impl ReplayHardwarePipeline {
             self.fail_closed();
             return Err(ReplayPipelineError::Encoder(error));
         }
-        self.flush_spool_backlog_before_save()
-            .map_err(ReplayPipelineError::Spool)?;
+        if let Err(error) = self.flush_spool_backlog_before_save() {
+            if !self.disk_history_available() {
+                return self.save_recent_replay_as_with_audio_tracks(
+                    duration,
+                    output_format,
+                    audio_snapshot,
+                );
+            }
+            return Err(ReplayPipelineError::Spool(error));
+        }
         let spool = self
             .spool
             .as_ref()
@@ -523,14 +531,34 @@ impl ReplayHardwarePipeline {
         let audio = audio_snapshot(window.0, window.1);
         let stream = self.flow.stream().clone();
         let store = self.store.clone();
+        let mut save_settings = self.settings;
+        save_settings.duration = duration;
         ReplayAssemblyJob::spawn("redunar-replay-ram-save", move |cancel| {
             let audio = crate::replay_audio_mix::mix_audio_tracks(audio, window, &cancel).map_err(
                 |error| {
                     ReplaySpoolError::new(format!("could not mix Replay snapshot audio: {error}"))
                 },
             )?;
-            store
-                .save_with_audio_tracks_as(&stream, &ring, &audio, output_format)
+            let mut packets = crate::replay_packet_source::MemoryPackets::new(ring, cancel)
+                .map_err(|error| ReplaySpoolError::new(error.to_string()))?;
+            let requested_store = store
+                .open_existing_with_budget(ReplayBudget::from_settings(save_settings))
+                .map_err(|error| {
+                    ReplaySpoolError::new(format!(
+                        "could not prepare Replay storage for the requested interval: {error}"
+                    ))
+                })?;
+            // RAM fallback must preserve the same filesystem reserve and
+            // cancellation behavior as the normal disk-backed save.
+            requested_store
+                .ensure_free_space_for_clip()
+                .map_err(|error| {
+                    ReplaySpoolError::new(format!(
+                        "could not reserve space for assembled Replay: {error}"
+                    ))
+                })?;
+            requested_store
+                .save_streaming_tracks(&stream, &mut packets, &audio, output_format)
                 .map_err(|error| {
                     ReplaySpoolError::new(format!("could not store assembled Replay: {error}"))
                 })
@@ -843,6 +871,8 @@ fn in_memory_settings(mut settings: ReplaySettings) -> ReplaySettings {
 
 #[cfg(test)]
 mod tests {
+    mod recovery;
+
     use super::*;
     use crate::{
         DmaBufPlane, EncodedPacketBatch, EncodedReplayPacket, HardwareEncodeOutput, ReplayBudget,
@@ -895,6 +925,7 @@ mod tests {
         fail_drain: bool,
         fail_shutdown: bool,
         completion_delay: usize,
+        payload_bytes: usize,
         pending: VecDeque<(u64, u64, u64, bool)>,
     }
 
@@ -917,6 +948,7 @@ mod tests {
                 fail_drain: false,
                 fail_shutdown: false,
                 completion_delay: 0,
+                payload_bytes: 6,
                 pending: VecDeque::new(),
             }
         }
@@ -959,18 +991,18 @@ mod tests {
 
         fn output(
             completed: impl IntoIterator<Item = (u64, u64, u64, bool)>,
+            payload_bytes: usize,
         ) -> Result<HardwareEncodeOutput, ReplayEncoderError> {
             let completed: Vec<_> = completed.into_iter().collect();
             let packets = completed
                 .iter()
                 .map(|(_, timestamp_ns, duration_ns, keyframe)| {
-                    EncodedReplayPacket::new(
-                        *timestamp_ns,
-                        *duration_ns,
-                        *keyframe,
-                        vec![0, 0, 0, 2, if *keyframe { 0x65 } else { 0x41 }, 0x88],
-                    )
-                    .expect("fake packet")
+                    let mut bytes = vec![0x88; payload_bytes];
+                    bytes[..4]
+                        .copy_from_slice(&u32::try_from(payload_bytes - 4).unwrap().to_be_bytes());
+                    bytes[4] = if *keyframe { 0x65 } else { 0x41 };
+                    EncodedReplayPacket::new(*timestamp_ns, *duration_ns, *keyframe, bytes)
+                        .expect("fake packet")
                 })
                 .collect();
             HardwareEncodeOutput::new(
@@ -1005,16 +1037,18 @@ mod tests {
                 input_sequence,
                 frame.timestamp_ns,
                 frame.duration_ns,
-                force_keyframe,
+                // Large-payload fixtures use independent frames to exercise
+                // byte admission without hitting the encoder's GOP bound.
+                force_keyframe || self.payload_bytes > 6,
             );
             if self.completion_delay > 0 {
                 let completed = (self.pending.len() >= self.completion_delay)
                     .then(|| self.pending.pop_front())
                     .flatten();
                 self.pending.push_back(current);
-                Self::output(completed)
+                Self::output(completed, self.payload_bytes)
             } else {
-                Self::output(Some(current))
+                Self::output(Some(current), self.payload_bytes)
             }
         }
 
@@ -1024,7 +1058,10 @@ mod tests {
                     "injected drain".to_owned(),
                 ));
             }
-            Self::output(self.pending.drain(..).collect::<Vec<_>>())
+            Self::output(
+                self.pending.drain(..).collect::<Vec<_>>(),
+                self.payload_bytes,
+            )
         }
 
         fn shutdown(&mut self) -> Result<(), ReplayEncoderError> {
@@ -1465,7 +1502,19 @@ mod tests {
             0
         );
         pipeline
-            .save_replay()
+            .save_spooled_replay_as_with_audio_tracks(
+                ReplayDuration::Seconds15,
+                ReplayOutputFormat::Matroska,
+                |_, _| ReplayAudioTracks {
+                    system: ReplayAudioSnapshot {
+                        stream: redunar_capture_audio::OpusStreamDescription::default(),
+                        packets: Vec::new(),
+                    },
+                    microphone: None,
+                },
+            )
+            .expect("disk failure should switch to recent RAM replay")
+            .join()
             .expect("recent RAM replay remains savable");
         assert_eq!(pipeline.phase(), ReplayPipelinePhase::Buffering);
         pipeline.shutdown().expect("shutdown");

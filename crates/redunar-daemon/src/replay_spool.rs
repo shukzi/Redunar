@@ -235,6 +235,8 @@ enum SpoolCommand {
     Packet(EncodedReplayPacket),
     #[cfg(test)]
     SealSnapshot(mpsc::Sender<Result<(), ReplaySpoolError>>),
+    #[cfg(test)]
+    Pause(mpsc::Sender<()>, Receiver<()>),
     PrepareSnapshot {
         requested: ReplayDuration,
         response: mpsc::Sender<Result<Vec<(ReplaySpoolSegment, File)>, ReplaySpoolError>>,
@@ -679,6 +681,19 @@ impl ReplaySegmentSpool {
         ReplaySpoolPhase::from_code(self.shared.phase.load(Ordering::Acquire))
     }
 
+    #[cfg(test)]
+    pub(crate) fn pause_worker(&self) -> mpsc::Sender<()> {
+        let (entered, ready) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        self.sender
+            .send(SpoolCommand::Pause(entered, resume))
+            .expect("pause spool");
+        ready
+            .recv_timeout(Duration::from_secs(5))
+            .expect("spool reached pause");
+        release
+    }
+
     #[must_use]
     pub fn stats(&self) -> ReplaySpoolStats {
         let index = *self
@@ -880,6 +895,13 @@ fn run_worker(
     let mut next_sequence = lock_index(index).generation.saturating_add(1);
     while let Ok(command) = receiver.recv() {
         match command {
+            #[cfg(test)]
+            SpoolCommand::Pause(entered, resume) => {
+                let _ = entered.send(());
+                // Dropping the release sender also resumes cleanup after a
+                // failed test, so a fixture cannot strand the worker.
+                let _ = resume.recv();
+            }
             SpoolCommand::Packet(packet) => {
                 let packet_bytes = u64::try_from(packet.bytes().len()).unwrap_or(u64::MAX);
                 shared.queued_packets.fetch_sub(1, Ordering::Relaxed);

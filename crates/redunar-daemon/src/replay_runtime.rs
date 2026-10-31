@@ -455,7 +455,31 @@ impl ProductionReplayRuntime {
         let worker = thread::Builder::new()
             .name("redunar-replay-save-status".to_owned())
             .spawn(move || {
-                let result = job.join();
+                let mut result = job.join();
+                if result.is_err() {
+                    let fallback = {
+                        let mut state = lock_unpoisoned(&runtime.inner);
+                        let disk_unavailable = state
+                            .pipeline
+                            .as_ref()
+                            .is_some_and(|pipeline| !pipeline.disk_history_available());
+                        if state.status.phase == ReplayPhase::Saving
+                            && !state.stopping
+                            && disk_unavailable
+                        {
+                            let fallback = runtime.prepare_ram_save(&mut state, duration).ok();
+                            if let Some(fallback) = &fallback {
+                                state.save_cancel = Some(fallback.cancellation());
+                            }
+                            fallback
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(fallback) = fallback {
+                        result = fallback.join();
+                    }
+                }
                 let mut state = lock_unpoisoned(&runtime.inner);
                 match result {
                     Ok(stored) if state.status.phase == ReplayPhase::Saving => {
@@ -544,11 +568,7 @@ impl ProductionReplayRuntime {
                 audio_snapshot,
             )
         } else {
-            pipeline.save_recent_replay_as_with_audio_tracks(
-                duration,
-                output_format,
-                audio_snapshot,
-            )
+            return self.prepare_ram_save(state, duration);
         };
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(state, completed).is_err() {
@@ -567,6 +587,58 @@ impl ProductionReplayRuntime {
                 if matches!(error, ReplayPipelineError::InsufficientHistory) {
                     return Err(ReplayRuntimeError::new(error.to_string()));
                 }
+                if matches!(
+                    error,
+                    ReplayPipelineError::Spool(_) | ReplayPipelineError::Store(_)
+                ) {
+                    state.status.last_failure = Some(ReplayFailure::StorageFailed);
+                } else {
+                    mark_failed(state, &self.audio, replay_failure(&error));
+                }
+                Err(ReplayRuntimeError::new(error.to_string()))
+            }
+        }
+    }
+
+    fn prepare_ram_save(
+        &self,
+        state: &mut RuntimeState,
+        duration: ReplayDuration,
+    ) -> Result<crate::ReplayAssemblyJob, ReplayRuntimeError> {
+        let output_format = state.output_format;
+        let pipeline = state
+            .pipeline
+            .as_mut()
+            .ok_or_else(|| ReplayRuntimeError::new("Instant Replay is not recording"))?;
+        let shared_audio = Arc::clone(&self.audio);
+        let audio_snapshot = move |start, end| {
+            let audio = lock_unpoisoned(&shared_audio);
+            crate::ReplayAudioTracks {
+                system: audio.buffer.snapshot_between(start, end),
+                microphone: audio
+                    .microphone_recording
+                    .then(|| audio.microphone_buffer.snapshot_between(start, end)),
+            }
+        };
+        let result = pipeline.save_recent_replay_as_with_audio_tracks(
+            duration,
+            output_format,
+            audio_snapshot,
+        );
+        let completed = pipeline.take_completed_inputs();
+        if enqueue_completed(state, completed).is_err() {
+            mark_failed(state, &self.audio, ReplayFailure::EncoderFailed);
+            return Err(ReplayRuntimeError::new(
+                "Instant Replay completion queue exceeded its fixed bound",
+            ));
+        }
+        match result {
+            Ok(job) => {
+                state.status.phase = ReplayPhase::Saving;
+                state.status.last_failure = None;
+                Ok(job)
+            }
+            Err(error) => {
                 if matches!(
                     error,
                     ReplayPipelineError::Spool(_) | ReplayPipelineError::Store(_)

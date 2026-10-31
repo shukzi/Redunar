@@ -224,6 +224,10 @@ impl ReplayRing {
         self.packets.iter()
     }
 
+    pub(crate) fn into_packets(self) -> VecDeque<EncodedReplayPacket> {
+        self.packets
+    }
+
     /// Clone a keyframe-safe suffix for a bounded recent-history save.
     pub(crate) fn snapshot_for_duration(&self, duration: ReplayDuration) -> Self {
         let mut snapshot = self.clone();
