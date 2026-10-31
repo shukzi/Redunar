@@ -27,6 +27,16 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.1" date="2026-10-31">
+      <description>
+        <ul>
+          <li>Improved Replay recovery during tested storage stalls with bounded repair and queued-packet recovery.</li>
+          <li>Retired obsolete fixed frame-rate options while preserving migration of saved legacy values and resolution-aware Variable FPS.</li>
+          <li>Reduced repeated capability-discovery work through shared caching and serialized refresh.</li>
+          <li>Retired obsolete settings and compatibility surfaces while keeping older saved preferences readable during migration.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-30">
       <description>
         <ul>
