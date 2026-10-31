@@ -344,6 +344,8 @@ impl DmaBufReplayFrame {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HardwareEncoderApi {
+    /// Compatibility label retained for older callers; production Replay uses
+    /// the Vulkan Video backend on supported hardware.
     VaApi,
     VulkanVideo,
 }

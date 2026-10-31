@@ -339,11 +339,13 @@ impl ReplayQuality {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ReplayStorageLimit {
+    /// Retained for reading older profile values; current catalog persistence
+    /// normalizes every legacy quota to [`Self::Unlimited`].
     GiB5,
-    #[default]
     GiB10,
     GiB25,
     GiB50,
+    #[default]
     Unlimited,
 }
 
@@ -788,7 +790,7 @@ mod tests {
         assert_eq!(profile.replay.duration.seconds(), 30);
         assert_eq!(profile.replay.frame_rate.frames_per_second(), 60);
         assert_eq!(profile.replay.quality.target_megabits_per_second(), 24);
-        assert_eq!(profile.replay.storage_limit.gibibytes(), 10);
+        assert_eq!(profile.replay.storage_limit, ReplayStorageLimit::Unlimited);
         assert_eq!(OverlayOpacity::new(0).map(OverlayOpacity::percent), Ok(0));
         assert_eq!(
             OverlayOpacity::new(100).map(OverlayOpacity::percent),

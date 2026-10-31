@@ -5,9 +5,11 @@
 1. Merge the reviewed implementation pull requests into `main`; validate the
    integrated tree.
 2. Set version metadata on a release task branch using the package specification
-   as authority. Keep the native Cargo manifest, Tauri JSON config, and latest
-   AppStream release in sync.
-   Run `tools/check-release-inputs.sh vMAJOR.MINOR.PATCH`.
+   as authority. Run `tools/sync-release-version.sh MAJOR.MINOR.PATCH` so the
+   native Cargo manifest, Tauri JSON config, and latest AppStream release stay
+   synchronized, then run `tools/check-release-inputs.sh vMAJOR.MINOR.PATCH`.
+   Internal shared Rust crate versions are separate dependency metadata and do
+   not identify the packaged application release.
 3. Prepare `docs/releases/vMAJOR.MINOR.PATCH.md` with the reviewed release notes.
    The release title will be exactly the tag, for example `v0.1.11`.
 4. Review the candidate changes, release notes, acceptance evidence, and recovery

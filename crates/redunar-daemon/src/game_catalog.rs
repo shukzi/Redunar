@@ -1207,10 +1207,10 @@ const fn replay_storage_token(value: ReplayStorageLimit) -> &'static str {
 
 fn parse_replay_storage(value: &str) -> Result<ReplayStorageLimit, GameCatalogError> {
     match value {
-        "5" => Ok(ReplayStorageLimit::GiB5),
-        "10" => Ok(ReplayStorageLimit::GiB10),
-        "25" => Ok(ReplayStorageLimit::GiB25),
-        "50" => Ok(ReplayStorageLimit::GiB50),
+        // Older catalogs exposed quota choices that the current replay budget
+        // no longer applies. Keep those files readable, but normalize them to
+        // the active unlimited policy so a stale value cannot imply a limit.
+        "5" | "10" | "25" | "50" => Ok(ReplayStorageLimit::Unlimited),
         "unlimited" => Ok(ReplayStorageLimit::Unlimited),
         _ => Err(GameCatalogError::new(
             "catalog replay storage limit is invalid",
@@ -2073,7 +2073,7 @@ mod tests {
                 duration: ReplayDuration::Seconds120,
                 frame_rate: ReplayFrameRate::Fps60,
                 quality: ReplayQuality::High,
-                storage_limit: ReplayStorageLimit::GiB25,
+                storage_limit: ReplayStorageLimit::Unlimited,
             },
             instant_replay: false,
         };
@@ -2086,6 +2086,34 @@ mod tests {
             effective_profile(&fixture.root, game.id).expect("effective profile"),
             loaded.games[0].profile.resolve(global)
         );
+    }
+
+    #[test]
+    fn legacy_storage_limits_load_as_unlimited() {
+        let fixture = Fixture::new();
+        update_global_profile(
+            &fixture.root,
+            GlobalGameProfile {
+                replay: ReplaySettings {
+                    storage_limit: ReplayStorageLimit::Unlimited,
+                    ..ReplaySettings::default()
+                },
+                ..GlobalGameProfile::default()
+            },
+        )
+        .expect("write current profile");
+        let path = fixture.root.join(CATALOG_FILE);
+        let current = fs::read_to_string(&path).expect("read current profile");
+        for token in ["5", "10", "25", "50"] {
+            let legacy = current.replacen("\tunlimited\t", &format!("\t{token}\t"), 1);
+            fs::write(&path, legacy).expect("write legacy profile");
+            let loaded = load(&fixture.root).expect("load legacy profile");
+            assert_eq!(
+                loaded.global_profile.replay.storage_limit,
+                ReplayStorageLimit::Unlimited,
+                "legacy token {token} should migrate"
+            );
+        }
     }
 
     #[test]
