@@ -14,10 +14,16 @@ const PRESSURE_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 fn main() {
     let arguments = env::args().collect::<Vec<_>>();
     let pressure = arguments.iter().any(|argument| argument == "--pressure");
-    let profile = if arguments.iter().any(|argument| argument == "--4k-variable") {
-        Profile::FourKVariable
-    } else if arguments.iter().any(|argument| argument == "--4k-high") {
-        Profile::FourKHigh60
+    let profile = if arguments
+        .iter()
+        .any(|argument| argument == "--high-bitrate-variable")
+    {
+        Profile::HighBitrateVariable
+    } else if arguments
+        .iter()
+        .any(|argument| argument == "--high-bitrate")
+    {
+        Profile::HighBitrate60
     } else if pressure {
         Profile::Pressure
     } else {
@@ -65,6 +71,7 @@ fn main() {
 
     let stats = spool.stats();
     println!("profile={profile_name}");
+    println!("workload=synthetic_encoded_packets");
     println!("pressure={pressure}");
     println!("packets={packet_count}");
     println!("payload_bytes={payload_bytes}");
@@ -81,8 +88,8 @@ fn main() {
 enum Profile {
     Normal,
     Pressure,
-    FourKHigh60,
-    FourKVariable,
+    HighBitrate60,
+    HighBitrateVariable,
 }
 
 impl Profile {
@@ -107,11 +114,11 @@ impl Profile {
                 2,
                 false,
             ),
-            Self::FourKHigh60 => {
+            Self::HighBitrate60 => {
                 settings.quality = ReplayQuality::High;
                 settings.frame_rate = ReplayFrameRate::Fps60;
                 (
-                    "4k-high-60",
+                    "high-bitrate-60",
                     settings,
                     600,
                     5_000_000 / 60,
@@ -120,11 +127,11 @@ impl Profile {
                     true,
                 )
             }
-            Self::FourKVariable => {
+            Self::HighBitrateVariable => {
                 settings.quality = ReplayQuality::High;
                 settings.frame_rate = ReplayFrameRate::Variable;
                 (
-                    "4k-high-variable-64",
+                    "high-bitrate-variable-64",
                     settings,
                     640,
                     5_000_000 / 64,

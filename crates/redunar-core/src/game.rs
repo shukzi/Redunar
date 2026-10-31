@@ -284,10 +284,8 @@ impl ReplayDuration {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ReplayFrameRate {
-    Fps30,
     #[default]
     Fps60,
-    Fps120,
     /// Capture accepted game presents with their individual timestamps.
     Variable,
 }
@@ -296,28 +294,25 @@ impl ReplayFrameRate {
     #[must_use]
     pub const fn frames_per_second(self) -> u16 {
         match self {
-            Self::Fps30 => 30,
             Self::Fps60 => 60,
-            Self::Fps120 | Self::Variable => 120,
+            // Variable mode uses a 120 FPS planning envelope; the active
+            // encoder derives its actual accepted cadence from dimensions.
+            Self::Variable => 120,
         }
     }
 
     /// Whether these coded dimensions are supported at this capture rate.
     ///
-    /// Fixed 120 FPS remains limited to 1080p. Variable mode uses the encoder's
-    /// bounded macroblock throughput instead of that fixed-rate surface limit.
+    /// Fixed 60 FPS and Variable mode use the encoder's bounded macroblock
+    /// throughput. Variable mode derives its actual cadence from dimensions.
     #[must_use]
     pub const fn supports_dimensions(self, width: u32, height: u32) -> bool {
+        let macroblocks = width.div_ceil(16).saturating_mul(height.div_ceil(16));
         width > 0
             && height > 0
-            && (!matches!(self, Self::Fps120)
-                || (width <= 1_920 && height <= 1_080)
-                || (height <= 1_920 && width <= 1_080))
-            && width
-                .div_ceil(16)
-                .saturating_mul(height.div_ceil(16))
-                .saturating_mul(self.frames_per_second() as u32)
-                <= 2_073_600
+            && macroblocks <= 36_864
+            && (matches!(self, Self::Variable)
+                || macroblocks.saturating_mul(self.frames_per_second() as u32) <= 2_073_600)
     }
 }
 
@@ -774,12 +769,11 @@ mod tests {
     }
 
     #[test]
-    fn replay_120_fps_is_limited_to_1080p() {
-        assert!(ReplayFrameRate::Fps120.supports_dimensions(1_920, 1_080));
-        assert!(ReplayFrameRate::Fps120.supports_dimensions(1_080, 1_920));
-        assert!(!ReplayFrameRate::Fps120.supports_dimensions(2_560, 1_440));
-        assert!(!ReplayFrameRate::Fps120.supports_dimensions(2_560, 720));
-        assert!(!ReplayFrameRate::Fps120.supports_dimensions(3_840, 2_160));
+    fn variable_fps_uses_the_encoder_throughput_bound() {
+        assert!(ReplayFrameRate::Variable.supports_dimensions(1_920, 1_080));
+        assert!(ReplayFrameRate::Variable.supports_dimensions(2_560, 1_440));
+        assert!(ReplayFrameRate::Variable.supports_dimensions(3_840, 2_160));
+        assert!(!ReplayFrameRate::Variable.supports_dimensions(5_120, 2_160));
         assert!(ReplayFrameRate::Fps60.supports_dimensions(3_840, 2_160));
     }
 

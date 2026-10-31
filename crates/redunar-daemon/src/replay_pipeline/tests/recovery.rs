@@ -201,7 +201,7 @@ fn paced_fifteen_minute_pipeline_survives_repeated_storage_stalls() {
 
 #[test]
 fn production_packet_path_repairs_command_and_byte_pressure_without_gaps() {
-    for (payload_bytes, initial_frames) in [(6, 180), (1024 * 1024, 72)] {
+    for (payload_bytes, initial_frames) in [(6, 180), (512 * 1024, 65)] {
         let fixture = Fixture::new();
         let mut pipeline = spooled_pipeline(&fixture, payload_bytes);
         let pause = pipeline.spool.as_ref().unwrap().pause_worker();
@@ -215,12 +215,12 @@ fn production_packet_path_repairs_command_and_byte_pressure_without_gaps() {
         assert_eq!(stats.segment_resyncs, 0);
         drop(pause);
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut count = initial_frames;
         while pipeline.spool_pending_from_ns.is_some() {
             assert!(Instant::now() < deadline, "backlog did not recover");
+            pipeline
+                .flush_spool_backlog()
+                .expect("ring backlog should remain recoverable");
             std::thread::sleep(Duration::from_millis(1));
-            submit(&mut pipeline, &fixture, count);
-            count += 1;
         }
         pipeline
             .save_spooled_replay(ReplayDuration::Seconds15)
@@ -229,7 +229,7 @@ fn production_packet_path_repairs_command_and_byte_pressure_without_gaps() {
             .unwrap();
         let spool = pipeline.spool.as_ref().unwrap();
         assert!(pipeline.disk_history_available());
-        assert_eq!(spool.stats().accepted_packets, count);
+        assert_eq!(spool.stats().accepted_packets, initial_frames);
         assert_eq!(spool.stats().segment_resyncs, 0);
         let plan = spool.snapshot_plan(ReplayDuration::Seconds15).unwrap();
         let segments = plan
@@ -246,7 +246,7 @@ fn production_packet_path_repairs_command_and_byte_pressure_without_gaps() {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        for index in 0..count {
+        for index in 0..initial_frames {
             let packet = packets.next_packet().unwrap().expect("missing packet");
             assert_eq!(packet.timestamp_ns(), index * 16_666_667);
             assert_eq!(packet.bytes().len(), payload_bytes);

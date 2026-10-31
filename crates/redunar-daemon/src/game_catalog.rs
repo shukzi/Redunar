@@ -1163,18 +1163,14 @@ fn parse_replay_duration(value: &str) -> Result<ReplayDuration, GameCatalogError
 
 const fn replay_frame_rate_token(value: ReplayFrameRate) -> &'static str {
     match value {
-        ReplayFrameRate::Fps30 => "30",
         ReplayFrameRate::Fps60 => "60",
-        ReplayFrameRate::Fps120 => "120",
         ReplayFrameRate::Variable => "variable",
     }
 }
 
 fn parse_replay_frame_rate(value: &str) -> Result<ReplayFrameRate, GameCatalogError> {
     match value {
-        "30" => Ok(ReplayFrameRate::Fps30),
-        "60" | "adaptive" => Ok(ReplayFrameRate::Fps60),
-        "120" => Ok(ReplayFrameRate::Fps120),
+        "30" | "60" | "120" | "adaptive" => Ok(ReplayFrameRate::Fps60),
         "variable" => Ok(ReplayFrameRate::Variable),
         _ => Err(GameCatalogError::new(
             "catalog replay frame rate is invalid",
@@ -1409,12 +1405,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uninstalled_adaptive_development_state_migrates_to_60_fps() {
-        assert_eq!(parse_replay_frame_rate("120"), Ok(ReplayFrameRate::Fps120));
+    fn legacy_replay_frame_rates_migrate_to_current_fixed_mode() {
+        assert_eq!(parse_replay_frame_rate("60"), Ok(ReplayFrameRate::Fps60));
         assert_eq!(
-            parse_replay_frame_rate("adaptive"),
-            Ok(ReplayFrameRate::Fps60)
+            parse_replay_frame_rate("variable"),
+            Ok(ReplayFrameRate::Variable)
         );
+        for legacy in ["30", "120", "adaptive"] {
+            assert_eq!(parse_replay_frame_rate(legacy), Ok(ReplayFrameRate::Fps60));
+        }
     }
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier};
@@ -2072,7 +2071,7 @@ mod tests {
             gamemode_enabled: false,
             replay: ReplaySettings {
                 duration: ReplayDuration::Seconds120,
-                frame_rate: ReplayFrameRate::Fps120,
+                frame_rate: ReplayFrameRate::Fps60,
                 quality: ReplayQuality::High,
                 storage_limit: ReplayStorageLimit::GiB25,
             },

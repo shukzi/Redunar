@@ -151,12 +151,11 @@ pub struct RedunarService {
     runtime: Arc<ServiceRuntime>,
 }
 
-/// Read-only display evidence used to explain whether the selected 120 FPS
-/// Replay mode has a compatible connected mode. It never opens a DRM device.
+/// Read-only display evidence for the current Replay mode selector. It never
+/// opens a DRM device.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReplayDisplayCapability {
     pub connected_outputs: usize,
-    pub compatible_120_modes: usize,
     pub maximum_width: Option<u32>,
     pub maximum_height: Option<u32>,
     pub error: Option<String>,
@@ -677,7 +676,6 @@ impl RedunarService {
     pub fn replay_display_capability(&self) -> ReplayDisplayCapability {
         match redunar_capture_kms::discover_outputs_at(Path::new("/")) {
             Ok(outputs) => {
-                let mut compatible_120_modes = 0;
                 let mut maximum_width: Option<u32> = None;
                 let mut maximum_height: Option<u32> = None;
                 for mode in outputs.iter().flat_map(|output| output.modes.iter()) {
@@ -685,15 +683,9 @@ impl RedunarService {
                         Some(maximum_width.map_or(mode.width, |value| value.max(mode.width)));
                     maximum_height =
                         Some(maximum_height.map_or(mode.height, |value| value.max(mode.height)));
-                    if redunar_core::ReplayFrameRate::Fps120
-                        .supports_dimensions(mode.width, mode.height)
-                    {
-                        compatible_120_modes += 1;
-                    }
                 }
                 ReplayDisplayCapability {
                     connected_outputs: outputs.len(),
-                    compatible_120_modes,
                     maximum_width,
                     maximum_height,
                     error: None,
@@ -701,7 +693,6 @@ impl RedunarService {
             }
             Err(error) => ReplayDisplayCapability {
                 connected_outputs: 0,
-                compatible_120_modes: 0,
                 maximum_width: None,
                 maximum_height: None,
                 error: Some(error.to_string()),
@@ -2119,7 +2110,7 @@ mod tests {
                 overlay_visible: true,
                 replay: redunar_core::ReplaySettings {
                     duration: redunar_core::ReplayDuration::Seconds60,
-                    frame_rate: redunar_core::ReplayFrameRate::Fps30,
+                    frame_rate: redunar_core::ReplayFrameRate::Fps60,
                     quality: redunar_core::ReplayQuality::Efficient,
                     storage_limit: redunar_core::ReplayStorageLimit::GiB5,
                 },
@@ -2129,7 +2120,7 @@ mod tests {
 
         let replay_settings = redunar_core::ReplaySettings {
             duration: redunar_core::ReplayDuration::Seconds120,
-            frame_rate: redunar_core::ReplayFrameRate::Fps30,
+            frame_rate: redunar_core::ReplayFrameRate::Fps60,
             quality: redunar_core::ReplayQuality::High,
             storage_limit: redunar_core::ReplayStorageLimit::GiB25,
         };
@@ -2142,7 +2133,7 @@ mod tests {
         let status = service.replay_runtime_status().expect("replay status");
         assert_eq!(status.phase, ReplayPhase::Unavailable);
         assert_eq!(status.settings.duration.seconds(), 120);
-        assert_eq!(status.budget.frame_capacity, 3_600);
+        assert_eq!(status.budget.frame_capacity, 7_200);
         assert_eq!(request_replay_start(status), Err(ReplayStartError));
     }
 
@@ -2240,7 +2231,7 @@ mod tests {
         service
             .update_global_game_profile(redunar_core::GlobalGameProfile {
                 replay: redunar_core::ReplaySettings {
-                    frame_rate: redunar_core::ReplayFrameRate::Fps30,
+                    frame_rate: redunar_core::ReplayFrameRate::Fps60,
                     ..redunar_core::ReplaySettings::default()
                 },
                 ..redunar_core::GlobalGameProfile::default()
@@ -2252,9 +2243,9 @@ mod tests {
             .expect("run replay foundation self-test");
         assert_eq!(
             report.settings.frame_rate,
-            redunar_core::ReplayFrameRate::Fps30
+            redunar_core::ReplayFrameRate::Fps60
         );
-        assert_eq!(report.packet_count, 60);
+        assert_eq!(report.packet_count, 120);
         assert!(report.stored_clip.path.starts_with(&diagnostic));
         assert!(!report.backend_readiness.activation_allowed());
         assert_eq!(

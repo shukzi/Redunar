@@ -1720,10 +1720,9 @@ mod tests {
         let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds15))
             .expect("open spool");
         let packet_count = 32_u64;
-        let packet_bytes = usize::try_from(
-            u64::from(ReplayQuality::Efficient.target_megabits_per_second()) * BYTES_PER_MEGABIT,
-        )
-        .expect("bounded packet size");
+        let packet_bytes =
+            usize::try_from(MAX_QUEUED_BYTES / packet_count - 1).expect("bounded packet size");
+        let pause = spool.pause_worker();
 
         for index in 0..packet_count {
             spool
@@ -1734,6 +1733,7 @@ mod tests {
                 ))
                 .expect("burst should fit the bounded spool queue");
         }
+        drop(pause);
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while spool.stats().accepted_packets < packet_count {

@@ -89,7 +89,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='steam_setup_status'){if(bridge.failSteamSetup)throw Error('Fixture Steam setup unavailable');return bridge.steamSetup||{available:true,configured:false,app_id:42,configuration_state:'not-configured',status:'Not configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};}
  if(command==='set_replay_microphone'){await new Promise(resolve=>setTimeout(resolve,80));if(bridge.failMicrophone)throw Error('Fixture microphone write failed');bridge.microphone=args.mode;bridge.source=args.source||null;return replayPreferencesFixture();}
  if(command==='replay_preferences')return replayPreferencesFixture();
- if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
+ if(command==='replay_display_capability')return {connected_outputs:0,status:'0 display output(s) discovered'};
  if(command==='activate_shortcuts')bridge.shortcutUnavailable=false;
  if(command==='shortcut_status'&&bridge.keyboardWaiting)return {state:'Unavailable',message:'No readable keyboard input device. Waiting for keyboard access to return.'};
  if(command==='shortcut_status'&&bridge.shortcutUnavailable)return {state:'Unavailable',message:'No readable keyboard input device'};

@@ -329,7 +329,7 @@ mod tests {
     fn settings() -> ReplaySettings {
         ReplaySettings {
             duration: ReplayDuration::Seconds15,
-            frame_rate: ReplayFrameRate::Fps30,
+            frame_rate: ReplayFrameRate::Fps60,
             quality: ReplayQuality::Efficient,
             storage_limit: ReplayStorageLimit::GiB5,
         }

@@ -515,9 +515,7 @@ impl CaptureLaunchPlan {
         self.environment.insert(
             OsString::from(REDUNAR_REPLAY_FRAME_RATE_ENV),
             OsString::from(match config.frame_rate {
-                ReplayFrameRate::Fps30 => "30",
                 ReplayFrameRate::Fps60 => "60",
-                ReplayFrameRate::Fps120 => "120",
                 ReplayFrameRate::Variable => "variable",
             }),
         );
@@ -1054,7 +1052,7 @@ mod tests {
 
         let requested = plan.with_replay_transfer_config(ReplayTransferLaunchConfig::new(
             true,
-            ReplayFrameRate::Fps30,
+            ReplayFrameRate::Fps60,
         ));
         assert_eq!(
             requested
@@ -1072,7 +1070,7 @@ mod tests {
             requested
                 .environment()
                 .get(OsStr::new(REDUNAR_REPLAY_FRAME_RATE_ENV)),
-            Some(&OsString::from("30"))
+            Some(&OsString::from("60"))
         );
         assert_eq!(
             inherited.get(OsStr::new(REDUNAR_REPLAY_TRANSFER_ENV)),

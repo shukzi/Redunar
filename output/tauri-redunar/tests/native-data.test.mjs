@@ -123,7 +123,7 @@ test('catalog identifiers retain precision and edits do not mutate backend respo
  assert.equal(game.id,source[0].id);assert.equal(source[0].overrides.overlay,false);
 });
 test('defaults round-trip real backend values, including frame metrics, zero opacity and temperatures',()=>{
- const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replayEnabled:false,fps:30,quality:'Efficient',format:'MP4',storageLimit:'Unlimited',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
+ const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replayEnabled:false,fps:60,quality:'Efficient',format:'MP4',storageLimit:'Unlimited',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
  const result=profilePayload(mapDefaults({values}),values.shortcuts);
  for(const key of Object.keys(values))assert.deepEqual(result[key],values[key]);
 });
@@ -287,6 +287,12 @@ test('Tauri replay settings do not expose a total storage quota',()=>{
  assert.doesNotMatch(replaySettings,/Saved clip storage/);
  assert.doesNotMatch(replaySettings,/data-global=["']storage/);
  assert.doesNotMatch(storageSummary({used_bytes:29.8e6,storage_limit_bytes:null}),/recording limit/);
+});
+test('Replay settings expose only the current fixed and Variable frame-rate modes',()=>{
+ const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
+ const control=source.slice(source.indexOf('function frameRateControl()'),source.indexOf('function globalShortcuts()',source.indexOf('function frameRateControl()')));
+ assert.match(control,/\[\[60,'60 FPS'\],\[240,'Variable FPS'\]\]/);
+ assert.doesNotMatch(control,/30 FPS|120 FPS|legacy/);
 });
 test('Replay storage usage uses human-readable units without the verbose safety note',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');

@@ -451,8 +451,7 @@ function reloadMicrophoneInputs() {
 }
 function frameRateControl() {
  const selected=Number(draft.fps);
- const legacy=selected===30?[[30,'30 FPS']]:selected===120?[[120,'120 FPS']]:[];
- const options=[...legacy,[60,'60 FPS'],[240,'Variable FPS']].map(([value,label])=>`<option value="${value}" ${value===selected?'selected':''}>${label}</option>`).join('');
+ const options=[[60,'60 FPS'],[240,'Variable FPS']].map(([value,label])=>`<option value="${value}" ${value===selected?'selected':''}>${label}</option>`).join('');
  return `<div class="frame-rate-control"><select aria-label="Recording mode" data-global="fps">${options}</select></div>`;
 }
 function globalShortcuts() {

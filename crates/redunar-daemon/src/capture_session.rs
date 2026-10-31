@@ -2513,18 +2513,18 @@ mod tests {
         let effective = PerGameProfile::default().resolve(GlobalGameProfile {
             instant_replay: true,
             replay: ReplaySettings {
-                frame_rate: ReplayFrameRate::Fps30,
+                frame_rate: ReplayFrameRate::Fps60,
                 ..ReplaySettings::default()
             },
             ..GlobalGameProfile::default()
         });
         let config = replay_transfer_launch_config(effective, false);
         assert!(!config.is_requested());
-        assert_eq!(config.frame_rate(), ReplayFrameRate::Fps30);
+        assert_eq!(config.frame_rate(), ReplayFrameRate::Fps60);
 
         let verified = replay_transfer_launch_config(effective, true);
         assert!(verified.is_requested());
-        assert_eq!(verified.frame_rate(), ReplayFrameRate::Fps30);
+        assert_eq!(verified.frame_rate(), ReplayFrameRate::Fps60);
     }
 
     #[test]

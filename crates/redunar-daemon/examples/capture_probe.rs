@@ -886,12 +886,10 @@ fn configure_overlay(
 fn replay_probe_frame_rate() -> Result<ReplayFrameRate, Box<dyn Error>> {
     match env::var("REDUNAR_CAPTURE_PROBE_REPLAY_FPS").ok().as_deref() {
         None | Some("60") => Ok(ReplayFrameRate::Fps60),
-        Some("30") => Ok(ReplayFrameRate::Fps30),
-        Some("120") => Ok(ReplayFrameRate::Fps120),
         Some("variable") => Ok(ReplayFrameRate::Variable),
         Some(_) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "REDUNAR_CAPTURE_PROBE_REPLAY_FPS must be 30, 60, 120, or variable",
+            "REDUNAR_CAPTURE_PROBE_REPLAY_FPS must be 60 or variable",
         )
         .into()),
     }

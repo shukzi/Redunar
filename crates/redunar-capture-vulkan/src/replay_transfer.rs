@@ -54,10 +54,10 @@ impl ReplayTransferConfig {
     fn from_values(requested: Option<&str>, frame_rate: Option<&str>) -> Self {
         Self {
             requested: requested == Some("1"),
-            target_frames_per_second: match frame_rate {
-                Some("30") => 30,
-                Some("120" | "variable") => 120,
-                _ => 60,
+            target_frames_per_second: if frame_rate == Some("variable") {
+                120
+            } else {
+                60
             },
             variable_rate: frame_rate == Some("variable"),
         }
@@ -256,19 +256,19 @@ mod tests {
             }
         );
         assert_eq!(
-            ReplayTransferConfig::from_values(Some("1"), Some("30")),
+            ReplayTransferConfig::from_values(Some("1"), Some("60")),
             ReplayTransferConfig {
                 requested: true,
-                target_frames_per_second: 30,
+                target_frames_per_second: 60,
                 variable_rate: false,
             }
         );
         assert_eq!(
-            ReplayTransferConfig::from_values(Some("1"), Some("120")),
+            ReplayTransferConfig::from_values(Some("1"), Some("variable")),
             ReplayTransferConfig {
                 requested: true,
                 target_frames_per_second: 120,
-                variable_rate: false,
+                variable_rate: true,
             }
         );
         assert_eq!(
@@ -286,7 +286,7 @@ mod tests {
         let transfer_plan = plan(
             ReplayTransferConfig {
                 requested: true,
-                target_frames_per_second: 30,
+                target_frames_per_second: 60,
                 variable_rate: false,
             },
             &create_info(),
@@ -298,46 +298,11 @@ mod tests {
             transfer_plan.candidate.pixel_format,
             ReplayPixelFormat::Bgra8Unorm
         );
-        assert_eq!(transfer_plan.candidate.target_frames_per_second, 30);
-        assert_eq!(transfer_plan.frame_interval_ns, NANOSECONDS_PER_SECOND / 30);
+        assert_eq!(transfer_plan.candidate.target_frames_per_second, 60);
+        assert_eq!(transfer_plan.frame_interval_ns, NANOSECONDS_PER_SECOND / 60);
         assert_eq!(transfer_plan.maximum_in_flight_images, 5);
         // Fixed metadata now includes two private 16-byte GPU UUIDs.
         assert!(std::mem::size_of::<ReplayTransferPlan>() <= 80);
-    }
-
-    #[test]
-    fn fixed_120_fps_is_accepted_only_at_1080p_or_lower() {
-        let config = ReplayTransferConfig {
-            requested: true,
-            target_frames_per_second: 120,
-            variable_rate: false,
-        };
-        let mut info = create_info();
-        assert_eq!(
-            plan(config, &info),
-            Err(ReplayTransferRejection::DimensionsUnsupported)
-        );
-
-        info.image_extent = VkExtent2d {
-            width: 2_560,
-            height: 720,
-        };
-        assert_eq!(
-            plan(config, &info),
-            Err(ReplayTransferRejection::DimensionsUnsupported)
-        );
-
-        info.image_extent = VkExtent2d {
-            width: 1_920,
-            height: 1_080,
-        };
-        assert_eq!(
-            plan(config, &info)
-                .expect("1080p 120 FPS plan")
-                .candidate
-                .target_frames_per_second,
-            120
-        );
     }
 
     #[test]

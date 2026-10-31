@@ -1017,7 +1017,7 @@ mod tests {
 
     impl HardwareEncoderBackend for FakeBackend {
         fn api(&self) -> HardwareEncoderApi {
-            HardwareEncoderApi::VaApi
+            HardwareEncoderApi::VulkanVideo
         }
 
         fn stream(&self) -> &ReplayVideoStream {

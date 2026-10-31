@@ -113,9 +113,9 @@ teardown. A visibility-only change must not be blocked by recording state.
 ## Instant Replay and audio
 
 Inactive Replay guidance says “Launch a supported game to build a local
-buffer.” Recording mode supports 60 FPS and Variable FPS. Older fixed 30 and
-120 FPS profiles remain readable. Variable mode follows accepted game presents
-within hardware and resource limits; it is not a display-scanout measurement.
+buffer.” Recording mode supports 60 FPS and Variable FPS. Variable mode follows
+accepted game presents within hardware and resource limits; it is not a
+display-scanout measurement.
 
 The MKV/MP4 choice applies to future saves. Menu and save shortcuts may be
 cleared. The microphone toggle and recording level are separate from system

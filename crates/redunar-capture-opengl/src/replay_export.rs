@@ -485,17 +485,16 @@ fn failure_injected(stage: &str) -> bool {
     fired
 }
 
-/// Map the requested frame rate onto the three protocol rates. Anything the
-/// protocol cannot encode defaults to 60 FPS.
+/// Map the current Replay setting onto the protocol cadence. Variable mode
+/// uses the encoder's nominal 120 FPS planning envelope.
 fn target_frames_per_second(raw: Option<&str>) -> u8 {
     match raw {
-        Some("30") => 30,
-        Some("120" | "variable") => 120,
+        Some("variable") => 120,
         _ => 60,
     }
 }
 
-// The launch token selects VFR; 120 remains a fixed-rate protocol value.
+// The launch token selects VFR; fixed capture uses 60 FPS.
 fn variable_frame_rate(raw: Option<&str>) -> bool {
     raw == Some("variable")
 }
@@ -562,7 +561,7 @@ fn next_capture_deadline(current_deadline_ns: u64, now_ns: u64, interval_ns: u64
 }
 
 /// Use the cadence deadline as the encoded presentation timestamp. Source
-/// presents need not divide evenly into 30/60/120 FPS, and stamping the
+/// presents need not divide evenly into the fixed 60 FPS cadence, and stamping the
 /// selected frame with wall time would create variable-frame-rate judder.
 fn capture_presentation_timestamp(current_deadline_ns: u64, now_ns: u64, interval_ns: u64) -> u64 {
     // A missed capture interval is a real source pause/drop, not a frame that
@@ -1649,9 +1648,9 @@ mod tests {
     }
 
     #[test]
-    fn frame_rate_map_only_accepts_protocol_rates() {
-        assert_eq!(target_frames_per_second(Some("30")), 30);
-        assert_eq!(target_frames_per_second(Some("120")), 120);
+    fn frame_rate_map_accepts_current_settings() {
+        assert_eq!(target_frames_per_second(Some("60")), 60);
+        assert_eq!(target_frames_per_second(Some("variable")), 120);
         assert_eq!(target_frames_per_second(Some("144")), 60);
         assert_eq!(target_frames_per_second(None), 60);
     }

@@ -14,9 +14,8 @@ do not claim that a buffer exists.
 Recording settings are locked during the owned game session. The default is
 60 FPS and Balanced quality. Variable FPS timestamps accepted game presents
 within bounded resolution and encoder limits; it may drop frames under load.
-Existing fixed 30 and 120 FPS profiles remain readable. Fixed 120 FPS keeps its
-1080p limit. Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes;
-the rolling buffer retains a bounded 15-minute horizon.
+Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes; the rolling
+buffer retains a bounded 15-minute horizon.
 
 The source is the launched game's Vulkan or supported desktop OpenGL presentation
 path. Replay does not capture the complete desktop or compositor scanout. A

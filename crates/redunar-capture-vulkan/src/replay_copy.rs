@@ -346,7 +346,7 @@ fn frame_interval_for_fps(frames_per_second: u8) -> u64 {
 }
 
 // Variable mode budgets up to 240 presents/second with a two-frame burst.
-// The explicit variable launch token selects this mode; fixed 120 stays fixed.
+// The explicit variable launch token selects this mode; fixed 60 stays fixed.
 const VFR_MIN_INTERVAL_NS: u64 = NANOSECONDS_PER_SECOND.div_ceil(240);
 const MAX_ENCODE_MACROBLOCKS_PER_SECOND: u64 = 2_073_600;
 

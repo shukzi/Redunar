@@ -203,7 +203,7 @@ struct FakeEncoder(ReplayVideoStream);
 
 impl HardwareEncoderBackend for FakeEncoder {
     fn api(&self) -> HardwareEncoderApi {
-        HardwareEncoderApi::VaApi
+        HardwareEncoderApi::VulkanVideo
     }
 
     fn stream(&self) -> &ReplayVideoStream {

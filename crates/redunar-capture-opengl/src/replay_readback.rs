@@ -468,8 +468,7 @@ fn extension_list_contains(extensions: &[u8], expected: &[u8]) -> bool {
 
 fn target_frames_per_second() -> u8 {
     match env::var(REPLAY_FRAME_RATE_ENV).ok().as_deref() {
-        Some("30") => 30,
-        Some("120") => 120,
+        Some("variable") => 120,
         _ => 60,
     }
 }
