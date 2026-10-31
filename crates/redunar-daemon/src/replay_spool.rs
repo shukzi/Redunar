@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -28,14 +28,15 @@ const TARGET_SEGMENT_NS: u64 = 2_000_000_000;
 const MAX_SEGMENT_NS: u64 = 4_000_000_000;
 const MAX_SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SEGMENTS: usize = 512;
+const SEGMENT_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
 // Encoders can hand packets to the spool in short bursts (especially when a
-// hardware encoder flushes several frames at once). Four entries allowed a
-// normal burst to overflow immediately, and one dropped packet forced a
-// keyframe resync that became a multi-second hole in the replay. Keep the
-// queue bounded, but large enough to absorb roughly a second of encoded work
-// at 60 FPS without blocking the game thread. Higher frame rates or sustained
-// storage stalls can still overflow it and require keyframe recovery.
+// hardware encoder flushes several frames at once). Keep both the command
+// count and payload bytes bounded so a storage stall cannot retain an
+// unbounded amount of encoded memory. Higher frame rates or sustained storage
+// stalls can still defer admission; the pipeline repairs those packets from
+// its bounded in-memory history before the history window can be evicted.
 const COMMAND_CAPACITY: usize = 64;
+const MAX_QUEUED_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_WRITE_LATENCY: Duration = Duration::from_millis(500);
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const BYTES_PER_MEGABIT: u64 = 1_000_000 / 8;
@@ -92,6 +93,26 @@ pub struct ReplayAssemblyJob {
 }
 
 impl ReplayAssemblyJob {
+    pub(crate) fn spawn(
+        name: &str,
+        task: impl FnOnce(Arc<AtomicBool>) -> Result<StoredReplayClip, ReplaySpoolError>
+        + Send
+        + 'static,
+    ) -> Result<Self, ReplaySpoolError> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker = thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || task(worker_cancel))
+            .map_err(|error| {
+                ReplaySpoolError::new(format!("could not start Replay save: {error}"))
+            })?;
+        Ok(Self {
+            worker: Some(worker),
+            cancel,
+        })
+    }
+
     /// Wait for the isolated clip assembler. Recording and spool rotation may
     /// continue while this worker owns open handles to the selected segments.
     ///
@@ -122,9 +143,13 @@ pub struct ReplaySpoolStats {
     pub active_segments: u32,
     pub active_bytes: u64,
     pub buffered_duration_ns: u64,
-    /// Total encoded packets durably accepted by this spool epoch.
+    /// Total packets accepted into the active Replay history epoch. Running
+    /// disk spools report durable admissions; degraded spools report bounded
+    /// RAM admissions so status continues to reflect live progress.
     pub accepted_packets: u64,
     pub queued_packets: u32,
+    /// Queue admission pressure events. The pipeline may recover these
+    /// packets from its bounded in-memory repair window before a gap exists.
     pub dropped_queue_full: u64,
     pub dropped_awaiting_keyframe: u64,
     pub recovered_segments: u32,
@@ -132,8 +157,8 @@ pub struct ReplaySpoolStats {
     /// in the running phase; sustained slowness degrades through the bounded
     /// queue drop path instead of stopping the spool.
     pub slow_writes: u64,
-    /// Times disk history discarded a partial segment after a transient
-    /// commit failure and resynchronized at the next keyframe.
+    /// Times disk history discarded a partial segment after a storage failure
+    /// and entered the failed phase instead of publishing a gap.
     pub segment_resyncs: u64,
 }
 
@@ -147,10 +172,11 @@ pub struct ReplaySpoolError {
 enum ReplaySpoolErrorKind {
     General,
     InsufficientHistory,
+    StorageFailure,
 }
 
 impl ReplaySpoolError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             kind: ReplaySpoolErrorKind::General,
@@ -164,8 +190,19 @@ impl ReplaySpoolError {
         }
     }
 
+    fn storage_failure(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: ReplaySpoolErrorKind::StorageFailure,
+        }
+    }
+
     pub(crate) const fn is_insufficient_history(&self) -> bool {
         matches!(self.kind, ReplaySpoolErrorKind::InsufficientHistory)
+    }
+
+    const fn is_storage_failure(&self) -> bool {
+        matches!(self.kind, ReplaySpoolErrorKind::StorageFailure)
     }
 }
 
@@ -198,6 +235,8 @@ enum SpoolCommand {
     Packet(EncodedReplayPacket),
     #[cfg(test)]
     SealSnapshot(mpsc::Sender<Result<(), ReplaySpoolError>>),
+    #[cfg(test)]
+    Pause(mpsc::Sender<()>, Receiver<()>),
     PrepareSnapshot {
         requested: ReplayDuration,
         response: mpsc::Sender<Result<Vec<(ReplaySpoolSegment, File)>, ReplaySpoolError>>,
@@ -241,13 +280,15 @@ struct SpoolIndex {
     dropped_awaiting_keyframe: u64,
 }
 
+#[derive(Default)]
 struct SharedStats {
     // Published only after filesystem work; readers never take the disk index lock.
     index_snapshot: Mutex<ReplaySpoolStats>,
     phase: AtomicU8,
+    active_submitters: AtomicU32,
     queued_packets: AtomicU32,
+    queued_bytes: AtomicU64,
     dropped_queue_full: AtomicU64,
-    discontinuity: AtomicU64,
     first_packet_timestamp_ns: AtomicU64,
     latest_packet_end_ns: AtomicU64,
     accepted_packets: AtomicU64,
@@ -255,13 +296,74 @@ struct SharedStats {
     segment_resyncs: AtomicU64,
 }
 
+impl SharedStats {
+    fn begin_submit(&self) -> bool {
+        let mut current = self.active_submitters.load(Ordering::Acquire);
+        loop {
+            if self.phase.load(Ordering::Acquire) != ReplaySpoolPhase::Running.code() {
+                return false;
+            }
+            let Some(next) = current.checked_add(1) else {
+                return false;
+            };
+            match self.active_submitters.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if self.phase.load(Ordering::Acquire) == ReplaySpoolPhase::Running.code() {
+                        return true;
+                    }
+                    self.active_submitters.fetch_sub(1, Ordering::Release);
+                    return false;
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn close_admission(&self, phase: ReplaySpoolPhase) {
+        self.phase.store(phase.code(), Ordering::Release);
+        while self.active_submitters.load(Ordering::Acquire) != 0 {
+            thread::yield_now();
+        }
+    }
+
+    fn reserve_queued_bytes(&self, bytes: u64) -> bool {
+        let mut current = self.queued_bytes.load(Ordering::Acquire);
+        loop {
+            let Some(next) = current.checked_add(bytes) else {
+                return false;
+            };
+            if next > MAX_QUEUED_BYTES {
+                return false;
+            }
+            match self.queued_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn release_queued_bytes(&self, bytes: u64) {
+        self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+    }
+}
+
 /// Asynchronous, disk-segment rolling history for already-encoded packets.
 ///
 /// The presentation/encoder caller performs one bounded `try_send`; all file
 /// creation, writes, flushes, renames, scans, and cleanup happen on the worker.
-/// The queue retains at most four packet payloads (32 MiB worst case under the
-/// existing 8 MiB packet contract), independent of the selected 15-second to
-/// 15-minute interval. This type has no raw-frame or CPU-encoder input.
+/// The queue retains at most 64 packet commands and 32 MiB of encoded payload,
+/// independent of the selected 15-second to 15-minute interval. This type has
+/// no raw-frame or CPU-encoder input.
 pub struct ReplaySegmentSpool {
     sender: SyncSender<SpoolCommand>,
     worker: Option<JoinHandle<()>>,
@@ -293,9 +395,10 @@ impl ReplaySegmentSpool {
         let shared = Arc::new(SharedStats {
             index_snapshot: Mutex::new(index_stats(&lock_index(&index))),
             phase: AtomicU8::new(ReplaySpoolPhase::Running.code()),
+            active_submitters: AtomicU32::new(0),
             queued_packets: AtomicU32::new(0),
+            queued_bytes: AtomicU64::new(0),
             dropped_queue_full: AtomicU64::new(0),
-            discontinuity: AtomicU64::new(0),
             first_packet_timestamp_ns: AtomicU64::new(u64::MAX),
             latest_packet_end_ns: AtomicU64::new(0),
             accepted_packets: AtomicU64::new(0),
@@ -335,28 +438,43 @@ impl ReplaySegmentSpool {
     /// Returns the packet to the caller when the fixed queue is full or the
     /// worker is no longer running. Dropping is preferred over game blocking.
     pub fn try_submit(&self, packet: EncodedReplayPacket) -> Result<(), ReplaySpoolSubmitError> {
-        if self.phase() != ReplaySpoolPhase::Running {
+        if !self.shared.begin_submit() {
             return Err(ReplaySpoolSubmitError::NotRunning(packet));
         }
-        match self.sender.try_send(SpoolCommand::Packet(packet)) {
-            Ok(()) => {
-                self.shared.queued_packets.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            }
+        let packet_bytes = u64::try_from(packet.bytes().len()).unwrap_or(u64::MAX);
+        if !self.shared.reserve_queued_bytes(packet_bytes) {
+            self.shared
+                .dropped_queue_full
+                .fetch_add(1, Ordering::Relaxed);
+            self.shared
+                .active_submitters
+                .fetch_sub(1, Ordering::Release);
+            return Err(ReplaySpoolSubmitError::QueueFull(packet));
+        }
+        self.shared.queued_packets.fetch_add(1, Ordering::Relaxed);
+        let result = match self.sender.try_send(SpoolCommand::Packet(packet)) {
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(SpoolCommand::Packet(packet))) => {
+                self.shared.queued_packets.fetch_sub(1, Ordering::Relaxed);
+                self.shared.release_queued_bytes(packet_bytes);
                 self.shared
                     .dropped_queue_full
                     .fetch_add(1, Ordering::Relaxed);
-                self.shared.discontinuity.fetch_add(1, Ordering::Release);
                 Err(ReplaySpoolSubmitError::QueueFull(packet))
             }
             Err(TrySendError::Disconnected(SpoolCommand::Packet(packet))) => {
+                self.shared.queued_packets.fetch_sub(1, Ordering::Relaxed);
+                self.shared.release_queued_bytes(packet_bytes);
                 Err(ReplaySpoolSubmitError::NotRunning(packet))
             }
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
                 unreachable!("try_submit sends only packet commands")
             }
-        }
+        };
+        self.shared
+            .active_submitters
+            .fetch_sub(1, Ordering::Release);
+        result
     }
 
     /// Create one immutable keyframe-safe manifest plan from complete owned
@@ -563,6 +681,19 @@ impl ReplaySegmentSpool {
         ReplaySpoolPhase::from_code(self.shared.phase.load(Ordering::Acquire))
     }
 
+    #[cfg(test)]
+    pub(crate) fn pause_worker(&self) -> mpsc::Sender<()> {
+        let (entered, ready) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        self.sender
+            .send(SpoolCommand::Pause(entered, resume))
+            .expect("pause spool");
+        ready
+            .recv_timeout(Duration::from_secs(5))
+            .expect("spool reached pause");
+        release
+    }
+
     #[must_use]
     pub fn stats(&self) -> ReplaySpoolStats {
         let index = *self
@@ -574,7 +705,7 @@ impl ReplaySegmentSpool {
             active_segments: index.active_segments,
             active_bytes: index.active_bytes,
             buffered_duration_ns: buffered_duration_ns(&self.shared),
-            accepted_packets: self.shared.accepted_packets.load(Ordering::Relaxed),
+            accepted_packets: self.shared.accepted_packets.load(Ordering::Acquire),
             queued_packets: self.shared.queued_packets.load(Ordering::Relaxed),
             dropped_queue_full: self.shared.dropped_queue_full.load(Ordering::Relaxed),
             dropped_awaiting_keyframe: index.dropped_awaiting_keyframe,
@@ -610,13 +741,15 @@ impl ReplaySegmentSpool {
         if self.worker.is_none() {
             return;
         }
+        // Close admission before enqueueing the terminal command. A producer
+        // that already passed the phase check may still race with this
+        // transition; the worker drains any packet left behind the command,
+        // while a disconnected send releases its own reservation.
+        self.shared.close_admission(ReplaySpoolPhase::Shutdown);
         let _ = self.sender.send(SpoolCommand::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        self.shared
-            .phase
-            .store(ReplaySpoolPhase::Shutdown.code(), Ordering::Release);
     }
 }
 
@@ -740,13 +873,17 @@ impl Drop for ReplaySegmentSpool {
 
 struct SegmentWriter {
     temporary_path: PathBuf,
-    file: File,
+    file: BufWriter<File>,
     start_timestamp_ns: u64,
     end_timestamp_ns: u64,
     bytes: u64,
     sequence: u64,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the spool worker keeps its ordered command lifecycle in one place"
+)]
 fn run_worker(
     receiver: &Receiver<SpoolCommand>,
     directory: &Path,
@@ -756,21 +893,21 @@ fn run_worker(
 ) {
     let mut current: Option<SegmentWriter> = None;
     let mut next_sequence = lock_index(index).generation.saturating_add(1);
-    let mut observed_discontinuity = shared.discontinuity.load(Ordering::Acquire);
     while let Ok(command) = receiver.recv() {
         match command {
+            #[cfg(test)]
+            SpoolCommand::Pause(entered, resume) => {
+                let _ = entered.send(());
+                // Dropping the release sender also resumes cleanup after a
+                // failed test, so a fixture cannot strand the worker.
+                let _ = resume.recv();
+            }
             SpoolCommand::Packet(packet) => {
+                let packet_bytes = u64::try_from(packet.bytes().len()).unwrap_or(u64::MAX);
                 shared.queued_packets.fetch_sub(1, Ordering::Relaxed);
-                let discontinuity = shared.discontinuity.load(Ordering::Acquire);
-                if discontinuity != observed_discontinuity {
-                    if let Some(writer) = current.take() {
-                        let _ = fs::remove_file(writer.temporary_path);
-                    }
-                    observed_discontinuity = discontinuity;
-                    reset_buffered_duration(shared);
-                }
+                shared.release_queued_bytes(packet_bytes);
                 let started = Instant::now();
-                if let Err(error) = process_packet(
+                let wrote = match process_packet(
                     directory,
                     &packet,
                     &mut current,
@@ -778,26 +915,35 @@ fn run_worker(
                     limits,
                     index,
                 ) {
-                    // A packet write, rotation commit, or segment-creation
-                    // failure invalidates only the partial segment. Rolling
-                    // history degrades instead of stopping the recorder: the
-                    // temporary file is removed, advertised buffered duration
-                    // resets honestly, and the next independently decodable
-                    // keyframe starts a fresh segment.
-                    crate::log_op!("Redunar Replay: disk spool dropped a segment: {error}");
-                    if let Some(writer) = current.take() {
-                        let _ = fs::remove_file(writer.temporary_path);
+                    Ok(wrote) => wrote,
+                    Err(error) => {
+                        let storage_failure = error.is_storage_failure();
+                        // Storage failures mean the disk history can no longer
+                        // be trusted. Stop admission instead of continuing with
+                        // a silent gap; malformed encoder cadence remains a
+                        // local segment resynchronization.
+                        crate::log_op!("Redunar Replay: disk spool dropped a segment: {error}");
+                        if let Some(writer) = current.take() {
+                            let _ = fs::remove_file(writer.temporary_path);
+                        }
+                        shared.segment_resyncs.fetch_add(1, Ordering::Relaxed);
+                        reset_buffered_duration(shared);
+                        if storage_failure {
+                            shared.close_admission(ReplaySpoolPhase::Failed);
+                            break;
+                        }
+                        continue;
                     }
-                    shared.segment_resyncs.fetch_add(1, Ordering::Relaxed);
-                    reset_buffered_duration(shared);
-                    continue;
+                };
+                if wrote {
+                    record_buffered_packet(shared, &packet);
                 }
-                record_buffered_packet(shared, &packet);
-                if started.elapsed() > MAX_WRITE_LATENCY {
+                if wrote && started.elapsed() > MAX_WRITE_LATENCY {
                     // One slow commit is counted, not terminal. Sustained
                     // slowness drains the bounded queue, and the existing
-                    // queue-full discontinuity path drops replay work exactly
-                    // as a stall should, without ending the recording session.
+                    // Queue pressure remains recoverable through the pipeline's
+                    // bounded in-memory repair window, so one slow commit does
+                    // not discard the active segment.
                     crate::log_op!(
                         "Redunar Replay: disk spool exceeded the bounded write latency; \
                          disk history is degrading through bounded drops"
@@ -822,9 +968,7 @@ fn run_worker(
                     // old-epoch segments, so this stays terminal. The export
                     // pump re-arms a fresh spool, which retries the reset.
                     crate::log_op!("Redunar Replay: completed spool cleanup failed: {error}");
-                    shared
-                        .phase
-                        .store(ReplaySpoolPhase::Failed.code(), Ordering::Release);
+                    shared.close_admission(ReplaySpoolPhase::Failed);
                     break;
                 }
                 reset_buffered_duration(shared);
@@ -834,14 +978,20 @@ fn run_worker(
                 let result = current.take().map_or(Ok(()), |writer| {
                     commit_segment(directory, writer, limits, index)
                 });
+                let storage_failure = result
+                    .as_ref()
+                    .is_err_and(ReplaySpoolError::is_storage_failure);
                 if result.is_err() {
-                    // The save caller receives this error and degrades to the
-                    // completed-segment history; the worker itself stays
-                    // available for the next keyframe-safe segment.
+                    // The save caller receives this error. Storage failures
+                    // are terminal so the worker never publishes a gap.
                     shared.segment_resyncs.fetch_add(1, Ordering::Relaxed);
                     reset_buffered_duration(shared);
                 }
                 let _ = response.send(result);
+                if storage_failure {
+                    shared.close_admission(ReplaySpoolPhase::Failed);
+                    break;
+                }
             }
             SpoolCommand::PrepareSnapshot {
                 requested,
@@ -854,7 +1004,14 @@ fn run_worker(
                 let result = pin_snapshot(&mut current, directory, limits, index, requested);
                 // Snapshot errors do not invalidate a healthy encoder. A failed
                 // commit already removes its own temporary output.
+                let storage_failure = result
+                    .as_ref()
+                    .is_err_and(ReplaySpoolError::is_storage_failure);
                 let _ = response.send(result);
+                if storage_failure {
+                    shared.close_admission(ReplaySpoolPhase::Failed);
+                    break;
+                }
             }
             SpoolCommand::Shutdown => break,
         }
@@ -867,7 +1024,17 @@ fn run_worker(
     if let Some(writer) = current.take() {
         let _ = fs::remove_file(writer.temporary_path);
     }
-    shared.queued_packets.store(0, Ordering::Relaxed);
+    drain_pending_packets(receiver, shared);
+}
+
+fn drain_pending_packets(receiver: &Receiver<SpoolCommand>, shared: &SharedStats) {
+    for command in receiver.try_iter() {
+        if let SpoolCommand::Packet(packet) = command {
+            let packet_bytes = u64::try_from(packet.bytes().len()).unwrap_or(u64::MAX);
+            shared.queued_packets.fetch_sub(1, Ordering::Relaxed);
+            shared.release_queued_bytes(packet_bytes);
+        }
+    }
 }
 
 fn index_stats(index: &SpoolIndex) -> ReplaySpoolStats {
@@ -901,18 +1068,29 @@ fn pin_snapshot(
 }
 
 fn record_buffered_packet(shared: &SharedStats, packet: &EncodedReplayPacket) {
-    shared.accepted_packets.fetch_add(1, Ordering::Relaxed);
     let timestamp_ns = packet.timestamp_ns();
+    let end_timestamp_ns = timestamp_ns.saturating_add(packet.duration_ns());
     let _ = shared.first_packet_timestamp_ns.compare_exchange(
         u64::MAX,
         timestamp_ns,
         Ordering::AcqRel,
         Ordering::Acquire,
     );
-    shared.latest_packet_end_ns.fetch_max(
-        timestamp_ns.saturating_add(packet.duration_ns()),
-        Ordering::Release,
+    // Retention eviction advances the effective beginning of the history even
+    // when the first accepted packet of this epoch is still referenced by the
+    // diagnostics counter. Keep the reported duration bounded by the same
+    // fifteen-minute horizon enforced by the disk index.
+    shared.first_packet_timestamp_ns.fetch_max(
+        end_timestamp_ns
+            .saturating_sub(u64::from(RETAINED_DURATION.seconds()) * NANOSECONDS_PER_SECOND),
+        Ordering::AcqRel,
     );
+    shared
+        .latest_packet_end_ns
+        .fetch_max(end_timestamp_ns, Ordering::Release);
+    // Publish the accepted count after the timestamp fields so status readers
+    // that observe this count also observe the corresponding duration.
+    shared.accepted_packets.fetch_add(1, Ordering::Release);
 }
 
 fn reset_buffered_duration(shared: &SharedStats) {
@@ -941,7 +1119,7 @@ fn process_packet(
     next_sequence: &mut u64,
     limits: SpoolLimits,
     index: &Arc<Mutex<SpoolIndex>>,
-) -> Result<(), ReplaySpoolError> {
+) -> Result<bool, ReplaySpoolError> {
     let packet_bytes = u64::try_from(packet.bytes().len()).unwrap_or(u64::MAX);
     let record_bytes = 8_u64 + 8 + 1 + 4 + packet_bytes;
     let should_rotate = current.as_ref().is_some_and(|writer| {
@@ -960,7 +1138,7 @@ fn process_packet(
         if !packet.is_keyframe() {
             let mut index = lock_index(index);
             index.dropped_awaiting_keyframe = index.dropped_awaiting_keyframe.saturating_add(1);
-            return Ok(());
+            return Ok(false);
         }
         *current = Some(create_segment(
             directory,
@@ -979,23 +1157,23 @@ fn process_packet(
             "encoder did not provide a keyframe within the segment bound",
         ));
     }
+    let mut header = [0_u8; 21];
+    header[..8].copy_from_slice(&packet.timestamp_ns().to_le_bytes());
+    header[8..16].copy_from_slice(&packet.duration_ns().to_le_bytes());
+    header[16] = u8::from(packet.is_keyframe());
+    header[17..21].copy_from_slice(
+        &u32::try_from(packet.bytes().len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
     writer
         .file
-        .write_all(&packet.timestamp_ns().to_le_bytes())
-        .and_then(|()| writer.file.write_all(&packet.duration_ns().to_le_bytes()))
-        .and_then(|()| writer.file.write_all(&[u8::from(packet.is_keyframe())]))
-        .and_then(|()| {
-            writer.file.write_all(
-                &u32::try_from(packet.bytes().len())
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes(),
-            )
-        })
+        .write_all(&header)
         .and_then(|()| writer.file.write_all(packet.bytes()))
         .map_err(|error| io_error("could not write Replay segment", &error))?;
     writer.end_timestamp_ns = packet.timestamp_ns().saturating_add(packet.duration_ns());
     writer.bytes = writer.bytes.saturating_add(record_bytes);
-    Ok(())
+    Ok(true)
 }
 
 fn clear_completed_segments(
@@ -1023,7 +1201,7 @@ fn create_segment(
     start_timestamp_ns: u64,
 ) -> Result<SegmentWriter, ReplaySpoolError> {
     let temporary_path = directory.join(format!(".{SEGMENT_PREFIX}{sequence:016x}{TEMP_SUFFIX}"));
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
@@ -1043,6 +1221,7 @@ fn create_segment(
                 .open(&temporary_path)
         })
         .map_err(|error| io_error("could not create Replay segment", &error))?;
+    let mut file = BufWriter::with_capacity(SEGMENT_WRITE_BUFFER_BYTES, file);
     file.write_all(SEGMENT_MAGIC)
         .map_err(|error| io_error("could not write Replay segment header", &error))?;
     Ok(SegmentWriter {
@@ -1061,20 +1240,28 @@ fn commit_segment(
     limits: SpoolLimits,
     index: &Arc<Mutex<SpoolIndex>>,
 ) -> Result<(), ReplaySpoolError> {
-    writer
-        .file
+    let SegmentWriter {
+        temporary_path,
+        mut file,
+        start_timestamp_ns,
+        end_timestamp_ns,
+        bytes: _,
+        sequence,
+    } = writer;
+    file.flush()
+        .map_err(|error| io_error("could not flush Replay segment", &error))?;
+    file.get_ref()
         .sync_data()
         .map_err(|error| io_error("could not flush Replay segment", &error))?;
-    drop(writer.file);
+    drop(file);
     let destination = directory.join(format!(
-        "{SEGMENT_PREFIX}{:016x}-{:016x}-{:016x}{SEGMENT_SUFFIX}",
-        writer.sequence, writer.start_timestamp_ns, writer.end_timestamp_ns
+        "{SEGMENT_PREFIX}{sequence:016x}-{start_timestamp_ns:016x}-{end_timestamp_ns:016x}{SEGMENT_SUFFIX}"
     ));
-    if let Err(error) = fs::rename(&writer.temporary_path, &destination) {
+    if let Err(error) = fs::rename(&temporary_path, &destination) {
         // The partial segment is invalid history for any later save, so the
         // abandoned temporary file is removed here before the error reaches
         // the worker's drop-and-resynchronize path.
-        let _ = fs::remove_file(&writer.temporary_path);
+        let _ = fs::remove_file(&temporary_path);
         return Err(io_error("could not commit Replay segment", &error));
     }
     sync_directory(directory)?;
@@ -1085,8 +1272,8 @@ fn commit_segment(
     index.generation = index.generation.saturating_add(1);
     index.segments.push_back(ReplaySpoolSegment {
         path: destination,
-        start_timestamp_ns: writer.start_timestamp_ns,
-        end_timestamp_ns: writer.end_timestamp_ns,
+        start_timestamp_ns,
+        end_timestamp_ns,
         bytes: metadata.len(),
     });
     enforce_limits(directory, &mut index, limits)
@@ -1265,7 +1452,7 @@ fn sync_directory(directory: &Path) -> Result<(), ReplaySpoolError> {
 }
 
 fn io_error(context: &str, error: &io::Error) -> ReplaySpoolError {
-    ReplaySpoolError::new(format!(
+    ReplaySpoolError::storage_failure(format!(
         "{context}: kind={:?} errno={:?} detail={error}",
         error.kind(),
         error.raw_os_error()
@@ -1325,6 +1512,98 @@ mod tests {
             quality: ReplayQuality::Efficient,
             storage_limit: ReplayStorageLimit::GiB5,
         }
+    }
+
+    #[test]
+    fn queued_payload_bytes_have_a_fixed_bound_and_release_exactly() {
+        let shared = SharedStats::default();
+        assert!(shared.reserve_queued_bytes(MAX_QUEUED_BYTES));
+        assert!(!shared.reserve_queued_bytes(1));
+        assert_eq!(
+            shared.queued_bytes.load(Ordering::Acquire),
+            MAX_QUEUED_BYTES
+        );
+        shared.release_queued_bytes(MAX_QUEUED_BYTES);
+        assert_eq!(shared.queued_bytes.load(Ordering::Acquire), 0);
+        assert!(shared.reserve_queued_bytes(1));
+        shared.release_queued_bytes(1);
+    }
+
+    #[test]
+    fn terminal_worker_cleanup_drains_a_packet_left_after_shutdown() {
+        let root = fixture();
+        let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let index = Arc::new(Mutex::new(SpoolIndex::default()));
+        let shared = Arc::new(SharedStats::default());
+        let spool = ReplaySegmentSpool {
+            sender,
+            worker: None,
+            index: Arc::clone(&index),
+            shared: Arc::clone(&shared),
+        };
+
+        // This ordering models the producer that passed admission just before
+        // shutdown published its terminal command. The packet is real queue
+        // traffic, so the worker must release its reservation while draining.
+        spool
+            .sender
+            .send(SpoolCommand::Shutdown)
+            .expect("queue shutdown command");
+        spool
+            .try_submit(packet_with_payload_bytes(0, true, 4 * 1024 * 1024))
+            .expect("queue packet behind shutdown command");
+        assert_eq!(shared.queued_packets.load(Ordering::Acquire), 1);
+        assert_eq!(shared.queued_bytes.load(Ordering::Acquire), 4 * 1024 * 1024);
+
+        run_worker(
+            &receiver,
+            &root,
+            SpoolLimits::new(
+                RETAINED_DURATION,
+                ReplayQuality::Efficient,
+                ReplayFrameRate::Fps60,
+            ),
+            &index,
+            &shared,
+        );
+
+        assert_eq!(shared.queued_packets.load(Ordering::Acquire), 0);
+        assert_eq!(shared.queued_bytes.load(Ordering::Acquire), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skipped_packets_before_first_keyframe_are_not_counted_as_accepted() {
+        let root = fixture();
+        let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds15))
+            .expect("open spool");
+        spool
+            .try_submit(packet(0, false))
+            .expect("queue pre-keyframe packet");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while spool.stats().dropped_awaiting_keyframe < 1 {
+            assert!(Instant::now() < deadline, "spool worker stalled");
+            thread::sleep(Duration::from_millis(1));
+        }
+        let stats = spool.stats();
+        assert_eq!(stats.accepted_packets, 0);
+        assert_eq!(stats.buffered_duration_ns, 0);
+
+        spool
+            .try_submit(packet(NANOSECONDS_PER_SECOND, true))
+            .expect("queue first keyframe");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while spool.stats().accepted_packets < 1 {
+            assert!(Instant::now() < deadline, "spool worker stalled");
+            thread::sleep(Duration::from_millis(1));
+        }
+        let stats = spool.stats();
+        assert_eq!(stats.accepted_packets, 1);
+        assert_eq!(stats.buffered_duration_ns, NANOSECONDS_PER_SECOND);
+
+        spool.shutdown();
+        let _ = fs::remove_dir_all(root);
     }
 
     fn packet(timestamp_ns: u64, keyframe: bool) -> EncodedReplayPacket {
@@ -1406,7 +1685,7 @@ mod tests {
             spool
                 .try_submit(packet(second * NANOSECONDS_PER_SECOND, second % 2 == 0))
                 .expect("queue no-loss history fixture packet");
-            // This history assertion requires no queue-full discontinuity.
+            // This history assertion requires no deferred queue pressure.
             // Wait for worker progress instead of assuming a 1 ms disk write.
             let deadline = Instant::now() + Duration::from_secs(5);
             while spool.stats().accepted_packets < second + 1 {
@@ -1441,10 +1720,9 @@ mod tests {
         let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds15))
             .expect("open spool");
         let packet_count = 32_u64;
-        let packet_bytes = usize::try_from(
-            u64::from(ReplayQuality::Efficient.target_megabits_per_second()) * BYTES_PER_MEGABIT,
-        )
-        .expect("bounded packet size");
+        let packet_bytes =
+            usize::try_from(MAX_QUEUED_BYTES / packet_count - 1).expect("bounded packet size");
+        let pause = spool.pause_worker();
 
         for index in 0..packet_count {
             spool
@@ -1455,6 +1733,7 @@ mod tests {
                 ))
                 .expect("burst should fit the bounded spool queue");
         }
+        drop(pause);
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while spool.stats().accepted_packets < packet_count {
@@ -1489,6 +1768,33 @@ mod tests {
         assert_eq!(COMMAND_CAPACITY, 64);
         assert_eq!(MAX_SEGMENTS, 512);
         assert_eq!(MAX_SEGMENT_BYTES, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn buffered_duration_stays_bounded_after_retention_rollover() {
+        let root = fixture();
+        let configured = settings(ReplayDuration::Seconds900);
+        let mut spool = ReplaySegmentSpool::open(&root, configured).expect("open spool");
+        for second in 0..=1_200_u64 {
+            while spool.stats().queued_packets >= 16 {
+                thread::sleep(Duration::from_millis(1));
+            }
+            spool
+                .try_submit(packet(second * NANOSECONDS_PER_SECOND, second % 2 == 0))
+                .expect("retention rollover packet should queue");
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while spool.stats().accepted_packets < 1_201 {
+            assert!(Instant::now() < deadline, "spool worker stalled");
+            thread::sleep(Duration::from_millis(1));
+        }
+        let stats = spool.stats();
+        assert_eq!(stats.dropped_queue_full, 0);
+        assert_eq!(stats.segment_resyncs, 0);
+        assert!(stats.buffered_duration_ns <= 900 * NANOSECONDS_PER_SECOND);
+        assert!(stats.buffered_duration_ns >= 899 * NANOSECONDS_PER_SECOND);
+        spool.shutdown();
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1614,8 +1920,8 @@ mod tests {
             spool
                 .try_submit(packet)
                 .expect("queue budget fixture packet");
-            // Drain each keyframe pair so this budget test cannot trigger the
-            // queue-full discontinuity policy on a slower storage worker.
+            // Drain each keyframe pair so this budget test cannot accumulate
+            // deferred queue pressure on a slower storage worker.
             if second % 2 == 1 {
                 spool
                     .seal_active_tail()
@@ -1652,8 +1958,8 @@ mod tests {
             spool
                 .try_submit(packet)
                 .expect("queue budget fixture packet");
-            // Keep the full history deterministic: retrying QueueFull also
-            // signals a discontinuity and can discard the active segment.
+            // Keep the full history deterministic by committing each pair
+            // before submitting the next one.
             if second % 2 == 1 {
                 spool
                     .seal_active_tail()

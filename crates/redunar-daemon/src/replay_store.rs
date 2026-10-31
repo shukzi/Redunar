@@ -38,6 +38,8 @@ pub struct ReplayClipStore {
     directory: PathBuf,
     maximum_clip_bytes: u64,
     storage_limit_bytes: u64,
+    #[cfg(test)]
+    available_bytes_override: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -174,20 +176,34 @@ impl ReplayClipStore {
 
     fn ensure_filesystem_space(&self, expected_clip_bytes: u64) -> Result<(), ReplayStoreError> {
         validate_store(&self.directory)?;
-        let status = statvfs(&self.directory).map_err(|error| {
-            ReplayStoreError::owned(format!(
-                "could not inspect free space for Replay clips: {error}"
-            ))
-        })?;
-        let available = status
-            .blocks_available()
-            .saturating_mul(status.fragment_size());
+        let available = self.available_filesystem_bytes()?;
         if !has_required_free_space(available, expected_clip_bytes) {
             return Err(ReplayStoreError::new(
                 "not enough free space to save Replay while preserving the 512 MiB safety reserve",
             ));
         }
         Ok(())
+    }
+
+    fn available_filesystem_bytes(&self) -> Result<u64, ReplayStoreError> {
+        #[cfg(test)]
+        if let Some(available) = self.available_bytes_override {
+            return Ok(available);
+        }
+        let status = statvfs(&self.directory).map_err(|error| {
+            ReplayStoreError::owned(format!(
+                "could not inspect free space for Replay clips: {error}"
+            ))
+        })?;
+        Ok(status
+            .blocks_available()
+            .saturating_mul(status.fragment_size()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_available_bytes(mut self, available: u64) -> Self {
+        self.available_bytes_override = Some(available);
+        self
     }
 
     /// Reserve enough filesystem space for the largest clip this store can
@@ -265,7 +281,23 @@ impl ReplayClipStore {
             directory,
             maximum_clip_bytes: budget.maximum_ring_bytes,
             storage_limit_bytes: budget.storage_limit_bytes,
+            #[cfg(test)]
+            available_bytes_override: None,
         })
+    }
+
+    pub(crate) fn open_existing_with_budget(
+        &self,
+        budget: ReplayBudget,
+    ) -> Result<Self, ReplayStoreError> {
+        let store = Self::open_existing(self.directory.clone(), budget)?;
+        #[cfg(test)]
+        let store = {
+            let mut store = store;
+            store.available_bytes_override = self.available_bytes_override;
+            store
+        };
+        Ok(store)
     }
 
     /// Save one finalized Matroska container and enforce the configured
@@ -948,6 +980,8 @@ impl ReplayClipStore {
             directory,
             maximum_clip_bytes,
             storage_limit_bytes,
+            #[cfg(test)]
+            available_bytes_override: None,
         })
     }
 

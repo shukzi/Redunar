@@ -58,8 +58,12 @@ software video.
 
 The rolling history is capped at 15 minutes. Saved duration can be shorter when
 the first retained keyframe occurs after the requested start. History and
-session records have fixed size and count limits. Temporary media and cache
-files are cleaned only when Redunar owns them.
+session records have fixed size and count limits. The encoded in-memory Replay
+repair window is capped at 256 MiB, and the disk spool queue is capped at 32
+MiB of payload. Transient spool pressure is repaired from the in-memory window;
+storage failures stop disk-history publication instead of publishing a silent
+gap while live capture continues in the bounded RAM window. Temporary media
+and cache files are cleaned only when Redunar owns them.
 
 ## Measurement procedure
 

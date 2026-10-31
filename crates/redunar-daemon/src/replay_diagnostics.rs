@@ -224,13 +224,13 @@ mod tests {
         let fixture = Fixture::new();
         let settings = ReplaySettings {
             duration: ReplayDuration::Seconds15,
-            frame_rate: ReplayFrameRate::Fps30,
+            frame_rate: ReplayFrameRate::Fps60,
             quality: ReplayQuality::Efficient,
             storage_limit: ReplayStorageLimit::GiB5,
         };
         let report = run_replay_foundation_self_test(&fixture.0, settings).expect("self-test");
-        assert_eq!(report.packet_count, 60);
-        assert_eq!(report.encoded_bytes, 360);
+        assert_eq!(report.packet_count, 120);
+        assert_eq!(report.encoded_bytes, 720);
         assert_eq!(report.synthetic_duration_ns, 2_000_000_000);
         assert!(report.stored_clip.path.is_file());
         assert_eq!(report.storage.owned_clips, 1);

@@ -758,9 +758,7 @@ fn render_replay_menu(canvas: &mut Canvas, menu: ReplayMenuTelemetry, scale: u32
         draw_text_centered(canvas, label, left, right, 12, 1, scale, palette.muted);
     }
     let capture = match menu.frame_rate {
-        30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
-        120 => b"120 FPS".as_slice(),
         REPLAY_MENU_VARIABLE_FPS => b"VARIABLE".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
@@ -2448,7 +2446,7 @@ mod tests {
                             status: ReplayMenuStatus::Buffering,
                             available_seconds: 90,
                             click_revision: 0,
-                            frame_rate: 120,
+                            frame_rate: 60,
                             quality: 1,
                             output_format: 1,
                             save_enabled: true,

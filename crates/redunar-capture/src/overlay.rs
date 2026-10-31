@@ -227,7 +227,7 @@ fn validate_replay_menu(value: ReplayMenuTelemetry) -> Result<(), OverlayTelemet
         || value.pressed_target > 11
         || value.selected_duration_index > 7
         || value.available_seconds > 900
-        || !matches!(value.frame_rate, 30 | 60 | 120 | REPLAY_MENU_VARIABLE_FPS)
+        || !matches!(value.frame_rate, 60 | REPLAY_MENU_VARIABLE_FPS)
         || value.quality > 2
         || value.output_format > 1
         || (!value.pointer_pressed && value.pressed_target != 0)
@@ -645,7 +645,7 @@ mod tests {
             status: ReplayMenuStatus::Buffering,
             available_seconds: 28,
             click_revision: 3,
-            frame_rate: 120,
+            frame_rate: 60,
             quality: 2,
             output_format: 1,
             save_enabled: true,

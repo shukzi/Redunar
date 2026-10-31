@@ -261,6 +261,68 @@ fn encoded_fixture() -> (Vec<u8>, ReplayVideoStream) {
 }
 
 #[test]
+fn memory_snapshot_streams_decodable_video_and_mixed_audio_in_both_containers() {
+    let fixture = Fixture::new();
+    let (encoded, stream) = encoded_fixture();
+    let settings = ReplaySettings::default();
+    let store = ReplayClipStore::open(&fixture.0, ReplayBudget::from_settings(settings)).unwrap();
+    let mut ring = ReplayRing::new(settings);
+    for index in 0..20 {
+        ring.push(h264_annex_b_access_unit(index * 100_000_000, 100_000_000, &encoded).unwrap())
+            .unwrap();
+    }
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let audio = crate::replay_audio_mix::mix_audio_tracks(
+        ReplayAudioTracks {
+            system: mixed_audio_fixture(false),
+            microphone: Some(mixed_audio_fixture(false)),
+        },
+        (0, 2_000_000_000),
+        &cancel,
+    )
+    .unwrap();
+    for format in [ReplayOutputFormat::Matroska, ReplayOutputFormat::Mp4] {
+        let mut packets = crate::replay_packet_source::MemoryPackets::new(
+            ring.clone(),
+            std::sync::Arc::clone(&cancel),
+        )
+        .unwrap();
+        let clip = store
+            .save_streaming_tracks(&stream, &mut packets, &audio, format)
+            .unwrap();
+        assert_mixed_audio(&clip.path);
+        let decode = Command::new("ffmpeg")
+            .args(["-v", "error", "-xerror", "-i"])
+            .arg(&clip.path)
+            .args(["-f", "null", "-"])
+            .output()
+            .unwrap();
+        assert!(
+            decode.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&clip.path)
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        assert_eq!(String::from_utf8(probe.stdout).unwrap().trim(), "20");
+    }
+}
+
+#[test]
 fn unrepresentable_mp4_timestamps_leave_no_partial_clip() {
     use crate::replay_packet_source::ReplayPacketSource;
     struct Source(std::collections::VecDeque<EncodedReplayPacket>);

@@ -236,9 +236,7 @@ const fn status(phase: ReplayPhase) -> ReplayMenuStatus {
 
 const fn frame_rate(value: ReplayFrameRate) -> u8 {
     match value {
-        ReplayFrameRate::Fps30 => 30,
         ReplayFrameRate::Fps60 => 60,
-        ReplayFrameRate::Fps120 => 120,
         ReplayFrameRate::Variable => REPLAY_MENU_VARIABLE_FPS,
     }
 }

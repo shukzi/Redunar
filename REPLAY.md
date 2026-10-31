@@ -14,9 +14,8 @@ do not claim that a buffer exists.
 Recording settings are locked during the owned game session. The default is
 60 FPS and Balanced quality. Variable FPS timestamps accepted game presents
 within bounded resolution and encoder limits; it may drop frames under load.
-Existing fixed 30 and 120 FPS profiles remain readable. Fixed 120 FPS keeps its
-1080p limit. Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes;
-the rolling buffer retains a bounded 15-minute horizon.
+Supported save lengths are 15/30 seconds and 1/2/3/5/10/15 minutes; the rolling
+buffer retains a bounded 15-minute horizon.
 
 The source is the launched game's Vulkan or supported desktop OpenGL presentation
 path. Replay does not capture the complete desktop or compositor scanout. A
@@ -65,6 +64,16 @@ fallback.
 Capture begins after encoder readiness. Accepted frames retain their timestamps.
 A rolling save starts at a retained keyframe, so actual duration can be shorter
 than the selected history window. Inspect the media result during acceptance.
+
+Disk-spool pressure is repaired from the bounded in-memory Replay window in
+timestamp order. The window is capped at 256 MiB, and transient queue pressure
+does not discard the active segment. If the repair window is exhausted, or a
+write, flush, rename, or retention operation fails, disk history becomes
+unavailable rather than publishing a clip with an unreported gap. Live capture
+continues in the bounded RAM window, and saves use that recent history until
+the pipeline is replaced. These saves preserve the filesystem reserve and
+cancellation checks used by disk-backed saves. A save may ask for another
+attempt while deferred disk history is still catching up.
 
 ## Audio
 

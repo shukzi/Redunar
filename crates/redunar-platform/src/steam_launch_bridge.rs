@@ -392,9 +392,7 @@ impl SteamCaptureEnvironment {
         updates.insert(
             OsString::from(REDUNAR_REPLAY_FRAME_RATE_ENV),
             OsString::from(match self.replay.frame_rate() {
-                ReplayFrameRate::Fps30 => "30",
                 ReplayFrameRate::Fps60 => "60",
-                ReplayFrameRate::Fps120 => "120",
                 ReplayFrameRate::Variable => "variable",
             }),
         );
@@ -925,9 +923,7 @@ fn encode_granted(environment: &SteamCaptureEnvironment) -> Result<Vec<u8>, Stea
         None => bytes.extend_from_slice(&0_u16.to_le_bytes()),
     }
     bytes.push(match environment.replay.frame_rate() {
-        ReplayFrameRate::Fps30 => 30,
         ReplayFrameRate::Fps60 => 60,
-        ReplayFrameRate::Fps120 => 120,
         ReplayFrameRate::Variable => 240,
     });
     bytes.push(u8::from(environment.replay.is_requested()));
@@ -981,9 +977,7 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
         .map_err(|_| SteamActivationError::new("invalid overlay metrics"))?;
     let overlay_telemetry_path = take_path(bytes, &mut cursor, true)?;
     let replay_frame_rate = match take_u8(bytes, &mut cursor)? {
-        30 => ReplayFrameRate::Fps30,
         60 => ReplayFrameRate::Fps60,
-        120 => ReplayFrameRate::Fps120,
         240 => ReplayFrameRate::Variable,
         _ => return Err(SteamActivationError::new("invalid replay frame rate")),
     };
@@ -1418,7 +1412,7 @@ mod tests {
         .with_overlay_telemetry_path("/run/user/1000/redunar/capture/overlay.bin")
         .expect("telemetry path")
         .with_replay_requested(true)
-        .with_replay_frame_rate(ReplayFrameRate::Fps30)
+        .with_replay_frame_rate(ReplayFrameRate::Fps60)
     }
 
     fn store_at(now: Instant, ttl: Duration, uid: u32) -> PendingActivationStore {

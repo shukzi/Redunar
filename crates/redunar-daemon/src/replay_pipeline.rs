@@ -1,10 +1,11 @@
 use crate::replay_encoder::MAX_HARDWARE_INPUTS_IN_FLIGHT;
 use crate::{
     DmaBufReplayFrame, HardwareEncoderApi, HardwareEncoderBackend, ReplayAssemblyJob,
-    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayAudioTracks, ReplayClipStore,
-    ReplayEncoderError, ReplayOutputFormat, ReplayPacketFlow, ReplayPacketFlowPhase,
-    ReplayRingStats, ReplaySegmentSpool, ReplaySpoolError, ReplaySpoolPhase, ReplaySpoolStats,
-    ReplaySpoolSubmitError, ReplayStoreError, ReplayVideoStream, StoredReplayClip,
+    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayAudioTracks, ReplayBudget,
+    ReplayClipStore, ReplayEncoderError, ReplayOutputFormat, ReplayPacketFlow,
+    ReplayPacketFlowPhase, ReplayPushOutcome, ReplayRingStats, ReplaySegmentSpool,
+    ReplaySpoolError, ReplaySpoolPhase, ReplaySpoolStats, ReplaySpoolSubmitError, ReplayStoreError,
+    ReplayVideoStream, StoredReplayClip,
 };
 use redunar_core::{ReplayDuration, ReplayFrameRate, ReplaySettings};
 use std::collections::VecDeque;
@@ -94,6 +95,9 @@ pub struct ReplayHardwarePipeline {
     flow: ReplayPacketFlow,
     store: ReplayClipStore,
     spool: Option<ReplaySegmentSpool>,
+    spool_pending_from_ns: Option<u64>,
+    spool_degraded: bool,
+    encoded_packets_total: u64,
     phase: ReplayPipelinePhase,
     last_frame_timestamp_ns: Option<u64>,
     last_keyframe_request_timestamp_ns: Option<u64>,
@@ -130,6 +134,9 @@ impl ReplayHardwarePipeline {
             flow: ReplayPacketFlow::new(in_memory_settings(settings), stream),
             store,
             spool: None,
+            spool_pending_from_ns: None,
+            spool_degraded: false,
+            encoded_packets_total: 0,
             phase: ReplayPipelinePhase::Buffering,
             last_frame_timestamp_ns: None,
             last_keyframe_request_timestamp_ns: None,
@@ -163,9 +170,10 @@ impl ReplayHardwarePipeline {
 
     /// Connect the hardware packet path to the fixed-memory disk spool.
     ///
-    /// A saturated spool drops its current segment until the next keyframe;
-    /// the encoder/ring path never blocks on disk. A failed spool is terminal
-    /// because continuing would advertise history that can no longer be saved.
+    /// A saturated spool defers packet admission and repairs the backlog from
+    /// the bounded in-memory ring. The encoder path never blocks on disk. A
+    /// backlog that outlives that repair window fails closed rather than
+    /// silently advertising a history with a gap.
     #[must_use]
     pub fn with_spool(mut self, spool: ReplaySegmentSpool) -> Self {
         self.spool = Some(spool);
@@ -204,7 +212,36 @@ impl ReplayHardwarePipeline {
 
     #[must_use]
     pub fn spool_stats(&self) -> Option<ReplaySpoolStats> {
-        self.spool.as_ref().map(ReplaySegmentSpool::stats)
+        let spool = self.spool.as_ref()?;
+        let stats = spool.stats();
+        if self.spool_degraded || spool.phase() != ReplaySpoolPhase::Running {
+            return Some(self.ram_only_spool_stats(stats));
+        }
+        Some(stats)
+    }
+
+    fn ram_only_spool_stats(&self, mut stats: ReplaySpoolStats) -> ReplaySpoolStats {
+        let ring = self.flow.ring();
+        let mut packets = ring.packets();
+        let first = packets.next();
+        let last = packets.last().or(first);
+        stats.active_bytes = ring.stats().stored_bytes;
+        stats.buffered_duration_ns = first.zip(last).map_or(0, |(first, last)| {
+            last.timestamp_ns()
+                .saturating_add(last.duration_ns())
+                .saturating_sub(first.timestamp_ns())
+        });
+        stats.accepted_packets = self.encoded_packets_total;
+        stats.queued_packets = 0;
+        stats
+    }
+
+    pub(crate) fn disk_history_available(&self) -> bool {
+        !self.spool_degraded
+            && self
+                .spool
+                .as_ref()
+                .is_some_and(|spool| spool.phase() == ReplaySpoolPhase::Running)
     }
 
     pub(crate) fn in_flight_count(&self) -> usize {
@@ -417,6 +454,16 @@ impl ReplayHardwarePipeline {
             self.fail_closed();
             return Err(ReplayPipelineError::Encoder(error));
         }
+        if let Err(error) = self.flush_spool_backlog_before_save() {
+            if !self.disk_history_available() {
+                return self.save_recent_replay_as_with_audio_tracks(
+                    duration,
+                    output_format,
+                    audio_snapshot,
+                );
+            }
+            return Err(ReplayPipelineError::Spool(error));
+        }
         let spool = self
             .spool
             .as_ref()
@@ -445,6 +492,78 @@ impl ReplayHardwarePipeline {
         // the normal two-second keyframe cadence.
         self.last_keyframe_request_timestamp_ns = None;
         Ok(job)
+    }
+
+    pub(crate) fn save_recent_replay_as_with_audio_tracks(
+        &mut self,
+        duration: ReplayDuration,
+        output_format: ReplayOutputFormat,
+        audio_snapshot: impl FnOnce(u64, u64) -> ReplayAudioTracks + Send + 'static,
+    ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
+        if self.phase != ReplayPipelinePhase::Buffering {
+            return Err(ReplayPipelineError::InvalidLifecycle);
+        }
+        let drained = match self
+            .backend
+            .as_mut()
+            .ok_or(ReplayPipelineError::InvalidLifecycle)?
+            .drain()
+        {
+            Ok(drained) => drained,
+            Err(error) => {
+                self.fail_closed();
+                return Err(ReplayPipelineError::Encoder(error));
+            }
+        };
+        if let Err(error) = self.accept_encoded(drained) {
+            self.fail_closed();
+            return Err(ReplayPipelineError::Encoder(error));
+        }
+        let ring = self.flow.ring().snapshot_for_duration(duration);
+        let Some(first) = ring.packets().next() else {
+            return Err(ReplayPipelineError::NoEncodedFrames);
+        };
+        let last = ring.packets().last().unwrap_or(first);
+        let window = (
+            first.timestamp_ns(),
+            last.timestamp_ns().saturating_add(last.duration_ns()),
+        );
+        let audio = audio_snapshot(window.0, window.1);
+        let stream = self.flow.stream().clone();
+        let store = self.store.clone();
+        let mut save_settings = self.settings;
+        save_settings.duration = duration;
+        ReplayAssemblyJob::spawn("redunar-replay-ram-save", move |cancel| {
+            let audio = crate::replay_audio_mix::mix_audio_tracks(audio, window, &cancel).map_err(
+                |error| {
+                    ReplaySpoolError::new(format!("could not mix Replay snapshot audio: {error}"))
+                },
+            )?;
+            let mut packets = crate::replay_packet_source::MemoryPackets::new(ring, cancel)
+                .map_err(|error| ReplaySpoolError::new(error.to_string()))?;
+            let requested_store = store
+                .open_existing_with_budget(ReplayBudget::from_settings(save_settings))
+                .map_err(|error| {
+                    ReplaySpoolError::new(format!(
+                        "could not prepare Replay storage for the requested interval: {error}"
+                    ))
+                })?;
+            // RAM fallback must preserve the same filesystem reserve and
+            // cancellation behavior as the normal disk-backed save.
+            requested_store
+                .ensure_free_space_for_clip()
+                .map_err(|error| {
+                    ReplaySpoolError::new(format!(
+                        "could not reserve space for assembled Replay: {error}"
+                    ))
+                })?;
+            requested_store
+                .save_streaming_tracks(&stream, &mut packets, &audio, output_format)
+                .map_err(|error| {
+                    ReplaySpoolError::new(format!("could not store assembled Replay: {error}"))
+                })
+        })
+        .map_err(ReplayPipelineError::Spool)
     }
 
     fn audio_snapshot(&self) -> ReplayAudioSnapshot {
@@ -478,13 +597,14 @@ impl ReplayHardwarePipeline {
         }
         self.phase = ReplayPipelinePhase::Resetting;
         self.flow.begin_reset();
-        if let Some(spool) = self.spool.as_ref()
+        if !self.spool_degraded
+            && let Some(spool) = self.spool.as_ref()
             && let Err(error) = spool.reset_epoch()
         {
-            let _ = replacement.shutdown();
-            self.fail_closed();
-            return Err(ReplayPipelineError::Spool(error));
+            self.degrade_spool(&error);
         }
+        self.spool_pending_from_ns = None;
+        self.encoded_packets_total = 0;
         if let Err(error) = self.shutdown_backend() {
             let _ = replacement.shutdown();
             self.flow.fail();
@@ -528,6 +648,8 @@ impl ReplayHardwarePipeline {
         if let Some(mut spool) = self.spool.take() {
             spool.shutdown();
         }
+        self.spool_pending_from_ns = None;
+        self.encoded_packets_total = 0;
         self.phase = ReplayPipelinePhase::Shutdown;
         result.map_err(ReplayPipelineError::Encoder)
     }
@@ -540,6 +662,14 @@ impl ReplayHardwarePipeline {
         self.phase = ReplayPipelinePhase::Failed;
     }
 
+    fn degrade_spool(&mut self, reason: impl std::fmt::Display) {
+        crate::log_op!(
+            "Redunar Replay: disk history unavailable; continuing with bounded RAM history: {reason}"
+        );
+        self.spool_degraded = true;
+        self.spool_pending_from_ns = None;
+    }
+
     fn push_encoded(&mut self, batch: crate::EncodedPacketBatch) -> Result<(), ReplayEncoderError> {
         for packet in batch.packets() {
             self.flow.stream().validate_packet(packet.bytes())?;
@@ -548,25 +678,117 @@ impl ReplayHardwarePipeline {
         // This bounded metadata copy lets the ring and asynchronous spool own
         // the same encoded packet without copying video bytes.
         let spool_packets = self.spool.as_ref().map(|_| batch.packets().to_vec());
-        self.flow.push_batch(batch)?;
-        if let (Some(spool), Some(spool_packets)) = (self.spool.as_ref(), spool_packets) {
-            for packet in spool_packets {
-                match spool.try_submit(packet) {
-                    Ok(()) | Err(ReplaySpoolSubmitError::QueueFull(_)) => {}
-                    Err(ReplaySpoolSubmitError::NotRunning(_)) => {
-                        return Err(ReplayEncoderError::BackendFailed(format!(
-                            "Replay spool stopped in phase {:?}",
-                            spool.phase()
-                        )));
+        let outcomes = self.flow.push_batch(batch)?;
+        let stored_packets = outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ReplayPushOutcome::Stored { .. }))
+            .count();
+        self.encoded_packets_total = self
+            .encoded_packets_total
+            .saturating_add(u64::try_from(stored_packets).unwrap_or(u64::MAX));
+        if self.spool.is_some() && !self.spool_degraded {
+            if self.spool_pending_from_ns.is_some() {
+                if let Err(error) = self.flush_spool_backlog() {
+                    self.degrade_spool(error);
+                }
+            } else if let Some(spool_packets) = spool_packets {
+                for (packet, outcome) in spool_packets.into_iter().zip(outcomes) {
+                    if !matches!(outcome, ReplayPushOutcome::Stored { .. }) {
+                        continue;
+                    }
+                    let timestamp_ns = packet.timestamp_ns();
+                    match self
+                        .spool
+                        .as_ref()
+                        .expect("spool presence checked")
+                        .try_submit(packet)
+                    {
+                        Ok(()) => {}
+                        Err(ReplaySpoolSubmitError::QueueFull(_)) => {
+                            self.spool_pending_from_ns = Some(timestamp_ns);
+                            break;
+                        }
+                        Err(ReplaySpoolSubmitError::NotRunning(_)) => {
+                            self.degrade_spool("spool stopped during packet admission");
+                            break;
+                        }
                     }
                 }
             }
-            if spool.phase() != ReplaySpoolPhase::Running {
-                return Err(ReplayEncoderError::BackendFailed(format!(
-                    "Replay spool stopped in phase {:?}",
-                    spool.phase()
-                )));
+            if let Some(spool) = self.spool.as_ref()
+                && spool.phase() != ReplaySpoolPhase::Running
+            {
+                self.degrade_spool(format!("spool entered phase {:?}", spool.phase()));
             }
+        }
+        Ok(())
+    }
+
+    fn flush_spool_backlog(&mut self) -> Result<(), ReplayEncoderError> {
+        let Some(start_timestamp_ns) = self.spool_pending_from_ns else {
+            return Ok(());
+        };
+        let packets = self
+            .flow
+            .ring()
+            .packets()
+            .filter(|packet| packet.timestamp_ns() >= start_timestamp_ns)
+            .cloned()
+            .collect::<Vec<_>>();
+        if packets
+            .first()
+            .is_none_or(|packet| packet.timestamp_ns() != start_timestamp_ns)
+        {
+            return Err(ReplayEncoderError::BackendFailed(
+                "Replay spool backlog exceeded the in-memory repair window".to_owned(),
+            ));
+        }
+        for packet in packets {
+            let timestamp_ns = packet.timestamp_ns();
+            match self
+                .spool
+                .as_ref()
+                .expect("spool required for backlog recovery")
+                .try_submit(packet)
+            {
+                Ok(()) => self.spool_pending_from_ns = None,
+                Err(ReplaySpoolSubmitError::QueueFull(_)) => {
+                    self.spool_pending_from_ns = Some(timestamp_ns);
+                    return Ok(());
+                }
+                Err(ReplaySpoolSubmitError::NotRunning(_)) => {
+                    return Err(ReplayEncoderError::BackendFailed(
+                        "Replay spool stopped during backlog recovery".to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_spool_backlog_before_save(&mut self) -> Result<(), ReplaySpoolError> {
+        if self.spool_degraded
+            || self
+                .spool
+                .as_ref()
+                .is_some_and(|spool| spool.phase() != ReplaySpoolPhase::Running)
+        {
+            return Err(ReplaySpoolError::new(
+                "Replay disk history is unavailable; use the bounded recent RAM history",
+            ));
+        }
+        if self.spool_pending_from_ns.is_none() {
+            return Ok(());
+        }
+        self.flush_spool_backlog().map_err(|error| {
+            ReplaySpoolError::new(format!(
+                "Replay spool could not recover queued history: {error}"
+            ))
+        })?;
+        if self.spool_pending_from_ns.is_some() {
+            return Err(ReplaySpoolError::new(
+                "Replay disk history is still catching up; try saving again",
+            ));
         }
         Ok(())
     }
@@ -649,6 +871,8 @@ fn in_memory_settings(mut settings: ReplaySettings) -> ReplaySettings {
 
 #[cfg(test)]
 mod tests {
+    mod recovery;
+
     use super::*;
     use crate::{
         DmaBufPlane, EncodedPacketBatch, EncodedReplayPacket, HardwareEncodeOutput, ReplayBudget,
@@ -701,6 +925,7 @@ mod tests {
         fail_drain: bool,
         fail_shutdown: bool,
         completion_delay: usize,
+        payload_bytes: usize,
         pending: VecDeque<(u64, u64, u64, bool)>,
     }
 
@@ -723,6 +948,7 @@ mod tests {
                 fail_drain: false,
                 fail_shutdown: false,
                 completion_delay: 0,
+                payload_bytes: 6,
                 pending: VecDeque::new(),
             }
         }
@@ -765,18 +991,18 @@ mod tests {
 
         fn output(
             completed: impl IntoIterator<Item = (u64, u64, u64, bool)>,
+            payload_bytes: usize,
         ) -> Result<HardwareEncodeOutput, ReplayEncoderError> {
             let completed: Vec<_> = completed.into_iter().collect();
             let packets = completed
                 .iter()
                 .map(|(_, timestamp_ns, duration_ns, keyframe)| {
-                    EncodedReplayPacket::new(
-                        *timestamp_ns,
-                        *duration_ns,
-                        *keyframe,
-                        vec![0, 0, 0, 2, if *keyframe { 0x65 } else { 0x41 }, 0x88],
-                    )
-                    .expect("fake packet")
+                    let mut bytes = vec![0x88; payload_bytes];
+                    bytes[..4]
+                        .copy_from_slice(&u32::try_from(payload_bytes - 4).unwrap().to_be_bytes());
+                    bytes[4] = if *keyframe { 0x65 } else { 0x41 };
+                    EncodedReplayPacket::new(*timestamp_ns, *duration_ns, *keyframe, bytes)
+                        .expect("fake packet")
                 })
                 .collect();
             HardwareEncodeOutput::new(
@@ -791,7 +1017,7 @@ mod tests {
 
     impl HardwareEncoderBackend for FakeBackend {
         fn api(&self) -> HardwareEncoderApi {
-            HardwareEncoderApi::VaApi
+            HardwareEncoderApi::VulkanVideo
         }
 
         fn stream(&self) -> &ReplayVideoStream {
@@ -811,16 +1037,18 @@ mod tests {
                 input_sequence,
                 frame.timestamp_ns,
                 frame.duration_ns,
-                force_keyframe,
+                // Large-payload fixtures use independent frames to exercise
+                // byte admission without hitting the encoder's GOP bound.
+                force_keyframe || self.payload_bytes > 6,
             );
             if self.completion_delay > 0 {
                 let completed = (self.pending.len() >= self.completion_delay)
                     .then(|| self.pending.pop_front())
                     .flatten();
                 self.pending.push_back(current);
-                Self::output(completed)
+                Self::output(completed, self.payload_bytes)
             } else {
-                Self::output(Some(current))
+                Self::output(Some(current), self.payload_bytes)
             }
         }
 
@@ -830,7 +1058,10 @@ mod tests {
                     "injected drain".to_owned(),
                 ));
             }
-            Self::output(self.pending.drain(..).collect::<Vec<_>>())
+            Self::output(
+                self.pending.drain(..).collect::<Vec<_>>(),
+                self.payload_bytes,
+            )
         }
 
         fn shutdown(&mut self) -> Result<(), ReplayEncoderError> {
@@ -1158,6 +1389,139 @@ mod tests {
     }
 
     #[test]
+    fn spool_backlog_recovery_replays_the_ring_window_in_order() {
+        let fixture = Fixture::new();
+        let settings = ReplaySettings::default();
+        let store = fixture.store();
+        let spool =
+            ReplaySegmentSpool::open(fixture.root.join("spool"), settings).expect("open spool");
+        let mut pipeline = ReplayHardwarePipeline::new(
+            settings,
+            store,
+            Box::new(FakeBackend::new(
+                1_920,
+                1_080,
+                Arc::new(AtomicUsize::new(0)),
+            )),
+        )
+        .expect("pipeline")
+        .with_spool(spool);
+        let packets = EncodedPacketBatch::new(vec![
+            EncodedReplayPacket::new(0, 1_000_000_000, true, vec![0, 0, 0, 2, 0x65, 0x88])
+                .expect("keyframe"),
+            EncodedReplayPacket::new(
+                1_000_000_000,
+                1_000_000_000,
+                false,
+                vec![0, 0, 0, 2, 0x41, 0x88],
+            )
+            .expect("predicted frame"),
+        ])
+        .expect("packet batch");
+        pipeline.flow.push_batch(packets).expect("ring packets");
+        pipeline.spool_pending_from_ns = Some(0);
+
+        pipeline
+            .flush_spool_backlog()
+            .expect("recover ring packets into spool");
+        assert_eq!(pipeline.spool_pending_from_ns, None);
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while pipeline
+            .spool_stats()
+            .expect("spool stats")
+            .accepted_packets
+            < 2
+        {
+            assert!(Instant::now() < deadline, "spool worker stalled");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(
+            pipeline
+                .spool_stats()
+                .expect("spool stats")
+                .accepted_packets,
+            2
+        );
+        pipeline.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn failed_disk_spool_keeps_bounded_ram_replay_available() {
+        let fixture = Fixture::new();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let settings = ReplaySettings::default();
+        let store = fixture.store();
+        let spool_directory = fixture.root.join("spool");
+        let spool = ReplaySegmentSpool::open(&spool_directory, settings).expect("open spool");
+        let mut pipeline = ReplayHardwarePipeline::new(
+            settings,
+            store,
+            Box::new(FakeBackend::new(1_920, 1_080, Arc::clone(&shutdowns))),
+        )
+        .expect("pipeline")
+        .with_spool(spool);
+
+        pipeline
+            .submit_frame(1, frame_at(&fixture.root, 1, 1_920, 1_080, 0))
+            .expect("initial frame");
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while pipeline
+            .spool
+            .as_ref()
+            .expect("spool")
+            .stats()
+            .accepted_packets
+            < 1
+        {
+            assert!(Instant::now() < deadline, "spool worker stalled");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        fs::remove_dir_all(&spool_directory).expect("simulate disk loss");
+        pipeline
+            .submit_frame(2, frame_at(&fixture.root, 2, 1_920, 1_080, 2_000_000_000))
+            .expect("encoder keeps recording while disk fails");
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while pipeline.spool.as_ref().expect("spool").phase() == ReplaySpoolPhase::Running {
+            assert!(Instant::now() < deadline, "spool failure was not observed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(
+            pipeline.spool.as_ref().expect("spool").phase(),
+            ReplaySpoolPhase::Failed
+        );
+
+        pipeline
+            .submit_frame(3, frame_at(&fixture.root, 3, 1_920, 1_080, 3_000_000_000))
+            .expect("RAM-only recording continues after disk failure");
+        assert!(pipeline.spool_degraded);
+        assert_eq!(pipeline.phase(), ReplayPipelinePhase::Buffering);
+        assert_eq!(pipeline.ring_stats().stored_packets, 3);
+        assert_eq!(
+            pipeline.spool_stats().expect("spool stats").queued_packets,
+            0
+        );
+        pipeline
+            .save_spooled_replay_as_with_audio_tracks(
+                ReplayDuration::Seconds15,
+                ReplayOutputFormat::Matroska,
+                |_, _| ReplayAudioTracks {
+                    system: ReplayAudioSnapshot {
+                        stream: redunar_capture_audio::OpusStreamDescription::default(),
+                        packets: Vec::new(),
+                    },
+                    microphone: None,
+                },
+            )
+            .expect("disk failure should switch to recent RAM replay")
+            .join()
+            .expect("recent RAM replay remains savable");
+        assert_eq!(pipeline.phase(), ReplayPipelinePhase::Buffering);
+        pipeline.shutdown().expect("shutdown");
+        assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn spooled_save_includes_the_tail_and_forces_a_new_keyframe() {
         let fixture = Fixture::new();
         let shutdowns = Arc::new(AtomicUsize::new(0));
@@ -1226,8 +1590,8 @@ mod tests {
                 .submit_frame(index, frame(&fixture.root, index, 1920, 1080))
                 .unwrap();
             let _ = pipeline.take_completed_inputs();
-            // The four-item spool queue intentionally rejects burst submissions;
-            // wait for each fixture packet to be accounted before the next one.
+            // Keep the fixture deterministic by waiting for each packet to be
+            // accounted before the next one.
             let deadline = Instant::now() + std::time::Duration::from_secs(2);
             while pipeline.spool_stats().unwrap().accepted_packets
                 < u64::try_from(position + 1).unwrap()
@@ -1412,7 +1776,9 @@ mod tests {
         );
         assert_eq!(
             pipeline.flow.ring().byte_capacity(),
-            expected.maximum_ring_bytes
+            expected
+                .maximum_ring_bytes
+                .min(crate::replay_ring::MAX_IN_MEMORY_REPLAY_BYTES)
         );
     }
 }

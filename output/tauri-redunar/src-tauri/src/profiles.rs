@@ -103,9 +103,7 @@ fn global_profile_from_input(
     let scale = OverlayScale::new(input.scale)
         .ok_or_else(|| "Overlay scale is outside the supported range".to_owned())?;
     let frame_rate = match input.fps {
-        30 => ReplayFrameRate::Fps30,
         60 => ReplayFrameRate::Fps60,
-        120 => ReplayFrameRate::Fps120,
         // UI transport value; the encoder ceiling depends on dimensions.
         240 => ReplayFrameRate::Variable,
         value => return Err(format!("Unsupported replay frame rate: {value}")),
@@ -421,7 +419,7 @@ mod tests {
             );
         }
         let mut recording_change = current;
-        recording_change.replay.frame_rate = ReplayFrameRate::Fps30;
+        recording_change.replay.frame_rate = ReplayFrameRate::Variable;
         assert!(service
             .save_global_workspace(current, recording_change, format, format)
             .is_err());

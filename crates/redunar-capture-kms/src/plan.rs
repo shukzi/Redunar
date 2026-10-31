@@ -69,12 +69,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_applies_the_existing_120_fps_resolution_policy() {
-        assert!(KmsCapturePlan::new(&output(1_920, 1_080), ReplayFrameRate::Fps120).is_ok());
-        assert_eq!(
-            KmsCapturePlan::new(&output(2_560, 1_440), ReplayFrameRate::Fps120),
-            Err(KmsPlanError::DimensionsUnsupported)
-        );
+    fn plan_applies_the_current_frame_rate_resolution_policy() {
+        assert!(KmsCapturePlan::new(&output(1_920, 1_080), ReplayFrameRate::Variable).is_ok());
+        assert!(KmsCapturePlan::new(&output(2_560, 1_440), ReplayFrameRate::Variable).is_ok());
         assert!(KmsCapturePlan::new(&output(3_840, 2_160), ReplayFrameRate::Fps60).is_ok());
     }
 }

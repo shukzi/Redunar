@@ -615,7 +615,6 @@ pub struct ReplayPreferencesDto {
 #[derive(Debug, Serialize)]
 pub struct ReplayDisplayCapabilityDto {
     connected_outputs: usize,
-    compatible_120_modes: usize,
     maximum_width: Option<u32>,
     maximum_height: Option<u32>,
     status: String,
@@ -628,15 +627,13 @@ pub async fn replay_display_capability() -> Result<ReplayDisplayCapabilityDto, S
         let capability = crate::backend::service().replay_display_capability();
         ReplayDisplayCapabilityDto {
             connected_outputs: capability.connected_outputs,
-            compatible_120_modes: capability.compatible_120_modes,
             maximum_width: capability.maximum_width,
             maximum_height: capability.maximum_height,
             status: capability.error.unwrap_or_else(|| {
-                if capability.compatible_120_modes > 0 {
-                    "A compatible 120 FPS display mode was detected".into()
-                } else {
-                    "No compatible 120 FPS display mode was detected".into()
-                }
+                format!(
+                    "{} display output(s) discovered",
+                    capability.connected_outputs
+                )
             }),
         }
     })

@@ -1150,9 +1150,7 @@ fn push_replay_menu_text(plan: &mut OverlayPlan, menu: ReplayMenuView) {
         push_text_centered_tracked(&mut plan.muted_glyphs, label, left, right, 11);
     }
     let capture = match menu.capture_fps {
-        30 => b"30 FPS".as_slice(),
         60 => b"60 FPS".as_slice(),
-        120 => b"120 FPS".as_slice(),
         REPLAY_MENU_VARIABLE_FPS => b"VARIABLE".as_slice(),
         _ => b"-- FPS".as_slice(),
     };
@@ -4242,7 +4240,7 @@ mod tests {
             status: ReplayMenuStatus::Buffering,
             available_seconds: 42,
             click_revision: 0,
-            frame_rate: 120,
+            frame_rate: 60,
             quality: 2,
             output_format: 1,
             save_enabled: true,
@@ -4255,7 +4253,7 @@ mod tests {
     fn menu_view_maps_the_daemon_snapshot_without_reinterpreting_codes() {
         let view = ReplayMenuView::from_telemetry(menu_telemetry(2, true), u16::MAX);
         assert_eq!(view.status, 2);
-        assert_eq!(view.capture_fps, 120);
+        assert_eq!(view.capture_fps, 60);
         assert_eq!(view.quality, 2);
         assert_eq!(view.format, 1);
         assert_eq!(view.selected_duration, 1);
