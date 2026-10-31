@@ -6,9 +6,13 @@ use redunar_platform::{
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 mod app_preferences;
+#[cfg(test)]
+mod capability_cache_tests;
 mod capture;
 mod capture_lifecycle;
 mod capture_session;
@@ -158,9 +162,21 @@ pub struct ReplayDisplayCapability {
     pub error: Option<String>,
 }
 
+#[derive(Clone)]
+struct CapabilitySnapshot {
+    capture_runtime: CaptureRuntimeStatus,
+    encoder_probe: Option<HardwareEncoderProbe>,
+    module_statuses: ModuleStatuses,
+}
+
 #[derive(Default)]
 struct ServiceRuntime {
     inventory: std::sync::Mutex<replay_inventory_cache::InventoryCache>,
+    capabilities: Mutex<Option<CapabilitySnapshot>>,
+    #[cfg(test)]
+    capability_discovery_revision: AtomicU64,
+    #[cfg(test)]
+    capability_discovery: Option<Arc<dyn Fn() -> CapabilitySnapshot + Send + Sync>>,
     game_session: OnceLock<ProductionGameSessionCoordinator>,
     replay_control: OnceLock<replay_control::ReplayControlServer>,
     // Drop after the coordinator and listener, including all service clones.
@@ -446,7 +462,7 @@ impl RedunarService {
     /// optional OpenGL observer is discovered separately by the launch plan.
     #[must_use]
     pub fn capture_runtime_status(&self) -> CaptureRuntimeStatus {
-        Self::raw_capture_runtime_status()
+        self.capability_snapshot().capture_runtime
     }
 
     fn raw_capture_runtime_status() -> CaptureRuntimeStatus {
@@ -649,7 +665,9 @@ impl RedunarService {
     /// generated-frame verification run.
     #[must_use]
     pub fn replay_hardware_encoder_probe(&self) -> HardwareEncoderProbe {
-        HardwareEncoderProbe::local()
+        self.capability_snapshot()
+            .encoder_probe
+            .unwrap_or_else(HardwareEncoderProbe::local)
     }
 
     /// Inspect connected DRM connector modes for the display-aware Replay
@@ -1241,7 +1259,7 @@ impl RedunarService {
     /// Return current runtime capability truth for the production features.
     #[must_use]
     pub fn module_statuses(&self) -> ModuleStatuses {
-        module_state::permanent_core_statuses(&self.module_capabilities())
+        self.capability_snapshot().module_statuses
     }
 
     /// Return one effective app-wide module state.
@@ -1250,35 +1268,105 @@ impl RedunarService {
         self.module_statuses().get(module).clone()
     }
 
-    fn module_capabilities(&self) -> module_state::ModuleCapabilities {
-        let capture = match Self::raw_capture_runtime_status() {
+    fn capability_snapshot(&self) -> CapabilitySnapshot {
+        // Keep discovery and the returned clone in the same critical section.
+        // Invalidation cannot clear a freshly built value before its reader
+        // receives it, and concurrent cold readers perform only one discovery.
+        let mut cached = self
+            .runtime
+            .capabilities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cached
+            .get_or_insert_with(|| self.discover_capability_snapshot())
+            .clone()
+    }
+
+    fn discover_capability_snapshot(&self) -> CapabilitySnapshot {
+        let snapshot = self.build_capability_snapshot();
+        #[cfg(test)]
+        self.runtime
+            .capability_discovery_revision
+            .fetch_add(1, Ordering::Relaxed);
+        snapshot
+    }
+
+    fn build_capability_snapshot(&self) -> CapabilitySnapshot {
+        #[cfg(test)]
+        if let Some(discover) = &self.runtime.capability_discovery {
+            return discover();
+        }
+        let capture_runtime = Self::raw_capture_runtime_status();
+        let encoder_probe = self
+            .allow_validation_candidate
+            .then(HardwareEncoderProbe::local);
+        let replay_available = self.allow_validation_candidate
+            && cfg!(target_arch = "x86_64")
+            && matches!(capture_runtime, CaptureRuntimeStatus::Available)
+            && encoder_probe
+                .as_ref()
+                .is_some_and(HardwareEncoderProbe::validation_allowed);
+        let capture = match &capture_runtime {
             CaptureRuntimeStatus::Available => module_state::ModuleCapability::Available,
             CaptureRuntimeStatus::Unavailable(reason) => {
-                module_state::ModuleCapability::UnavailableOnSystem(reason)
+                module_state::ModuleCapability::UnavailableOnSystem(reason.clone())
             }
         };
-        let replay = if self.replay_validation_candidate_available() {
+        let replay = if replay_available {
             module_state::ModuleCapability::Available
         } else {
             module_state::ModuleCapability::PlannedUnavailable(
                 "Instant Replay requires Vulkan game capture and an accessible hardware encoder. NVIDIA candidates require one identifiable NVIDIA render GPU and a matching game device.".to_owned(),
             )
         };
-        module_state::ModuleCapabilities {
-            frame_metrics: capture.clone(),
-            in_game_overlay: capture,
-            instant_replay: replay,
+        CapabilitySnapshot {
+            capture_runtime,
+            encoder_probe,
+            module_statuses: module_state::permanent_core_statuses(
+                &module_state::ModuleCapabilities {
+                    frame_metrics: capture.clone(),
+                    in_game_overlay: capture,
+                    instant_replay: replay,
+                },
+            ),
         }
     }
 
+    /// Discard filesystem-backed capability evidence. The next capability
+    /// read performs a fresh bounded discovery.
+    pub fn invalidate_capability_snapshot(&self) {
+        *self
+            .runtime
+            .capabilities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    /// Refresh capability evidence for an explicit diagnostic or retry action.
+    /// Routine UI polling reuses the resulting snapshot.
+    pub fn refresh_capability_snapshot(&self) {
+        // Serialize refresh with both lazy discovery and invalidation so an
+        // older discovery cannot be published after a completed invalidation.
+        let mut cached = self
+            .runtime
+            .capabilities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cached = Some(self.discover_capability_snapshot());
+    }
+
+    #[cfg(test)]
+    fn capability_discovery_revision(&self) -> u64 {
+        self.runtime
+            .capability_discovery_revision
+            .load(Ordering::Relaxed)
+    }
+
     fn replay_validation_candidate_available(&self) -> bool {
-        self.allow_validation_candidate
-            && cfg!(target_arch = "x86_64")
-            && matches!(
-                Self::raw_capture_runtime_status(),
-                CaptureRuntimeStatus::Available
-            )
-            && HardwareEncoderProbe::local().validation_allowed()
+        self.capability_snapshot()
+            .module_statuses
+            .instant_replay
+            .allows_runtime()
     }
 
     /// Load the bounded local, launcher-agnostic game catalog.
@@ -1883,12 +1971,12 @@ mod tests {
         assert!(!replay_settings_locked_for_phase(GameSessionPhase::Ended));
     }
 
-    struct Fixture {
-        root: PathBuf,
+    pub(super) struct Fixture {
+        pub(super) root: PathBuf,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
             let root = env::temp_dir().join(format!("redunar-daemon-{}-{id}", std::process::id()));
             fs::create_dir_all(&root).expect("create fixture");
