@@ -19,6 +19,7 @@ pub(super) const MENU_PATH: &str = "/StatusNotifierItem/Menu";
 pub(super) const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 pub(super) const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 pub(super) const ITEM_INTERFACE: &str = "org.kde.StatusNotifierItem";
+pub(super) const ICON_NAME: &str = "com.redunar.redunar";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
@@ -71,10 +72,10 @@ impl Icon {
             "Title" => "Redunar".to_variant(),
             "Status" => "Active".to_variant(),
             "WindowId" => 0_u32.to_variant(),
-            "IconName" => "com.redunar.Redunar".to_variant(),
+            "IconName" => ICON_NAME.to_variant(),
             "IconPixmap" => self.pixmaps().to_variant(),
             "ToolTip" => (
-                "com.redunar.Redunar",
+                ICON_NAME,
                 self.pixmaps(),
                 "Redunar",
                 self.tooltip.lock().expect("tray tooltip").as_str(),
