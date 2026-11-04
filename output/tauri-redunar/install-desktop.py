@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 APP_ID = "com.redunar.Redunar"
+TRAY_ICON_NAME = "com.redunar.redunar"
 MARKER = "X-Redunar-Local-Tauri=true"
 root = Path(__file__).resolve().parent
 release_root = Path(os.environ.get("REDUNAR_RELEASE_ROOT", root.parent.parent / ".redunar-build/linux/native/tauri/release"))
@@ -46,6 +47,7 @@ data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
 entry = data / "applications" / f"{APP_ID}.desktop"
 icon_dir = data / "icons" / "hicolor" / "256x256" / "apps"
 installed_icon = icon_dir / f"{APP_ID}.png"
+installed_tray_icon = icon_dir / f"{TRAY_ICON_NAME}.png"
 if entry.exists() and MARKER not in entry.read_text():
     raise SystemExit(f"Preserving an existing unmanaged launcher: {entry}")
 
@@ -59,6 +61,7 @@ if any(character in str(root) for character in ("\n", "\r")):
 entry.parent.mkdir(parents=True, exist_ok=True)
 icon_dir.mkdir(parents=True, exist_ok=True)
 installed_icon.write_bytes(icon.read_bytes())
+installed_tray_icon.write_bytes(icon.read_bytes())
 entry_contents = (
     "[Desktop Entry]\nType=Application\nName=Redunar\n"
     "Comment=App for instant replay and in-game metrics.\n"

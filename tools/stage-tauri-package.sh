@@ -74,9 +74,13 @@ install -m 0644 packaging/70-redunar-hotkeys.rules \
   "$destination/usr/lib/udev/rules.d/70-redunar-hotkeys.rules"
 install -m 0644 assets/branding/redunar-logo.svg \
   "$destination/usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg"
+install -m 0644 assets/branding/redunar-logo.svg \
+  "$destination/usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg"
 for icon_size in 16 32 48 64 128 256 512 1024; do
   install -m 0644 "assets/branding/redunar-logo-${icon_size}.png" \
     "$destination/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.Redunar.png"
+  install -m 0644 "assets/branding/redunar-logo-${icon_size}.png" \
+    "$destination/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.redunar.png"
 done
 install -m 0644 packaging/LICENSE-Lucide.txt \
   "$destination/usr/share/doc/redunar/LICENSE-Lucide.txt"

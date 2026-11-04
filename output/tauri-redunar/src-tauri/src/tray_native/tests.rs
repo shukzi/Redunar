@@ -375,6 +375,10 @@ fn real_objects_export_icon_menu_and_typed_actions_without_indicator_library() {
     .unwrap();
     let (values,) = props.get::<(BTreeMap<String, Variant>,)>().unwrap();
     assert_eq!(
+        values["IconName"].get::<String>().as_deref(),
+        Some(ICON_NAME)
+    );
+    assert_eq!(
         values["IconPixmap"].get::<Vec<(i32, i32, Vec<u8>)>>(),
         Some(vec![(1, 1, vec![40, 10, 20, 30])])
     );

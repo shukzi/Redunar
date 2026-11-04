@@ -55,6 +55,9 @@ A new file on disk cannot update an already-running process.
 - `com.redunar.Redunar.desktop`, matching AppStream metadata, canonical
   Comet R icons, and required notices/licenses.
 
+The native StatusNotifier item uses the lowercase `com.redunar.redunar` icon
+alias. The desktop and window identity remain `com.redunar.Redunar`.
+
 The production identity follows the owned `redunar.com` namespace. The optional
 local desktop-registration helper removes only a launcher carrying its own
 `X-Redunar-Local-Tauri=true` marker. It never removes an unmanaged user

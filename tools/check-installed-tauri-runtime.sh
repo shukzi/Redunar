@@ -61,6 +61,9 @@ check_component appstream-metadata \
 check_component application-icon \
   "$payload_root/usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg" \
   /usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg || status=1
+check_component tray-icon \
+  "$payload_root/usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg" \
+  /usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg || status=1
 
 if [[ ! -f /usr/lib/udev/rules.d/70-redunar-hotkeys.rules ]]; then
   printf 'Installed component missing: input uaccess rule (/usr/lib/udev/rules.d/70-redunar-hotkeys.rules)\n' >&2

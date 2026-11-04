@@ -82,6 +82,10 @@ appstreamcli validate --no-net packaging/com.redunar.Redunar.metainfo.xml || app
 if (( appstream_status != 0 && appstream_status != 3 )); then
   exit "$appstream_status"
 fi
+grep -Fq '/usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg' packaging/redunar-app.spec
+for icon_size in 16 32 48 64 128 256 512 1024; do
+  grep -Fq "/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.redunar.png" packaging/redunar-app.spec
+done
 
 staging_root="$release_check_root/staging"
 tools/stage-tauri-package.sh "$staging_root"
@@ -103,6 +107,17 @@ test -f "$staging_root/usr/share/doc/redunar/LICENSE-Tauri-API-APACHE-2.0.txt"
 test -f "$staging_root/usr/share/applications/com.redunar.Redunar.desktop"
 test -f "$staging_root/usr/share/metainfo/com.redunar.Redunar.metainfo.xml"
 test -f "$staging_root/usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg"
+test -f "$staging_root/usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg"
+cmp -s \
+  "$staging_root/usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg" \
+  "$staging_root/usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg"
+for icon_size in 16 32 48 64 128 256 512 1024; do
+  test -f "$staging_root/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.Redunar.png"
+  test -f "$staging_root/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.redunar.png"
+  cmp -s \
+    "$staging_root/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.Redunar.png" \
+    "$staging_root/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/com.redunar.redunar.png"
+done
 test ! -u "$staging_root/usr/libexec/redunar-hotkey-helper"
 test ! -g "$staging_root/usr/libexec/redunar-hotkey-helper"
 test ! -u "$staging_root/usr/libexec/redunar-update-helper"

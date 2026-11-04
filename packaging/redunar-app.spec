@@ -77,14 +77,23 @@ fi
 %attr(0644,root,root) /usr/share/metainfo/com.redunar.Redunar.metainfo.xml
 %attr(0644,root,root) /usr/lib/udev/rules.d/70-redunar-hotkeys.rules
 %attr(0644,root,root) /usr/share/icons/hicolor/scalable/apps/com.redunar.Redunar.svg
+%attr(0644,root,root) /usr/share/icons/hicolor/scalable/apps/com.redunar.redunar.svg
 %attr(0644,root,root) /usr/share/icons/hicolor/16x16/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/16x16/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/32x32/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/32x32/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/48x48/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/48x48/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/64x64/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/64x64/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/128x128/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/128x128/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/256x256/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/256x256/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/512x512/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/512x512/apps/com.redunar.redunar.png
 %attr(0644,root,root) /usr/share/icons/hicolor/1024x1024/apps/com.redunar.Redunar.png
+%attr(0644,root,root) /usr/share/icons/hicolor/1024x1024/apps/com.redunar.redunar.png
 %dir %attr(0755,root,root) /usr/share/doc/redunar
 %attr(0644,root,root) /usr/share/doc/redunar/LICENSE-Lucide.txt
 %attr(0644,root,root) /usr/share/doc/redunar/LICENSE-libc-MIT.txt
