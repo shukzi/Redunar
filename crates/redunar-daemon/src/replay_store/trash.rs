@@ -79,7 +79,10 @@ mod tests {
         store.set_favorite("My clip.mkv", true).unwrap();
         store.set_trashed("My clip.mkv", true).unwrap();
         store.set_trashed("My clip.mkv", true).unwrap();
-        assert!(store.inventory().unwrap().is_empty());
+        assert_eq!(
+            store.inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         assert!(store.rename_clip("My clip.mkv", "Other.mkv").is_err());
         let reopened = ReplayClipStore::open_with_limits(root.clone(), 1024, 8192).unwrap();
         let bin = reopened.trash_inventory().unwrap();
@@ -95,7 +98,10 @@ mod tests {
         );
         reopened.set_trashed("My clip.mkv", false).unwrap();
         reopened.set_trashed("My clip.mkv", false).unwrap();
-        assert!(reopened.trash_inventory().unwrap().is_empty());
+        assert_eq!(
+            reopened.trash_inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         assert!(reopened.inventory().unwrap()[0].favorite);
         fs::remove_dir_all(root).unwrap();
     }
@@ -114,10 +120,16 @@ mod tests {
         fs::rename(root.join(&name), root.join("previous")).unwrap();
         symlink("previous", root.join(&name)).unwrap();
         assert!(store.set_trashed(&name, false).is_err());
-        assert!(store.trash_inventory().unwrap().is_empty());
+        assert_eq!(
+            store.trash_inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         fs::remove_file(root.join(&name)).unwrap();
         fs::write(root.join(&name), MATROSKA_MAGIC).unwrap();
-        assert!(store.trash_inventory().unwrap().is_empty());
+        assert_eq!(
+            store.trash_inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         assert_eq!(store.inventory().unwrap().len(), 1);
         fs::remove_dir_all(root).unwrap();
     }

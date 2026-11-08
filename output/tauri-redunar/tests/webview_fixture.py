@@ -75,14 +75,14 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='set_diagnostic_log'){bridge.logRequested=args.enabled;return {diagnostic_log:args.enabled,diagnostic_log_status:bridge.logStatus||'off'};}
  if(command==='set_automatic_updates'){bridge.automaticUpdates=args.enabled;return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};}
  if(command==='check_for_updates'){
-  if(bridge.installedUpdate)return {current_version:'0.1.2',state:'restart-needed',message:'Redunar 0.1.3 is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.',latest_version:'0.1.3',package_kind:'arch',asset_name:'redunar-app-linux-x86_64.pkg.tar.zst'};
-  if(bridge.startupUpdateAvailable){bridge.startupUpdateAvailable=false;return {current_version:'0.1.2',state:'available',message:'Redunar 0.1.3 has a verified update package.',latest_version:'0.1.3',package_kind:'arch',asset_name:'redunar-app-linux-x86_64.pkg.tar.zst'};}
-  return {current_version:'0.1.3',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
+  if(bridge.installedUpdate)return {current_version:'0.1.2',state:'restart-needed',message:'Redunar 0.1.3 installed. Fully quit Redunar, including its tray process, then reopen it.',latest_version:'0.1.3',package_kind:'arch',asset_name:'redunar-app-linux-x86_64.pkg.tar.zst'};
+  if(bridge.startupUpdateAvailable){bridge.startupUpdateAvailable=false;return {current_version:'0.1.2',state:'available',message:'Verified update: Redunar 0.1.3.',latest_version:'0.1.3',package_kind:'arch',asset_name:'redunar-app-linux-x86_64.pkg.tar.zst'};}
+  return {current_version:'0.1.3',state:'not-configured',message:'Signed update checks are not configured in this build.'};
  }
- if(command==='install_update')return {state:'handoff',message:'The installer finished, but Redunar could not confirm the new package version. Check again or retry installation.'};
+ if(command==='install_update')return {state:'handoff',message:'The installer finished. Installation is unconfirmed. Check for updates or retry.'};
  if(command==='global_settings')return {values:structuredClone(values),revision:'1'};
  if(command==='save_global_settings'){if(bridge.conflict)throw new Error('Saved defaults changed elsewhere. Reload before saving.');Object.assign(values,args.input);return {values:structuredClone(values),revision:'2'};}
- if(command==='save_game_profile'){games.find(g=>g.id===args.gameId).overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));return {games:structuredClone(games),liveNotice:'Game settings saved. The running game overlay was updated.'};}
+ if(command==='save_game_profile'){const game=games.find(g=>g.id===args.gameId);game.overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));const overlay=game.overrides.overlay??values.overlay;return {games:structuredClone(games),liveNotice:!bridge.idle&&args.gameId==='1'?`Game settings saved. Current game overlay set to ${overlay?'show':'hide'}.`:'Game settings saved for the next game.'};}
  if(command==='update_game_launch'){bridge.launchArgs=args.arguments;return structuredClone(games);}
  if(command==='save_shortcuts'){values.shortcuts=args.shortcuts;return {values:structuredClone(values)};}
  if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {...replayPreferencesFixture(),overlay_shortcut:values.shortcuts.overlay||''};}
@@ -132,5 +132,11 @@ def wait_for(expression, timeout_ms=5000):
     raise AssertionError('Timed out waiting for '+expression)
 checks=[]
 def test(name,source,wait_ms=0):
-    js(source);checks.append(name)
+    try:
+        js(source)
+    except Exception:
+        snap('failure')
+        print('FAIL: '+name, flush=True)
+        raise
+    checks.append(name)
     if wait_ms: pump(wait_ms)

@@ -308,12 +308,9 @@ mod tests {
         fs::write(kernel.join("comm"), "kworker/0:1\n").expect("write kernel comm");
         fs::write(kernel.join("environ"), []).expect("write kernel environment");
 
-        assert!(
-            fixture
-                .detector()
-                .detect()
-                .expect("detect games")
-                .is_empty()
+        assert_eq!(
+            fixture.detector().detect().expect("detect games"),
+            [] as [redunar_core::GameProcess; 0]
         );
     }
 
@@ -329,12 +326,9 @@ mod tests {
         ];
         fixture.process(42, "large\n", "/games/large", &oversized);
 
-        assert!(
-            fixture
-                .detector()
-                .detect()
-                .expect("detect games")
-                .is_empty()
+        assert_eq!(
+            fixture.detector().detect().expect("detect games"),
+            [] as [redunar_core::GameProcess; 0]
         );
     }
 

@@ -1928,7 +1928,10 @@ mod tests {
         store.set_favorite("Second name.mkv", false).unwrap();
         assert!(!store.inventory().unwrap()[0].favorite);
         store.archive_clip("Second name.mkv").unwrap();
-        assert!(store.inventory().unwrap().is_empty());
+        assert_eq!(
+            store.inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
     }
     #[test]
     fn mutation_refuses_collisions_paths_changed_types_symlinks_and_unowned_files() {
@@ -1968,7 +1971,10 @@ mod tests {
         fs::write(fixture.root.join("Renamed.mp4"), b"unowned replacement").unwrap();
         assert!(store.set_favorite("Renamed.mp4", true).is_err());
         assert!(store.delete_clip("Renamed.mp4").is_err());
-        assert!(store.inventory().unwrap().is_empty());
+        assert_eq!(
+            store.inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
     }
     #[test]
     fn interrupted_rename_is_discoverable_before_and_after_filesystem_commit() {
@@ -1986,7 +1992,10 @@ mod tests {
         assert_eq!(store.inventory().unwrap()[0].file_name, "Recovered.mkv");
         assert!(store.inventory().unwrap()[0].favorite);
         store.delete_clip("Recovered.mkv").unwrap();
-        assert!(store.inventory().unwrap().is_empty());
+        assert_eq!(
+            store.inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
     }
     #[test]
     fn metadata_write_failure_does_not_rename_or_touch_recordings() {

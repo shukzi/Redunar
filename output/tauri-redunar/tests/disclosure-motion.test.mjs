@@ -8,13 +8,14 @@ function fixture({open=false,floating=false,reduced=false}={}) {
   const animation={frames,options,cancelled:false,onfinish:null,cancel(){this.cancelled=true;}};
   animations.push(animation);return animation;
  };
- const content={inert:false,animate};
+ const content={inert:false,style:{transformOrigin:''},animate};
  const summary={nextElementSibling:content,getBoundingClientRect:()=>({height:40})};
  const details={open,dataset:{},style:{height:'',overflow:'',boxSizing:''},animate,
   querySelector:()=>summary,
   getBoundingClientRect(){return {height:this.paintedHeight??(this.open?200:40)};},
-  ownerDocument:{defaultView:{matchMedia:()=>({matches:reduced}),getComputedStyle:element=>element===content?{position:floating?'absolute':'static',opacity:'0.5',clipPath:'inset(0 0 30% 0)',transform:'none'}:{paddingTop:'0',paddingBottom:'0',borderTopWidth:'0',borderBottomWidth:'0'}}}
+  ownerDocument:{defaultView:{addEventListener(){},matchMedia:()=>({matches:reduced,addEventListener(){}}),getComputedStyle:element=>element===content?{position:floating?'absolute':'static',opacity:'0.5',clipPath:'inset(0 0 30% 0)',transform:'none'}:{paddingTop:'0',paddingBottom:'0',borderTopWidth:'0',borderBottomWidth:'0'}}}
  };
+ content.ownerDocument=details.ownerDocument;
  return {details,content,animations};
 }
 

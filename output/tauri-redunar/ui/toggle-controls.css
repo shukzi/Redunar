@@ -1,0 +1,51 @@
+/* A shared filled handle retains the native checkbox, hit area and focus. */
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch span {
+  --toggle-shift: 0px;
+  box-sizing: border-box;
+  width: 40px;
+  height: 22px;
+  border: 1px solid #3f3f3f;
+  border-radius: 99px;
+  background: #1c1c1c;
+  box-shadow: none;
+  transition: background-color 220ms ease, border-color 220ms ease, transform 160ms cubic-bezier(.2,.8,.2,1);
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch span::before,
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:checked + span::before {
+  content: '';
+  box-sizing: border-box;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: #d4d4d4;
+  box-shadow: none;
+  transform: translateX(var(--toggle-shift));
+  transition: transform 260ms cubic-bezier(.22,1,.36,1), background-color 180ms ease;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:checked + span {
+  --toggle-shift: 18px;
+  background: #542128;
+  border-color: #95424a;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:checked + span::before { background: #f4f4f4; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:hover input:not(:disabled) + span { background: #282828; border-color: #555555; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:hover input:checked:not(:disabled) + span { background: #662730; border-color: #b34550; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:active:has(input:not(:disabled)) span { transform: scale(.96); }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:active:has(input:not(:disabled)) span::before,
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:active:not(:disabled) + span::before { transform: translateX(var(--toggle-shift)) scale(1.12,.92); }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:has(input[aria-busy="true"]) { opacity: 1; cursor: progress; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:has(input[aria-busy="true"]) span { border-color: #797979; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:focus-visible + span { outline: 2px solid #ff8288; outline-offset: 4px; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch span::after { content: none; }
+@media(prefers-reduced-motion:reduce){
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch span,
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch span::before,
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:checked + span::before { transition-property: none !important; transition-duration: 0s !important; }
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:active:has(input:not(:disabled)) span { transform: none; }
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch:active:has(input:not(:disabled)) span::before,
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .switch input:active:not(:disabled) + span::before { transform: translateX(var(--toggle-shift)); }
+}

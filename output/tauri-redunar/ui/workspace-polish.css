@@ -1,16 +1,19 @@
 /* Workspace refinements retain the established palette, spacing and radii. */
-html:not([data-page="replay-menu"]) { --select-hover:#292929; }
-/* One red scrollbar treatment everywhere. Scrolling stays engine-owned;
-   a stable gutter and transparent thumb inset keep the rail off the content. */
-html:not([data-page="replay-menu"]),html:not([data-page="replay-menu"]) * { scrollbar-width:auto!important; scrollbar-color:#623039 transparent!important; }
+html:not([data-page="replay-menu"]) { --select-hover:#292929; --scrollbar-clearance:22px; }
+/* One quiet graphite scrollbar treatment everywhere. Scrolling stays
+   engine-owned; a stable gutter and transparent thumb inset keep the rail off
+   the content. */
+html:not([data-page="replay-menu"]),html:not([data-page="replay-menu"]) * { scrollbar-width:auto!important; scrollbar-color:#3a3a3a transparent!important; }
 html:not([data-page="replay-menu"]) :is(.window-content,.clip-list,#session-list,#library-list,.discovery-list,.trashed-clip-list,textarea,.overlay-scene,[data-scroll-owner]) { scrollbar-gutter:stable; }
 @supports selector(::-webkit-scrollbar) {
+ /* Keep one styling path: combining scrollbar-color with these pseudo rules
+    made the native WebKit overlay thumb paint black while pressed. */
  html:not([data-page="replay-menu"]),html:not([data-page="replay-menu"]) * { scrollbar-color:auto!important; }
  html:not([data-page="replay-menu"])::-webkit-scrollbar,html:not([data-page="replay-menu"]) *::-webkit-scrollbar { width:14px; height:14px; }
  html:not([data-page="replay-menu"])::-webkit-scrollbar-track,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-track { background:transparent; }
- html:not([data-page="replay-menu"])::-webkit-scrollbar-thumb,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-thumb { background:#623039; border:4px solid transparent; background-clip:padding-box; border-radius:7px; min-height:32px; min-width:32px; }
- html:not([data-page="replay-menu"])::-webkit-scrollbar-thumb:hover,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-thumb:hover { background-color:#853338; }
- html:not([data-page="replay-menu"])::-webkit-scrollbar-thumb:active,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-thumb:active { background-color:var(--red); }
+ html:not([data-page="replay-menu"])::-webkit-scrollbar-thumb,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-thumb { background:#3a3a3a; border:4px solid transparent; background-clip:padding-box; border-radius:7px; min-height:32px; min-width:32px; }
+ html:not([data-page="replay-menu"])::-webkit-scrollbar-thumb:hover,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-thumb:hover { background-color:#4b4b4b; }
+ html:not([data-page="replay-menu"])::-webkit-scrollbar-thumb:active,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-thumb:active { background-color:#5c5c5c; }
  html:not([data-page="replay-menu"])::-webkit-scrollbar-button,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-button { display:none; }
  html:not([data-page="replay-menu"])::-webkit-scrollbar-corner,html:not([data-page="replay-menu"]) *::-webkit-scrollbar-corner { background:transparent; }
 }
@@ -27,14 +30,14 @@ html:not([data-page="replay-menu"]) .inheritance-link::before { left:0; }
 html:not([data-page="replay-menu"]) .inheritance-link::after { left:5px; }
 html:not([data-page="replay-menu"]) .inheritance-link[hidden] { display:none; }
 html:not([data-page="replay-menu"]) .inherited-option .precision-select-check { margin-left:auto; }
-html:not([data-page="replay-menu"]) .precision-select-menu { isolation:isolate; padding:7px; scrollbar-gutter:auto; }
-html:not([data-page="replay-menu"]) .precision-select-menu.precision-select-scrolls { scrollbar-gutter:stable; }
+html:not([data-page="replay-menu"]) [data-select-surface] { isolation:isolate; padding:7px; scrollbar-gutter:auto; }
+html:not([data-page="replay-menu"]) [data-select-surface].precision-select-scrolls { scrollbar-gutter:stable; }
 html:not([data-page="replay-menu"]) .precision-select-option { position:relative; z-index:1; min-height:46px; padding:12px 14px; gap:14px; }
 html:not([data-page="replay-menu"]) .precision-select-option+.precision-select-option { margin-top:3px; }
 html:not([data-page="replay-menu"]) .precision-select-check { display:inline-flex; align-items:center; justify-content:center; width:16px; flex:0 0 16px; font-size:14px; font-weight:500; }
 /* A neutral focus plate moves separately from the red persisted selection. */
-html:not([data-page="replay-menu"]) .precision-select-menu[data-focus-plate]::before { content:''; position:absolute; z-index:0; top:0; left:0; width:var(--select-active-w,0px); height:var(--select-active-h,0px); transform:translate(var(--select-active-x,0px),var(--select-active-y,0px)); border-radius:4px; background:var(--select-hover); opacity:var(--select-active-visible,0); pointer-events:none; }
-html:not([data-page="replay-menu"]) .precision-select-menu[data-focus-plate] .precision-select-option.active:not([aria-selected=true]) { background:transparent; }
+html:not([data-page="replay-menu"]) [data-select-surface][data-focus-plate]::before { content:''; position:absolute; z-index:0; top:0; left:0; width:var(--select-active-w,0px); height:var(--select-active-h,0px); transform:translate(var(--select-active-x,0px),var(--select-active-y,0px)); border-radius:4px; background:var(--select-hover); opacity:var(--select-active-visible,0); pointer-events:none; }
+html:not([data-page="replay-menu"]) [data-select-surface][data-focus-plate] .precision-select-option.active:not([aria-selected=true]) { background:transparent; }
 html:not([data-page="replay-menu"])[data-input=pointer] .precision-select-option.active { border-color:transparent; }
 html:not([data-page="replay-menu"]) .meter i { transition:none; }
 
@@ -59,16 +62,13 @@ html:not([data-page="replay-menu"]) .search:focus-within { border-color:var(--re
 html:not([data-page="replay-menu"]) :is(.timecode,.trim-time output,.history-stats strong,.stat strong) { font-variant-numeric:tabular-nums; }
 html:not([data-page="replay-menu"]) .filter-chevron { transition:transform 180ms cubic-bezier(.2,.8,.2,1); }
 html:not([data-page="replay-menu"]) .timeline-handle::before { content:''; position:absolute; top:calc(50% - 6px); left:calc(50% - 1px); width:2px; height:12px; background:currentColor; pointer-events:none; }
-html:not([data-page="replay-menu"]) .control-hint { position:fixed; z-index:1200; width:max-content; max-width:min(260px,calc(100vw - 16px)); padding:8px 10px; border:1px solid #494949; border-radius:8px; background:#161616; color:var(--text); box-shadow:0 8px 20px #0008; font:11px/1.5 var(--sans); pointer-events:none; }
 @media(prefers-reduced-motion:no-preference) {
- html:not([data-page="replay-menu"]) .control-hint { animation:dropdown-enter 100ms ease-out; }
  html:not([data-page="replay-menu"]) .button { transition:transform 120ms cubic-bezier(.2,.8,.2,1),background 120ms,border-color 120ms; }
  html:not([data-page="replay-menu"]) :is(.button,.icon-button):active:not(:disabled) { transform:scale(.985); }
  html:not([data-page="replay-menu"]) .switch span::before { transition:transform 180ms cubic-bezier(.2,.8,.2,1),background 150ms; }
  html:not([data-page="replay-menu"]) :is(.button,.icon-button) { transition:transform 120ms cubic-bezier(.2,.8,.2,1),background-color 120ms,border-color 120ms; }
  html:not([data-page="replay-menu"]) .center-play:hover .icon { transform:none; }
- html:not([data-page="replay-menu"]) .precision-select-menu[data-focus-plate]::before { transition:transform 85ms cubic-bezier(.2,.8,.2,1),opacity 70ms; }
- html:not([data-page="replay-menu"]) .precision-select-menu { animation:dropdown-enter 80ms ease-out; }
+ html:not([data-page="replay-menu"]) [data-select-surface][data-focus-plate]::before { transition:transform 85ms cubic-bezier(.2,.8,.2,1),opacity 70ms; }
 }
 @keyframes control-selection-confirm { from { opacity:0;scale:.8; } to { opacity:1;scale:1; } }
 @media(prefers-reduced-motion:reduce) { html:not([data-page="replay-menu"]) *,html:not([data-page="replay-menu"]) *::before,html:not([data-page="replay-menu"]) *::after { animation:none!important;transition:none!important; } }
@@ -78,7 +78,7 @@ html:not([data-page="replay-menu"]) .overlay-style { display:grid; grid-template
 html:not([data-page="replay-menu"]) .overlay-style .overlay-option-heading { margin-top:0; }
 html:not([data-page="replay-menu"]) .overlay-style .layout-grid { margin-top:12px; }
 html:not([data-page="replay-menu"]) .overlay-layout-hint { font-size:11px; color:var(--muted); }
-html:not([data-page="replay-menu"]) .overlay-layout-hint[hidden] { display:block!important; visibility:hidden; }
+html:not([data-page="replay-menu"]) .overlay-layout-hint[hidden] { display:none; }
 html:not([data-page="replay-menu"]) .overlay-style .layout-grid button:disabled { opacity:.45; cursor:default; pointer-events:none; }
 html:not([data-page="replay-menu"]) .overlay-palette-block .palette-grid { display:flex; flex-wrap:wrap; margin-top:10px; }
 html:not([data-page="replay-menu"]) .overlay-information { padding-top:24px; }
@@ -95,7 +95,6 @@ html:not([data-page="replay-menu"]) .metric-group { padding:16px; border:1px sol
 html:not([data-page="replay-menu"]) .metric-group+.metric-group { border-top-color:var(--border); }
 html:not([data-page="replay-menu"]) .metric-group-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 html:not([data-page="replay-menu"]) .metric-group-header h3 { font-size:12px; font-weight:500; margin:0; }
-html:not([data-page="replay-menu"]) .metric-group-count { font:10px var(--mono); color:var(--muted); }
 html:not([data-page="replay-menu"]) .metric-group .metric-toggles { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
 html:not([data-page="replay-menu"]) .metric-group .metric-toggles label { min-height:42px; padding:10px; gap:8px; background:transparent; border-color:transparent; }
 html:not([data-page="replay-menu"]) .metric-group .metric-toggles label:has(input:checked) { background:transparent; border-color:transparent; }
@@ -118,7 +117,6 @@ html:not([data-page="replay-menu"]) .overlay-settings-editor { display:grid; gap
 html:not([data-page="replay-menu"]) .overlay-settings-editor h2 { font-size:18px; }
 html:not([data-page="replay-menu"]) .overlay-settings-heading { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
 html:not([data-page="replay-menu"]) .overlay-settings-heading .auto-saved-label { margin:0; }
-html:not([data-page="replay-menu"]) .overlay-save-mode:not(.auto-saved-label) { color:var(--muted); font-size:10px; }
 html:not([data-page="replay-menu"]) .overlay-settings-editor .field { border-bottom:0; padding-bottom:0; }
 html:not([data-page="replay-menu"]) .clip-copy-range { display:flex; justify-content:space-between; align-items:center; gap:16px; color:var(--muted); font-size:12px; }
 html:not([data-page="replay-menu"]) .clip-copy-range .precision-select { width:170px; min-width:0; }
@@ -184,10 +182,10 @@ html:not([data-page="replay-menu"]) .overlay-preview-features .field { border-bo
  html:not([data-page="replay-menu"]) .game-catalog>.search,
  html:not([data-page="replay-menu"]) .game-catalog>.catalog-label,
  html:not([data-page="replay-menu"]) .game-catalog>.catalog-note { flex-shrink:0; }
- html:not([data-page="replay-menu"]) .game-catalog #library-list { flex:1 1 0; height:0; min-height:0; overflow-y:auto; scrollbar-gutter:stable; padding-right:14px; }
+ html:not([data-page="replay-menu"]) .game-catalog #library-list { flex:1 1 0; height:0; min-height:0; overflow-y:auto; scrollbar-gutter:stable; padding-right:var(--scrollbar-clearance,22px); }
 }
 @media(max-width:1000px) {
- html:not([data-page="replay-menu"]) .game-catalog #library-list { max-height:min(42vh,360px); overflow-y:auto; scrollbar-gutter:stable; padding-right:14px; }
+ html:not([data-page="replay-menu"]) .game-catalog #library-list { max-height:min(42vh,360px); overflow-y:auto; scrollbar-gutter:stable; padding-right:var(--scrollbar-clearance,22px); }
 }
 
 /* Pointer use should not leave an unrelated focus border behind. Existing
@@ -198,8 +196,7 @@ html:not([data-page="replay-menu"])[data-input=pointer] .switch:has(input:focus)
 html:not([data-page="replay-menu"]) .library-game { min-height:84px; }
 html:not([data-page="replay-menu"]) .library-game [hidden] { display:none!important; }
 
-/* Export stays beside the trim controls; the clip menu finishes the header. */
-html:not([data-page="replay-menu"]) .clip-action-menu { order:10; margin-left:auto; }
+/* Export stays beside the trim controls. */
 html:not([data-page="replay-menu"]) .replay-workspace .clip-editor-footer { min-height:40px; }
 html:not([data-page="replay-menu"]) .replay-workspace .clip-editor-footer #export-clip-button { background:transparent; border-color:#414141; color:var(--text); font-weight:400; }
 html:not([data-page="replay-menu"]) .replay-workspace .clip-editor-footer #export-clip-button:hover:not(:disabled) { background:#1b1b1b; border-color:#777; }

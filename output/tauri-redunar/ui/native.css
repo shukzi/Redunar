@@ -1,10 +1,11 @@
 /* Native states extend the approved sidebar design without replacing its controls. */
+:root { --window-titlebar-height: 28px; }
 html, body { height: 100%; overflow: hidden; }
 .window-titlebar {
   position: fixed;
   inset: 0 0 auto 0;
   z-index: 50;
-  height: 28px;
+  height: var(--window-titlebar-height);
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
@@ -41,9 +42,9 @@ html, body { height: 100%; overflow: hidden; }
 .window-resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
 .window-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .window-resize-nw { top: 0; left: 0; cursor: nwse-resize; }
-.window-content { position: fixed; inset: 28px 0 0; overflow-x: hidden; overflow-y: auto; }
+.window-content { position: fixed; inset: var(--window-titlebar-height) 0 0; overflow-x: hidden; overflow-y: auto; }
 .app-shell { min-height: 100%; }
-.sidebar { top: 28px; }
+.sidebar { top: var(--window-titlebar-height); }
 body[data-page="replay-menu"] .window-titlebar,
 body[data-page="replay-menu"] .window-resize { display: none; }
 body[data-page="replay-menu"] .window-content { inset: 0; }

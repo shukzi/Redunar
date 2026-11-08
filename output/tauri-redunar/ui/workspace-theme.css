@@ -1,0 +1,2377 @@
+/* Desktop workspace presentation. The in-game renderer owns its own palette
+   and geometry, so these rules deliberately exclude the Replay menu. */
+html:not([data-page="replay-menu"]) {
+  --bg: #0c0c0c;
+  --surface: #161616;
+  --surface-2: #1e1e1e;
+  --border: #2f2f2f;
+  --text: #f1f1f1;
+  --muted: #a7a7a7;
+  --red: #e7474f;
+  --radius: 12px;
+  --select-hover: #2c2c2c;
+  --workspace-accent: #ff727a;
+}
+
+html:not([data-page="replay-menu"]) body { background: var(--bg); }
+html:not([data-page="replay-menu"]) .window-titlebar {
+  background: #111111;
+  border-bottom-color: #272727;
+}
+html:not([data-page="replay-menu"]) .sidebar {
+  background: #111111;
+  border-right-color: #272727;
+}
+html:not([data-page="replay-menu"]) .brand { padding-block: 32px; }
+html:not([data-page="replay-menu"]) .sidebar nav { gap: 7px; }
+html:not([data-page="replay-menu"]) .nav-link {
+  min-height: 46px;
+  height: 46px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #a6a6a6;
+}
+html:not([data-page="replay-menu"]) .nav-link:hover {
+  color: var(--text);
+  background: #1d1d1d;
+  border-color: #343434;
+}
+html:not([data-page="replay-menu"]) .nav-link.active {
+  color: #fff;
+  background: linear-gradient(100deg, #262626, #1e1e1e);
+  border-color: #404040;
+}
+html:not([data-page="replay-menu"]) .nav-link.active .icon { color: #ff7c85; }
+html:not([data-page="replay-menu"]) .nav-count {
+  background: #2a2a2a;
+  color: #d1d1d1;
+  border: 1px solid #434343;
+  border-radius: 5px;
+}
+html:not([data-page="replay-menu"]) .sidebar-bottom { border-color: var(--border); }
+html:not([data-page="replay-menu"]) .settings-link { font-size: 13px; }
+html:not([data-page="replay-menu"]) .settings-link.active { color: var(--workspace-accent); }
+
+html:not([data-page="replay-menu"]) #workspace { padding: 32px 36px 36px; }
+html:not([data-page="replay-menu"]) .page-heading {
+  min-height: 65px;
+  margin-bottom: 28px;
+  align-items: center;
+}
+html:not([data-page="replay-menu"]) .page-heading-actions-only {
+  min-height: 44px;
+  margin-bottom: 20px;
+  justify-content: flex-end;
+}
+html:not([data-page="replay-menu"]) h1 {
+  color: #f6f6f6;
+  font-size: 34px;
+  line-height: 1.2;
+  letter-spacing: -1.3px;
+  font-weight: 650;
+}
+html:not([data-page="replay-menu"]) .page-heading h1::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 26px;
+  margin-right: 14px;
+  border-radius: 2px;
+  background: var(--red);
+  vertical-align: -1px;
+}
+html:not([data-page="replay-menu"]) .page-heading p {
+  margin-top: 10px;
+  color: #a7a7a7;
+  font-size: 12px;
+  line-height: 1.65;
+}
+html:not([data-page="replay-menu"]) h2 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -.35px;
+}
+html:not([data-page="replay-menu"]) :is(.panel,.editor,.clip-browser,.game-detail,.game-catalog,.history-catalog,.history-detail) {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius);
+}
+html:not([data-page="replay-menu"]) .panel { padding: 24px; }
+html:not([data-page="replay-menu"]) :is(.section-heading p,.system-panel>p,.field p,.small-note) {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+html:not([data-page="replay-menu"]) .section-heading { margin-bottom: 18px; }
+
+/* Shared controls retain their original semantics, focus and disabled states. */
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger) {
+  min-height: 40px;
+  border-radius: 7px;
+  border-color: #3e3e3e;
+  background: #232323;
+  color: #e4e4e4;
+  font-size: 12px;
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger):hover:not(:disabled) {
+  background: #2e2e2e;
+  border-color: #616161;
+}
+html:not([data-page="replay-menu"]) .button.primary {
+  background: #702f38;
+  border-color: #b94757;
+  color: #fff0f2;
+  font-weight: 600;
+}
+html:not([data-page="replay-menu"]) .button.primary:hover:not(:disabled) {
+  background: #893b48;
+  border-color: #ed6573;
+}
+html:not([data-page="replay-menu"]) .button:disabled { opacity: .45; }
+html:not([data-page="replay-menu"]) :is(button,a,input,select,summary,[tabindex]):focus-visible {
+  outline: 2px solid #f47c85;
+  outline-offset: 3px;
+}
+html:not([data-page="replay-menu"]) .search {
+  background: #121212;
+  border-color: #3b3b3b;
+  border-radius: 7px;
+}
+html:not([data-page="replay-menu"]) .search input { min-height: 38px; font-size: 12px; }
+html:not([data-page="replay-menu"]) [data-select-surface] {
+  background: #1e1e1e;
+  border-color: #4f4f4f;
+  border-radius: 9px;
+}
+html:not([data-page="replay-menu"]) .precision-select-option[aria-selected=true] {
+  background: #292929;
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.overlay-editor-tabs) { border-color: #383838; }
+html:not([data-page="replay-menu"]) .tabbar button {
+  min-height: 48px;
+  padding-inline: 16px;
+  font-size: 12px;
+  color: #acacac;
+}
+html:not([data-page="replay-menu"]) .tabbar button.active {
+  color: #ffe5e8;
+  background: #1d1d1d;
+  border-radius: 7px 7px 0 0;
+}
+html:not([data-page="replay-menu"]) :is(.history-view-toggle,.clip-collection) {
+  background: #101010;
+  border-color: #3a3a3a;
+  border-radius: 7px;
+}
+html:not([data-page="replay-menu"]) .history-view-toggle button { min-height: 31px; }
+html:not([data-page="replay-menu"]) .history-view-toggle button.active {
+  background: #2c2c2c;
+  color: #ffd3d8;
+  border-color: #4c4c4c;
+}
+
+/* The session stays compact; measurements carry the visual emphasis. */
+html:not([data-page="replay-menu"]) .status-footer.session-banner {
+  background: linear-gradient(110deg, #202020, #161616 65%);
+  border-color: #333333;
+  border-radius: 12px;
+}
+html:not([data-page="replay-menu"]) .session-main { padding: 18px 24px; }
+html:not([data-page="replay-menu"]) .session-game .game-mark {
+  width: 46px;
+  height: 46px;
+  background: #262626;
+  border-color: #494949;
+  color: #fa8e99;
+  border-radius: 10px;
+}
+html:not([data-page="replay-menu"]) .session-game small {
+  color: #b8b8b8;
+  font-size: 10px;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+}
+html:not([data-page="replay-menu"]) .session-game h2 { font-size: 22px; font-weight: 600; }
+html:not([data-page="replay-menu"]) .session-footer {
+  padding: 12px 24px;
+  background: #121212;
+  border-top-color: #2e2e2e;
+  color: #aeaeae;
+  font-size: 11px;
+}
+html:not([data-page="replay-menu"]) .session-time time { font-size: 20px; }
+html:not([data-page="replay-menu"]) :is(.capture-summary,.replay-capture-bar) {
+  background: #171717;
+  border-color: #363636;
+  border-radius: 10px;
+}
+html:not([data-page="replay-menu"]) .capture-summary[data-state=error] { border-color: #585858; }
+html:not([data-page="replay-menu"]) .capture-status-heading { font-weight: 600; }
+html:not([data-page="replay-menu"]) .pacing-panel { background: #161616; }
+html:not([data-page="replay-menu"]) .live-status {
+  align-self: flex-start;
+  padding: 3px 9px;
+  border: 1px solid #3a3a3a;
+  border-radius: 5px;
+  background: #212121;
+  color: #c5c5c5;
+  font: 10px/1.5 var(--mono);
+}
+html:not([data-page="replay-menu"]) .telemetry-row {
+  gap: 10px;
+  margin: 18px 0 22px;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat {
+  padding: 15px 14px;
+  background: #1f1f1f;
+  border: 1px solid #313131;
+  border-radius: 8px;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat:first-child {
+  background: #222222;
+  border-color: #3a3a3a;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat>span {
+  color: #b7b7b7;
+  font-size: 10px;
+  line-height: 1.6;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat strong {
+  font-size: clamp(26px, 2.65vw, 42px);
+  letter-spacing: -1.3px;
+  font-weight: 500;
+  margin-top: 12px;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat:first-child strong { color: #ff8f9c; }
+html:not([data-page="replay-menu"]) .telemetry-row .stat strong small {
+  display: block;
+  margin: 8px 0 0;
+  color: #bbbbbb;
+  font: 10px var(--mono);
+  letter-spacing: .6px;
+}
+html:not([data-page="replay-menu"]) .pacing-panel :is(#live-chart,.chart) { min-height: 220px; }
+html:not([data-page="replay-menu"]) .chart { border-color: #313131; background: #121212; }
+html:not([data-page="replay-menu"]) .gridline { stroke: #303030; }
+html:not([data-page="replay-menu"]) .trace { stroke: #f06b7c; }
+html:not([data-page="replay-menu"]) .panel-footer {
+  border-top-color: #343434;
+  font-size: 11px;
+  color: #adadad;
+}
+html:not([data-page="replay-menu"]) .hardware { padding: 16px 0; border-color: #343434; }
+html:not([data-page="replay-menu"]) .hardware-heading>span {
+  font-size: 11px;
+  color: #c0c0c0;
+  letter-spacing: .8px;
+}
+html:not([data-page="replay-menu"]) .hardware-heading strong { font-size: 23px; color: #f2f2f2; }
+html:not([data-page="replay-menu"]) .meter { height: 4px; background: #343434; border-radius: 3px; }
+html:not([data-page="replay-menu"]) .meter i { background: #dc6377; border-radius: 3px; }
+html:not([data-page="replay-menu"]) .hardware p { color: #a9a9a9; }
+
+/* Selected rows and settings share the same surface and accent treatment. */
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card) { border-radius: 8px; }
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card):hover { background: #252525; }
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card).selected {
+  background: #252525;
+  border-color: #4c4c4c;
+}
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row) strong { font-weight: 600; }
+html:not([data-page="replay-menu"]) .catalog-label {
+  color: #9d9d9d;
+  text-transform: uppercase;
+  font: 10px var(--mono);
+  letter-spacing: .8px;
+}
+html:not([data-page="replay-menu"]) .game-cover {
+  background: linear-gradient(115deg, #252525, #1e1e1e);
+  border-radius: 12px 12px 0 0;
+}
+html:not([data-page="replay-menu"]) .game-cover h2 { font-weight: 650; letter-spacing: -.8px; }
+html:not([data-page="replay-menu"]) .inheritance-banner {
+  background: #222222;
+  border-color: #424242;
+  border-radius: 8px;
+}
+html:not([data-page="replay-menu"]) :is(.field,.override-control) { border-color: #333333; }
+html:not([data-page="replay-menu"]) .field label { font-size: 13px; font-weight: 500; }
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button {
+  background: #212121;
+  border-color: #414141;
+  border-radius: 8px;
+}
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button.active,
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button[aria-pressed=true] {
+  background: #292929;
+  border-color: #545454;
+}
+html:not([data-page="replay-menu"]) .overlay-preview-features { gap: 16px; margin-top: 20px; }
+html:not([data-page="replay-menu"]) .overlay-settings-editor .overlay-style { padding: 24px; }
+html:not([data-page="replay-menu"]) .auto-saved-label {
+  color: #bababa;
+  border-color: #474747;
+  background: #252525;
+  border-radius: 4px;
+}
+html:not([data-page="replay-menu"]) .change-save-bar {
+  background: #222222;
+  border-color: #505050;
+  border-radius: 10px;
+}
+html:not([data-page="replay-menu"]) dialog { background: #1a1a1a; border-color: #4b4b4b; border-radius: 13px; }
+html:not([data-page="replay-menu"]) .dialog-head { border-color: #393939; }
+html:not([data-page="replay-menu"]) #toast { background: #282828; border-color: #525252; color: #f4f4f4; }
+
+@media (min-width: 1181px) {
+  html:not([data-page="replay-menu"]) { --sidebar-width: 212px; }
+  html:not([data-page="replay-menu"])[data-sidebar=collapsed] { --sidebar-width: 64px; }
+  html:not([data-page="replay-menu"]) .overview-grid { grid-template-columns: minmax(0, 1fr) 252px; gap: 20px; }
+}
+@media (max-width: 1180px) and (min-width: 701px) {
+  html:not([data-page="replay-menu"]) #workspace { padding: 26px; }
+  html:not([data-page="replay-menu"]) .telemetry-row .stat { padding: 13px 10px; }
+}
+@media (max-width: 700px) {
+  html:not([data-page="replay-menu"]) #workspace { padding: 22px 18px 96px; }
+  html:not([data-page="replay-menu"]) h1 { font-size: 28px; }
+  html:not([data-page="replay-menu"]) .page-heading h1::before { height: 22px; margin-right: 10px; }
+  html:not([data-page="replay-menu"]) .page-heading { margin-bottom: 22px; }
+  html:not([data-page="replay-menu"]) .panel { padding: 18px; }
+  html:not([data-page="replay-menu"]) .telemetry-row { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+  html:not([data-page="replay-menu"]) .telemetry-row .stat strong { font-size: 32px; }
+  html:not([data-page="replay-menu"]) .session-main { padding: 18px; }
+  html:not([data-page="replay-menu"]) .session-footer { padding: 12px 18px; }
+  html:not([data-page="replay-menu"]) .tabbar button { padding-inline: 10px; }
+  html:not([data-page="replay-menu"]) .brand { padding-block: 0; }
+}
+
+/* Overview is the visual reference for the rest of the desktop shell. Keep
+   its measured surfaces unchanged, then let secondary pages recede further so
+   their controls and selected content provide the contrast. */
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) {
+  --bg: #080808;
+  --surface: #111111;
+  --surface-2: #1b1b1b;
+  --border: #303030;
+  --muted: #a3a3a3;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) body {
+  background: #080808;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .window-titlebar,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .sidebar {
+  background: #101010;
+  border-color: #292929;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.panel,.editor,.clip-browser,.game-detail,.game-catalog,.history-catalog,.history-detail) {
+  background: #111111;
+  border-color: #303030;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.button,.precision-select-trigger) {
+  background: #1b1b1b;
+  border-color: #3b3b3b;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.button,.precision-select-trigger):hover:not(:disabled) {
+  background: #292929;
+  border-color: #5b5b5b;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .search,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .chart,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.history-view-toggle,.clip-collection) {
+  background: #0d0d0d;
+  border-color: #2f2f2f;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) [data-select-surface] {
+  background: #171717;
+  border-color: #464646;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .tabbar button.active {
+  background: #2a1518;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button {
+  background: #191919;
+  border-color: #3a3a3a;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button.active,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button[aria-pressed=true] {
+  background: #2a1518;
+  border-color: #7a343d;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card):hover {
+  background: #202020;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card).selected {
+  background: #2a1518;
+  border-color: #74333d;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .game-cover {
+  background: #171717;
+  background-image: none;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .inheritance-banner {
+  background: #171717;
+  border-color: #383838;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) :is(.capture-summary,.replay-capture-bar,.replay-save-row) {
+  background: #151515;
+  border-color: #383838;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .capture-summary[data-state=error] {
+  border-color: #4b4b4b;
+  background: #121212;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .replay-clip-editor,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .replay-capture-bar + .replay-workspace .editor {
+  background: #0b0b0b;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .native-video-stage,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .replay-clip-editor .player {
+  background: #050505;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .updates-panel .update-check-row,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .settings-option {
+  border-color: #303030;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .auto-saved-label {
+  background: #202020;
+  border-color: #4a4a4a;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .change-save-bar {
+  background: #171717;
+  border-color: #424242;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) dialog {
+  background: #151515;
+  border-color: #444;
+}
+
+/* Overlay scrollbars do not reserve the stable gutter on every native
+   backend. Keep an explicit channel clear of card borders and hover motion. */
+@media (min-width: 1001px) {
+  html[data-page]:not([data-page="replay-menu"]) .library-workspace > .game-catalog,
+  html[data-page]:not([data-page="replay-menu"]) .history-workspace > .history-catalog {
+    align-self: start;
+    height: max-content;
+  }
+  html[data-page]:not([data-page="replay-menu"]) .game-catalog #library-list,
+  html[data-page]:not([data-page="replay-menu"]) .history-catalog #session-list {
+    flex: 0 1 auto;
+    height: auto;
+    min-height: 0;
+    max-height: min(650px, calc(100vh - 420px));
+    padding-right: var(--scrollbar-clearance,22px);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  /* Keep the history scroll box inside the rail. Its native width rule and
+     intrinsic minimum otherwise let the stable scrollbar gutter enlarge the
+     box, leaving rows wider than the search and filter controls. */
+  html[data-page]:not([data-page="replay-menu"]) .history-catalog #session-list {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  html[data-page]:not([data-page="replay-menu"]) .game-catalog > .search,
+  html[data-page]:not([data-page="replay-menu"]) .history-catalog > .search,
+  html[data-page]:not([data-page="replay-menu"]) .history-filter-fields {
+    width: calc(100% - 14px);
+  }
+  html[data-page]:not([data-page="replay-menu"]) .history-filter-fields .precision-select {
+    max-width: none;
+  }
+}
+
+/* Primary actions retain the same red signal as Overview after the darker
+   page surfaces are applied. */
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .button.primary {
+  background: #702f38;
+  border-color: #b94757;
+  color: #fff0f2;
+}
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .button.primary:hover:not(:disabled) {
+  background: #893b48;
+  border-color: #ed6573;
+}
+
+/* Workspace rhythm: rails use the same inset as the rest of the content so
+   controls, rows, and notes never touch the surface edge. */
+html:not([data-page="replay-menu"]) {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+}
+@media (min-width: 1001px) {
+  html:not([data-page="replay-menu"]) .library-workspace > .game-catalog,
+  html:not([data-page="replay-menu"]) .history-workspace > .history-catalog {
+    box-sizing: border-box;
+    padding: var(--space-4);
+  }
+  html:not([data-page="replay-menu"]) .game-catalog > .search,
+  html:not([data-page="replay-menu"]) .history-catalog > .search,
+  html:not([data-page="replay-menu"]) .history-filter-fields {
+    width: calc(100% - 14px);
+  }
+}
+@media (min-width: 701px) {
+  /* Tab labels and the content below them share one 24px content edge. */
+  html:not([data-page="replay-menu"]) .tabbar { padding-inline: var(--space-6); }
+}
+
+/* Secondary text, borders, and surfaces share neutral graphite values.
+   Red is reserved for selection, feedback, and actions. */
+html:not([data-page="replay-menu"]) {
+  --bg: #090909;
+  --surface: #121212;
+  --surface-2: #181818;
+  --border: #2b2b2b;
+  --text: #eeeeee;
+  --muted: #9f9f9f;
+  --select-hover: #262626;
+}
+html:not([data-page="replay-menu"]) body { background: #090909; }
+html:not([data-page="replay-menu"]) :is(.window-titlebar,.sidebar) {
+  background: #0f0f0f;
+  border-color: #242424;
+}
+html:not([data-page="replay-menu"]) .nav-link { color: #a3a3a3; }
+html:not([data-page="replay-menu"]) .nav-link:hover {
+  background: #1d1d1d;
+  border-color: #333333;
+}
+html:not([data-page="replay-menu"]) .nav-count {
+  background: #252525;
+  border-color: #3f3f3f;
+  color: #dadada;
+}
+html:not([data-page="replay-menu"]) :is(.panel,.editor,.clip-browser,.game-detail,.game-catalog,.history-catalog,.history-detail) {
+  background: #121212;
+  border-color: #2b2b2b;
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger) {
+  background: #191919;
+  border-color: #353535;
+  color: #eaeaea;
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger):hover:not(:disabled) {
+  background: #282828;
+  border-color: #4b4b4b;
+}
+html:not([data-page="replay-menu"]) .search {
+  background: #0d0d0d;
+  border-color: #2d2d2d;
+}
+html:not([data-page="replay-menu"]) :is(.chart,.history-view-toggle,.clip-collection) {
+  background: #0c0c0c;
+  border-color: #2b2b2b;
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.overlay-editor-tabs) { border-color: #2d2d2d; }
+html:not([data-page="replay-menu"]) .tabbar button { color: #a8a8a8; }
+html:not([data-page="replay-menu"]) [data-select-surface] {
+  background: #131313;
+  border-color: #3f3f3f;
+}
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button {
+  background: #171717;
+  border-color: #353535;
+}
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card):hover {
+  background: #1d1d1d;
+}
+html:not([data-page="replay-menu"]) :is(.game-cover,.game-cover.yellow,.game-cover.green) {
+  background-color: #121212;
+}
+html:not([data-page="replay-menu"]) .game-cover {
+  background-image: radial-gradient(ellipse at 75% 150%, #64646440, transparent 70%);
+}
+html:not([data-page="replay-menu"]) .inheritance-banner {
+  background: #131313;
+  border-color: #333333;
+}
+html:not([data-page="replay-menu"]) :is(.capture-summary,.replay-capture-bar,.replay-save-row) {
+  background: #0f0f0f;
+  border-color: #2d2d2d;
+}
+html:not([data-page="replay-menu"]) :is(.replay-clip-editor,.replay-capture-bar + .replay-workspace .editor) {
+  background: #0b0b0b;
+}
+html:not([data-page="replay-menu"]) :is(.native-video-stage,.replay-clip-editor .player) {
+  background: #040404;
+}
+html:not([data-page="replay-menu"]) .status-footer.session-banner {
+  background: linear-gradient(110deg, #1c1c1c, #121212 65%);
+  border-color: #313131;
+}
+html:not([data-page="replay-menu"]) .session-footer {
+  background: #0f0f0f;
+  border-top-color: #2d2d2d;
+  color: #aaaaaa;
+}
+html:not([data-page="replay-menu"]) .live-status {
+  background: #1b1b1b;
+  border-color: #333333;
+  color: #bebebe;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat {
+  background: #191919;
+  border-color: #323232;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat:first-child {
+  background: #202020;
+  border-color: #454545;
+}
+html:not([data-page="replay-menu"]) .telemetry-row .stat > span,
+html:not([data-page="replay-menu"]) .telemetry-row .stat strong small {
+  color: #b0b0b0;
+}
+html:not([data-page="replay-menu"]) .chart {
+  background: #0e0e0e;
+  border-color: #2d2d2d;
+}
+html:not([data-page="replay-menu"]) .gridline { stroke: #2d2d2d; }
+html:not([data-page="replay-menu"]) .panel-footer { border-top-color: #2d2d2d; color: #aaaaaa; }
+html:not([data-page="replay-menu"]) .hardware { border-color: #2d2d2d; }
+html:not([data-page="replay-menu"]) .hardware-heading > span,
+html:not([data-page="replay-menu"]) .hardware p { color: #aaaaaa; }
+html:not([data-page="replay-menu"]) .meter { background: #2d2d2d; }
+html:not([data-page="replay-menu"]) :is(.field,.override-control) { border-color: #2d2d2d; }
+html:not([data-page="replay-menu"]) .catalog-label { color: #a0a0a0; }
+html:not([data-page="replay-menu"]) dialog {
+  background: #131313;
+  border-color: #3f3f3f;
+}
+html:not([data-page="replay-menu"]) .dialog-head { border-color: #313131; }
+html:not([data-page="replay-menu"]) #toast {
+  background: #1c1c1c;
+  border-color: #3e3e3e;
+}
+
+/* Small feedback makes controls feel responsive without competing with the
+   telemetry and charts. All effects are skipped for reduced-motion users. */
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-page="replay-menu"]) :is(.nav-link,.button,.icon-button,.precision-select-trigger,.search,.library-game,.history-row,.clip-card,.layout-grid button,.preset-grid button,.tabbar button,.global-tabs button,.settings-option,.shortcut-panel) {
+    transition: transform 150ms cubic-bezier(.2,.8,.2,1), background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  }
+  html:not([data-page="replay-menu"]) :is(.button,.icon-button):hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 14px #0b0b0b40;
+  }
+  html:not([data-page="replay-menu"]) :is(.button,.icon-button):active:not(:disabled) {
+    transform: translateY(0) scale(.985);
+    box-shadow: none;
+  }
+  html:not([data-page="replay-menu"]) :is(.library-game,.history-row):hover {
+    transform: translateX(2px);
+  }
+  html:not([data-page="replay-menu"]) .search:focus-within,
+  html:not([data-page="replay-menu"]) .precision-select-trigger[aria-expanded=true] {
+    box-shadow: 0 0 0 3px #e7474f22;
+  }
+  html:not([data-page="replay-menu"]) :is(.nav-link,.button,.icon-button):hover:not(:disabled) .icon {
+    transform: translateX(1px);
+  }
+  html:not([data-page="replay-menu"]) :is(.nav-link,.button,.icon-button,.panel-footer a,.overview-links a,.text-button) .icon {
+    transition: transform 150ms cubic-bezier(.2,.8,.2,1);
+  }
+  html:not([data-page="replay-menu"]) :is(.panel-footer a,.overview-links a,.text-button):hover .icon {
+    transform: translateX(2px);
+  }
+  html:not([data-page="replay-menu"]) .tabbar button:hover:not(.active),
+  html:not([data-page="replay-menu"]) .global-tabs button:hover:not(.active) {
+    color: #e3e3e3;
+  }
+}
+
+/* Overview stays graphite-first. Red remains available for explicit actions
+   and chart signals, but no large surface should carry a red cast. */
+html[data-page="overview"] .status-footer.session-banner {
+  background: linear-gradient(110deg, #1b1b1b, #111111 65%);
+  border-color: #343434;
+}
+html[data-page="overview"] .session-game .game-mark {
+  background: #252525;
+  border-color: #444444;
+  color: #d5d5d5;
+}
+html[data-page="overview"] .session-footer {
+  background: #101010;
+  border-top-color: #303030;
+}
+html[data-page="overview"] :is(.capture-summary,.replay-capture-bar) {
+  background: #121212;
+  border-color: #313131;
+}
+html[data-page="overview"] .pacing-panel { background: #141414; }
+html[data-page="overview"] .live-status {
+  background: #1c1c1c;
+  border-color: #373737;
+  color: #c7c7c7;
+}
+html[data-page="overview"] .telemetry-row .stat {
+  background: #1c1c1c;
+  border-color: #323232;
+}
+html[data-page="overview"] .telemetry-row .stat:first-child {
+  background: #212121;
+  border-color: #3d3d3d;
+}
+html[data-page="overview"] .telemetry-row .stat:first-child strong { color: #eeeeee; }
+html[data-page="overview"] .chart {
+  background: #0f0f0f;
+  border-color: #303030;
+}
+html[data-page="overview"] .overview-timeline-chart .overview-area {
+  fill: #242424;
+  fill-opacity: .78;
+}
+html[data-page="overview"] .meter { background: #313131; }
+html[data-page="overview"] .meter i { background: #b0b0b0; }
+
+/* Universal workspace contract. Keep every application page on black,
+   graphite, and Redunar red; page-specific rules may arrange components but
+   do not introduce a second surface palette. */
+html:not([data-page="replay-menu"]) {
+  --bg: #0d0d0d;
+  --surface: #111111;
+  --surface-2: #1b1b1b;
+  --raised: #202020;
+  --border: #303030;
+  --text: #f1f1f1;
+  --muted: #a3a3a3;
+  --red: #e7474f;
+  --mint: #bdbdbd;
+  --amber: #bdbdbd;
+  --select-hover: #2b2b2b;
+  --button-bg: #202020;
+  --button-border: #3b3b3b;
+}
+html:not([data-page="replay-menu"]) body { background: var(--bg); color: var(--text); }
+html:not([data-page="replay-menu"]) :is(.window-titlebar,.sidebar,.topbar) {
+  background: #101010;
+  border-color: #292929;
+}
+html:not([data-page="replay-menu"]) :is(.panel,.editor,.clip-browser,.game-detail,.game-catalog,.history-catalog,.history-detail,.shortcut-panel,.settings-card,.updates-panel) {
+  background: var(--surface);
+  border-color: var(--border);
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger) {
+  background: #1b1b1b;
+  border-color: #3b3b3b;
+  color: #ededed;
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger):hover:not(:disabled) {
+  background: #292929;
+  border-color: #5b5b5b;
+}
+html:not([data-page="replay-menu"]) .button.primary {
+  background: #702f38;
+  border-color: #b94854;
+  color: #fff;
+}
+html:not([data-page="replay-menu"]) .button.primary:hover:not(:disabled) {
+  background: #8a3b45;
+  border-color: #ef6670;
+}
+html:not([data-page="replay-menu"]) :is(.search,.field select,.microphone-device select,.steam-options-field textarea) {
+  background: #0d0d0d;
+  border-color: #363636;
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) .search input { background: transparent; border-color: transparent; }
+html:not([data-page="replay-menu"]) :is(.chart,.history-view-toggle,.clip-collection,.clip-filter-panel) {
+  background: #0d0d0d;
+  border-color: #2f2f2f;
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.overlay-editor-tabs) { border-color: #323232; }
+html:not([data-page="replay-menu"]) :is(.tabbar button,.global-tabs button) { color: #a9a9a9; }
+html:not([data-page="replay-menu"]) :is(.tabbar button.active,.history-view-toggle button.active,.clip-collection button[aria-pressed=true]) {
+  background: #2a1518;
+  border-color: #7a343d;
+  color: #fff;
+}
+html:not([data-page="replay-menu"]) [data-select-surface] {
+  background: #171717;
+  border-color: #464646;
+}
+html:not([data-page="replay-menu"]) .precision-select-option.active {
+  background: #2b2b2b;
+  border-color: #4a4a4a;
+}
+html:not([data-page="replay-menu"]) .precision-select-option[aria-selected=true] {
+  background: #292929;
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) .precision-select-option[aria-selected=true].active {
+  border-color: #555;
+}
+html:not([data-page="replay-menu"]) .clip-filter-chip {
+  background: #202020;
+  border-color: #444;
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) .clip-filter-chip span { color: var(--muted); }
+html:not([data-page="replay-menu"]) .clip-filter-chip:hover { border-color: #666; }
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button {
+  background: #191919;
+  border-color: #3a3a3a;
+}
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button.active,
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button[aria-pressed=true] {
+  background: #2a1518;
+  border-color: #7a343d;
+}
+html:not([data-page="replay-menu"]) .nav-link {
+  color: #a9a9a9;
+  background-image: none;
+}
+html:not([data-page="replay-menu"]) .nav-link:hover { background: #202020; border-color: #3b3b3b; }
+html:not([data-page="replay-menu"]) .nav-link.active {
+  background: #2a1518;
+  border-color: #74333d;
+}
+html:not([data-page="replay-menu"]) .nav-count {
+  background: #262626;
+  border-color: #484848;
+  color: #e5e5e5;
+}
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card):hover { background: #202020; }
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card).selected {
+  background: #2a1518;
+  border-color: #74333d;
+}
+html:not([data-page="replay-menu"]) :is(.game-cover,.game-cover.yellow,.game-cover.green) {
+  background: #171717 !important;
+  background-image: none !important;
+}
+html:not([data-page="replay-menu"]) .game-cover-banner img { filter: grayscale(1); opacity: .24; }
+html:not([data-page="replay-menu"]) :is(.inheritance-banner,.info-note,.capture-explainer,.discovery-row,.updates-panel .update-check-row) {
+  background: #171717;
+  border-color: #383838;
+}
+html:not([data-page="replay-menu"]) :is(.capture-summary,.replay-capture-bar,.replay-save-row,.game-save-bar,.settings-save-bar) {
+  background: #151515;
+  border-color: #383838;
+}
+html:not([data-page="replay-menu"]) .change-save-bar {
+  background: #241517;
+  border-color: #79343e;
+}
+html:not([data-page="replay-menu"]) :is(.replay-clip-editor,.replay-capture-bar + .replay-workspace .editor,.native-video-stage,.replay-clip-editor .player) {
+  background: #0b0b0b;
+}
+html:not([data-page="replay-menu"]) .status-footer.session-banner {
+  background: #181818;
+  border-color: #383838;
+  background-image: none;
+}
+html:not([data-page="replay-menu"]) .session-footer { background: #101010; border-top-color: #303030; color: #a3a3a3; }
+html:not([data-page="replay-menu"]) .session-game .game-mark { background: #252525; border-color: #454545; color: #d6d6d6; }
+html:not([data-page="replay-menu"]) .live-status { background: #1d1d1d; border-color: #3d3d3d; color: #c8c8c8; }
+html:not([data-page="replay-menu"]) .telemetry-row .stat { background: #1b1b1b; border-color: #383838; }
+html:not([data-page="replay-menu"]) .telemetry-row .stat:first-child { background: #241517; border-color: #71333c; }
+html:not([data-page="replay-menu"]) .telemetry-row .stat:first-child strong { color: #fff; }
+html:not([data-page="replay-menu"]) :is(.chart,.overview-timeline-chart,.history-timeline-chart) {
+  background: #0e0e0e;
+  background-image: none !important;
+  border-color: #303030;
+}
+html:not([data-page="replay-menu"]) :is(.gridline,.overview-timeline-chart .gridline,.history-timeline-chart .gridline) { stroke: #333; }
+html:not([data-page="replay-menu"]) .overview-timeline-chart .overview-area,
+html:not([data-page="replay-menu"]) .history-timeline-chart .timeline-area {
+  fill: #282828;
+  fill-opacity: .78;
+}
+html:not([data-page="replay-menu"]) :is(.trace,.timeline-trace) { stroke: var(--red); }
+html:not([data-page="replay-menu"]) .meter { background: #303030; }
+html:not([data-page="replay-menu"]) .meter i { background: var(--red); }
+html:not([data-page="replay-menu"]) :is(.field,.override-control,.hardware,.panel-footer) { border-color: #333; }
+html:not([data-page="replay-menu"]) :is(.catalog-label,.small-note,.panel-footer,.catalog-note,.metric-hint) { color: var(--muted); }
+html:not([data-page="replay-menu"]) .pill.green,
+html:not([data-page="replay-menu"]) .auto-saved-label {
+  background: #202020;
+  border-color: #4a4a4a;
+  color: #d2d2d2;
+}
+html:not([data-page="replay-menu"]) .capture-summary[data-state=ready] .capture-status-symbol {
+  background: #202020;
+  border-color: #4a4a4a;
+  color: #d2d2d2;
+}
+html:not([data-page="replay-menu"]) .capture-summary[data-state=error] .capture-status-symbol,
+html:not([data-page="replay-menu"]) .capture-summary[data-state=error] .summary-dot {
+  background: #2a1518;
+  border-color: #7a343d;
+  color: #f0a0a6;
+}
+html:not([data-page="replay-menu"]) .summary-dot,
+html:not([data-page="replay-menu"]) .capture-summary[data-state=ready] .summary-dot,
+html:not([data-page="replay-menu"]) .readiness-strip b[data-ready=true]:before {
+  background: #bdbdbd;
+}
+html:not([data-page="replay-menu"]) #workspace .recording-audio[data-audio-state=active]::before { background: #bdbdbd; }
+html:not([data-page="replay-menu"]) .overlay-scene.vulkan-reference {
+  background: #151515 !important;
+  background-image: none !important;
+  filter: none;
+}
+html:not([data-page="replay-menu"]) .buffer-graphic { filter: grayscale(1); }
+html:not([data-page="replay-menu"]) dialog { background: #151515; border-color: #444; }
+html:not([data-page="replay-menu"]) .dialog-head { border-color: #353535; }
+html:not([data-page="replay-menu"]) #toast { background: #202020; border-color: #4b4b4b; }
+html:not([data-page="replay-menu"]) :is(.button,.icon-button):hover:not(:disabled) { box-shadow: 0 5px 14px #00000040; }
+
+/* The timeline is an information surface with its own established treatment.
+   Keep its red traces and gradient intact while the surrounding workspace
+   follows the shared graphite contract. */
+html:not([data-page="replay-menu"]) :is(.overview-timeline-chart,.history-timeline-chart) {
+  border-color: #292929;
+  background: linear-gradient(180deg,#121212,#0c0c0c) !important;
+  background-image: linear-gradient(180deg,#121212,#0c0c0c) !important;
+}
+html:not([data-page="replay-menu"]) :is(.overview-timeline-chart .gridline,.history-timeline-chart .gridline) {
+  stroke: #303030;
+}
+html:not([data-page="replay-menu"]) .overview-timeline-chart .overview-area {
+  fill: url(#overview-area-gradient);
+  fill-opacity: 1;
+}
+html:not([data-page="replay-menu"]) .history-timeline-chart .timeline-area {
+  fill: url(#history-area-gradient);
+  fill-opacity: 1;
+  stroke: none;
+}
+html:not([data-page="replay-menu"]) .overview-timeline-chart .trace {
+  stroke: #ef5a6c;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+html:not([data-page="replay-menu"]) .history-timeline-chart .timeline-trace {
+  fill: none;
+  stroke: #ef5a6c;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+html:not([data-page="replay-menu"]) .history-timeline-chart .timeline-trace.cpu { stroke: var(--history-cpu); }
+html:not([data-page="replay-menu"]) .history-timeline-chart .timeline-trace.gpu { stroke: var(--history-gpu); }
+
+/* Shared radius scale. Primary panels get a softer edge, while controls and
+   list rows stay compact so dense pages remain easy to scan. */
+html:not([data-page="replay-menu"]) {
+  --radius-panel: 14px;
+  --radius-card: 11px;
+  --radius-control: 8px;
+}
+html:not([data-page="replay-menu"]) :is(
+  .panel,.editor,.clip-browser,.game-detail,.game-catalog,.history-catalog,
+  .history-detail,.shortcut-panel,.settings-card,.updates-panel,
+  .status-footer.session-banner,.capture-summary,.replay-capture-bar,
+  .replay-save-row,.game-save-bar,.settings-save-bar,.clip-filter-panel
+) { border-radius: var(--radius-panel); }
+html:not([data-page="replay-menu"]) :is(
+  .library-game,.history-row,.clip-card,.inheritance-banner,.info-note,
+  .capture-explainer,.discovery-row,.settings-option,.update-check-row,
+  .telemetry-row .stat,.live-status,.pill
+) { border-radius: var(--radius-card); }
+html:not([data-page="replay-menu"]) :is(
+  .button,.precision-select-trigger,.search,.field select,
+  .microphone-device select,.steam-options-field textarea,
+  .history-view-toggle,.clip-collection,.layout-grid button,
+  .preset-grid button,.tabbar button,.global-tabs button
+) { border-radius: var(--radius-control); }
+html:not([data-page="replay-menu"]) .tabbar button.active { border-radius: var(--radius-control) var(--radius-control) 0 0; }
+html:not([data-page="replay-menu"]) .window-titlebar { color: #d5d5d5; }
+html:not([data-page="replay-menu"]) .dialog-head button { color: #d0d0d0; }
+html:not([data-page="replay-menu"]) :is(.settings-option,.settings-page .updates-panel) .switch span {
+  border-color: #656565;
+  background: #171717;
+}
+html:not([data-page="replay-menu"]) :is(.settings-option,.settings-page .updates-panel) .switch span::before {
+  border-color: #aaa;
+  background: #171717;
+}
+
+/* Neutralize legacy component text tokens that otherwise reintroduce a
+   lavender cast through inherited labels and helper copy. */
+html:not([data-page="replay-menu"]) .settings-link { color: #a6a6a6; }
+html:not([data-page="replay-menu"]) .settings-link.active { color: var(--red); }
+html:not([data-page="replay-menu"]) .session-game small { color: #b4b4b4; }
+html:not([data-page="replay-menu"]) .capture-summary { color: #a3a3a3; }
+html:not([data-page="replay-menu"]) .capture-summary :is(span,p) { color: #a3a3a3; }
+html:not([data-page="replay-menu"]) .capture-summary b { color: #d5d5d5; }
+/* Both catalog footers share one inset, text rhythm and first-line icon alignment. */
+html:not([data-page="replay-menu"]) #workspace :is(.game-catalog,.history-catalog) > .catalog-note {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+  padding: 16px 0 4px;
+  border-top: 1px solid #2b2b2b;
+  color: var(--muted);
+}
+html:not([data-page="replay-menu"]) #workspace .game-catalog > .catalog-note { margin-top: 16px; }
+html:not([data-page="replay-menu"]) #workspace :is(.game-catalog,.history-catalog) > .catalog-note .icon {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+}
+html:not([data-page="replay-menu"]) #workspace :is(.game-catalog,.history-catalog) > .catalog-note p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: normal;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+html:not([data-page="replay-menu"]) .global-intro { color: #b2b2b2; }
+html:not([data-page="replay-menu"]) .global-intro a { color: #de858c; }
+html:not([data-page="replay-menu"]) :is(.metric-hint,.field p,.small-note,.panel-footer,.comparison-selector) { color: #a3a3a3; }
+html:not([data-page="replay-menu"]) .panel-footer a { color: #d2d2d2; }
+html:not([data-page="replay-menu"]) :is(.field label,.detail-body code) { color: #d2d2d2; }
+html:not([data-page="replay-menu"]) .inheritance-banner { color: #c1c1c1; }
+html:not([data-page="replay-menu"]) .info-note {
+  background: #171717;
+  border-color: #383838;
+  color: #a3a3a3;
+}
+html:not([data-page="replay-menu"]) :is(.metric-toggles label,.shortcut-panel kbd) {
+  background: #151515;
+  border-color: #353535;
+}
+html:not([data-page="replay-menu"]) .shortcut-panel>svg { color: #8e8e8e; }
+html:not([data-page="replay-menu"]) kbd { color: #c9c9c9; }
+html:not([data-page="replay-menu"]) .empty { color: #a3a3a3; }
+html:not([data-page="replay-menu"]) #toast { color: #eeeeee; }
+html:not([data-page="replay-menu"]) #workspace select option {
+  background: #171717;
+  color: #f1f1f1;
+}
+
+/* Tab groups share a fully inset selection plate and consistent control
+   padding. The animated plate follows the button bounds at every width. */
+html:not([data-page="replay-menu"]) #workspace .tabbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 0;
+  padding: 6px;
+  box-sizing: border-box;
+  border: 1px solid #303030;
+  border-radius: 12px;
+  background: #0d0d0d;
+  isolation: isolate;
+}
+html:not([data-page="replay-menu"]) #workspace .game-detail > .tabbar {
+  margin: 20px 24px 0;
+  max-width: calc(100% - 48px);
+}
+html:not([data-page="replay-menu"]) #workspace .global-tabs { margin: 0 0 24px; }
+html:not([data-page="replay-menu"]) #workspace .overlay-editor-tabs { margin: 0 0 16px; }
+html:not([data-page="replay-menu"]) #workspace .tabbar > button {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 20px;
+}
+html:not([data-page="replay-menu"]) #workspace .tabbar > button:hover:not(.active) {
+  background: #1b1b1b;
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) #workspace .tabbar > button.active {
+  background: #242424;
+  border-color: #444;
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) #workspace .tabbar[data-selection-indicator] > button.active {
+  background: transparent;
+  border-color: transparent;
+}
+html:not([data-page="replay-menu"]) .selection-indicator-tabs {
+  z-index: 0;
+  box-sizing: border-box;
+  transform-origin: 0 0;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background: #242424;
+}
+html:not([data-page="replay-menu"]) .selection-indicator-tabs::after {
+  content: '';
+  position: absolute;
+  inset-inline: 12px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--red);
+}
+html:not([data-page="replay-menu"]) :is(.selection-indicator-nav,.selection-indicator-segment) {
+  transform-origin: 0 0;
+}
+
+/* Each Settings card owns its rows; avoid a second nested card surface. */
+html:not([data-page="replay-menu"]) .settings-page .settings-option {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+html:not([data-page="replay-menu"]) .settings-page .settings-card-heading + .settings-option { margin-top: 20px; }
+html:not([data-page="replay-menu"]) .settings-page .settings-option + .settings-option { margin-top: 20px; padding-top: 20px; border-top: 1px solid #2d2d2d; }
+html:not([data-page="replay-menu"]) .settings-page .settings-option:last-child { padding-bottom: 0; }
+html:not([data-page="replay-menu"]) .settings-page .update-check-row {
+  margin-top: 20px;
+  padding: 18px 20px;
+  border: 1px solid #303030;
+  border-radius: 11px;
+  background: #171717;
+}
+html:not([data-page="replay-menu"]) .settings-page .updates-panel > .field {
+  margin-top: 10px;
+  padding: 18px 20px;
+  border: 1px solid #303030;
+  border-radius: 11px;
+  background: #171717;
+}
+
+/* Recent captures is a first-class Overview surface, so its heading and
+   capture rail share the same rounded card frame as Frame pacing. */
+html:not([data-page="replay-menu"]) .recent-captures {
+  margin-top: 22px;
+  padding: 24px;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+html:not([data-page="replay-menu"]) .recent-captures > .section-heading { margin-bottom: 18px; }
+html:not([data-page="replay-menu"]) .recent-capture-grid > a {
+  background: #171717;
+  border-color: #303030;
+  border-radius: var(--radius-card);
+}
+
+/* Replay rail actions use the same square footprint as the other primary
+   controls, with enough width for a comfortable pointer target. */
+html:not([data-page="replay-menu"]) .clip-library-actions { gap: 8px; }
+html:not([data-page="replay-menu"]) .clip-library-actions .button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid #3b3b3b;
+  border-radius: 10px;
+  background: #1b1b1b;
+}
+html:not([data-page="replay-menu"]) .clip-library-actions .button:hover:not(:disabled) {
+  background: #292929;
+  border-color: #5b5b5b;
+}
+html:not([data-page="replay-menu"]) .clip-library-actions .button .icon { width: 18px; height: 18px; }
+
+@media (max-width: 700px) {
+  html:not([data-page="replay-menu"]) .recent-captures { padding: 18px; }
+}
+
+/* Instant Replay keeps the rail readable at a glance: the header, filters,
+   clips, and storage signal share one consistent rhythm instead of stacking
+   oversized controls and repeated copy. */
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser {
+  padding: 20px 18px 18px;
+  gap: 0;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .section-heading {
+  margin-bottom: 14px;
+  align-items: center;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser h3 {
+  font-size: 16px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .search {
+  min-height: 40px;
+  margin-bottom: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-collection {
+  margin-bottom: 12px;
+  padding: 4px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-collection button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-filter-panel {
+  margin-bottom: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-filter-panel summary {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser #clip-organizing-controls {
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-results-toolbar {
+  min-height: 38px;
+  gap: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-sort .precision-select {
+  min-width: 132px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-sort .precision-select-trigger {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid #363636;
+  border-radius: var(--radius-control);
+  background: #191919;
+  color: var(--text);
+  font-size: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-sort .precision-select-trigger:hover:not(:disabled) {
+  background: #252525;
+  border-color: #555;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-list {
+  margin: 16px 0 0;
+  gap: 12px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-card {
+  margin-bottom: 0;
+  padding: 8px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-select strong {
+  margin-top: 8px;
+  font-size: 13px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-select small {
+  margin-top: 6px;
+  font-size: 10px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-browser .clip-storage {
+  margin-top: 20px;
+}
+
+/* Shared control states must use the same neutral palette as their panels,
+   including menus rendered outside the workspace and media controls. */
+html:not([data-page="replay-menu"]) :is(.player-controls,.replay-clip-editor,.media-load-status) {
+  border-color: var(--border);
+}
+html:not([data-page="replay-menu"]) :is(.player-controls .icon-button,.clip-editor-footer .button) {
+  background: var(--button-bg);
+  border-color: var(--button-border);
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) :is(.player-controls .icon-button,.clip-editor-footer .button):hover:not(:disabled) {
+  background: #292929;
+  border-color: #5b5b5b;
+}
+html:not([data-page="replay-menu"]) .native-player::after {
+  background: linear-gradient(0deg,#080808e0,transparent 40%,#08080888);
+}
+html:not([data-page="replay-menu"]) .native-player { background: #080808; }
+html:not([data-page="replay-menu"]) :is(.timeline-handle.start,.timeline-handle.end) { background: #0d0d0d; }
+html:not([data-page="replay-menu"]) .game-cover .pill { background: #131313aa; }
+html:not([data-page="replay-menu"]) :is(
+  .timecode,.clip-time-ruler,.clip-editor-heading .editor-label,
+  .clip-selection-duration small,.clip-editor-footer .trim-time,
+  .clip-preview-status,.native-thumbnail>.icon,.chart-axis,
+  .history-view-toggle button:not(.active),.history-scrubber-wrap span,
+  .history-moment-heading span,.history-explanation>span
+) { color: var(--muted); }
+html:not([data-page="replay-menu"]) :is(.clip-editor-footer output,.clip-selection-duration output,.history-moment-grid b) {
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) .replay-clip-editor .clip-timeline { background: #1b1b1b; }
+html:not([data-page="replay-menu"]) .switch span {
+  background: #171717;
+  border-color: #656565;
+}
+html:not([data-page="replay-menu"]) .switch span::before {
+  background: #171717;
+  border-color: #aaa;
+}
+html:not([data-page="replay-menu"]) .switch input:checked+span {
+  background: #2a1717;
+  border-color: #7e3030;
+}
+html:not([data-page="replay-menu"]) .switch input:checked+span::before {
+  background: #171717;
+  border-color: var(--red);
+}
+html:not([data-page="replay-menu"]) .discovery-row input[type=checkbox]:checked {
+  background: #2a1717;
+  border-color: var(--red);
+}
+html:not([data-page="replay-menu"]) .settings-page .update-emblem {
+  background: #202020;
+  border-color: #3b3b3b;
+}
+html:not([data-page="replay-menu"]) :is(.steam-configured-check,.clip-trash-feedback) {
+  background: #202020;
+  border-color: #3b3b3b;
+  color: #d2d2d2;
+}
+html:not([data-page="replay-menu"]) .replay-capture-bar:has(.capture-summary[data-state=error]) {
+  border-color: #743737;
+}
+
+/* Playback and trimming share one scrubber. Keep the legacy seek input in
+   the DOM for native updates, but make the filmstrip the only visible track. */
+html:not([data-page="replay-menu"]) .replay-workspace .player-controls #player-seek {
+  display: none;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-trim-strip {
+  padding: 8px 14px 12px;
+  border-top: 0;
+  background: #0e0e0e;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-time-ruler {
+  margin: 0 2px 4px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-timeline {
+  height: 58px;
+  border: 1px solid #303030;
+  border-radius: 7px;
+  background: #191919;
+  box-shadow: inset 0 1px 0 #ffffff08;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-editor-footer {
+  /* Reserve the action height before trimming reveals Export. */
+  min-height: 40px;
+  margin-top: 10px;
+  gap: 10px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-preview-status {
+  min-height: 10px;
+  margin: 4px 0 0;
+  font-size: 9px;
+}
+html:not([data-page="replay-menu"]) .replay-workspace .clip-preview-status[hidden] {
+  display: block !important;
+  height: 0;
+  min-height: 0;
+  margin: 0;
+  visibility: hidden;
+}
+
+/* All segmented controls use the same inset plate and motion as Global tabs. */
+html:not([data-page="replay-menu"]) :is(.history-view-toggle,.overview-view-toggle,.clip-collection) {
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 0;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid #303030;
+  border-radius: 16px;
+  background: #0d0d0d;
+  isolation: isolate;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html:not([data-page="replay-menu"]) :is(.history-view-toggle,.overview-view-toggle,.clip-collection)::-webkit-scrollbar { display: none; }
+html:not([data-page="replay-menu"]) :is(.tabbar,.history-view-toggle,.overview-view-toggle,.clip-collection) > button {
+  position: relative;
+  z-index: 1;
+  min-height: 36px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #a9a9a9;
+  /* The shared plate owns selection motion. Let labels settle without
+     crossfading a second background or border underneath it. */
+  transition: color 140ms ease;
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.history-view-toggle,.overview-view-toggle,.clip-collection) > button:hover:not(.active) {
+  color: #e4e4e4;
+  background: #181818;
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.history-view-toggle,.overview-view-toggle) > button.active,
+html:not([data-page="replay-menu"]) .clip-collection > button[aria-pressed="true"] {
+  color: var(--text);
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.history-view-toggle,.overview-view-toggle,.clip-collection)[data-selection-indicator] > button.active {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* The Replay scope switch fills its rail like the search field. A shared
+   frame should read as one complete control, even when its active plate moves. */
+html:not([data-page="replay-menu"]) .clip-collection {
+  width: 100%;
+}
+html:not([data-page="replay-menu"]) .clip-collection > button {
+  flex: 1 1 0;
+}
+html:not([data-page="replay-menu"]) #workspace :is(.tabbar,.history-view-toggle,.overview-view-toggle,.clip-collection) {
+  border-radius: 16px;
+}
+
+/* The compositor owns the outer window frame. Keep rounding on the inner
+   layout components only so native chrome can supply the app silhouette. */
+
+/* Search fields are controls too: keep a complete graphite edge around the
+   Library, History, and Replay rails instead of letting the dark fill swallow
+   their boundary. The focus state stays red so keyboard and pointer feedback
+   remain distinct from the resting border. */
+html:not([data-page="replay-menu"]) .search,
+html[data-page]:not([data-page="replay-menu"]) .search,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .search {
+  border: 1px solid #454545;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+html:not([data-page="replay-menu"]) .search:focus-within,
+html[data-page]:not([data-page="replay-menu"]) .search:focus-within,
+html[data-page]:not([data-page="overview"]):not([data-page="replay-menu"]) .search:focus-within {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px #e7474f26;
+}
+
+/* Overview telemetry is a single reading row, not four separate cards. Keep
+   only the quiet dividers between readings and keep each unit beside its
+   value, matching the original flat presentation. */
+html:not([data-page="replay-menu"]) .overview-grid .telemetry-row {
+  gap: 0;
+}
+html:not([data-page="replay-menu"]) .overview-grid .telemetry-row .stat,
+html[data-page="overview"] .overview-grid .telemetry-row .stat {
+  padding: 0 18px;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid #303030;
+  border-radius: 0;
+}
+html:not([data-page="replay-menu"]) .overview-grid .telemetry-row .stat:first-child,
+html[data-page="overview"] .overview-grid .telemetry-row .stat:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+html:not([data-page="replay-menu"]) .overview-grid .telemetry-row .stat strong,
+html[data-page="overview"] .overview-grid .telemetry-row .stat strong {
+  margin-top: 8px;
+}
+html:not([data-page="replay-menu"]) .overview-grid .telemetry-row .stat strong small,
+html[data-page="overview"] .overview-grid .telemetry-row .stat strong small {
+  display: inline;
+  margin: 0 0 0 5px;
+  letter-spacing: 0;
+}
+@media (max-width: 700px) {
+  html:not([data-page="replay-menu"]) .overview-grid .telemetry-row .stat,
+  html[data-page="overview"] .overview-grid .telemetry-row .stat {
+    padding-inline: 12px;
+  }
+  html:not([data-page="replay-menu"]) .overview-grid .telemetry-row .stat:first-child,
+  html[data-page="overview"] .overview-grid .telemetry-row .stat:first-child {
+    padding-left: 0;
+  }
+}
+
+/* The moving selection plate owns tab feedback. Nested content must not
+   replay several fades and vertical shifts during a single switch. */
+/* Keep Frame pacing focused on the graph: the state label sits beside the
+   heading and the chart markup remains untouched. */
+html[data-page="overview"] .pacing-panel > .section-heading {
+  margin-bottom: 10px;
+}
+html[data-page="overview"] .frame-pacing-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+html[data-page="overview"] .frame-pacing-heading .live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #a8a8a8;
+  font: 10px/1.4 var(--mono);
+  white-space: nowrap;
+}
+html[data-page="overview"] .frame-pacing-heading .live-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #a8a8a8;
+}
+html[data-page="overview"] .pacing-panel .telemetry-row {
+  margin-top: 12px;
+  margin-bottom: 18px;
+}
+html[data-page="overview"] .pacing-panel .panel-footer {
+  margin-top: 18px;
+}
+
+/* The overlay preview spans the workspace above the editor. Its runtime
+   controls share one footer; appearance and metric drafts stay below it. */
+html:not([data-page="replay-menu"]) #workspace .global-grid {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-panel {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 0;
+  padding: 0;
+  border: 1px solid #2b2b2b;
+  border-radius: 16px;
+  background: #101010;
+  overflow: hidden;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-panel > .overlay-scene {
+  width: 100%;
+  height: 240px;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-features {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto;
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid #2b2b2b;
+  align-items: stretch;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-features > section {
+  min-width: 0;
+  margin: 0;
+  padding: 16px 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-features > section + section {
+  border-left: 1px solid #2b2b2b;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-feature-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 40px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-features h2 {
+  font-size: 16px;
+  line-height: 1.35;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-features .overlay-settings-heading {
+  justify-content: flex-start;
+  gap: 10px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-preview-features p {
+  max-width: none;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor {
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-controls {
+  margin: 0;
+  padding: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-grid button {
+  min-height: 56px;
+  padding: 12px;
+  justify-content: center;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-grid button strong {
+  font-size: 13px;
+}
+
+@media (max-width: 700px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-preview-features {
+    grid-template-columns: 1fr;
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-preview-features > section + section {
+    border-left: 0;
+    border-top: 1px solid #2b2b2b;
+  }
+}
+
+/* Navigation starts below the native titlebar. The compositor owns the outer
+   silhouette; page content needs no extra clipping or stacking surface. */
+html:not([data-page="replay-menu"]) {
+  --sidebar-inset: 0px;
+  --sidebar-gap: 0px;
+}
+html:not([data-page="replay-menu"]) .window-content {
+  background: #000;
+}
+html:not([data-page="replay-menu"]) .sidebar {
+  top: var(--window-titlebar-height);
+  right: auto;
+  bottom: var(--sidebar-inset);
+  left: var(--sidebar-inset);
+  border: 1px solid #242424;
+  border-left: 0;
+  border-radius: 0;
+  overflow: hidden;
+}
+html:not([data-page="replay-menu"]) .app-shell {
+  margin-left: var(--sidebar-width);
+  border-radius: 0;
+  background: #000;
+}
+html:not([data-page="replay-menu"]) .skip-link {
+  left: calc(var(--sidebar-width) + 14px);
+}
+
+@media (max-width: 700px) {
+  html:not([data-page="replay-menu"]) {
+    --sidebar-width: 64px;
+  }
+}
+
+/* Original dark surface contract. The preview follows the shipped black
+   canvas again: graphite surfaces are close to black, borders stay quiet, and
+   red remains reserved for active states and actions. Timeline fills and red
+   traces intentionally remain owned by the chart rules above. */
+html:not([data-page="replay-menu"]) {
+  --bg: #080808;
+  --surface: #101010;
+  --surface-2: #171717;
+  --raised: #1b1b1b;
+  --border: #282828;
+  --text: #eeeeee;
+  --muted: #9a9a9a;
+  --select-hover: #1f1f1f;
+  --button-bg: #171717;
+  --button-border: #333333;
+}
+html:not([data-page="replay-menu"]) body { background: #0d0d0d; }
+html:not([data-page="replay-menu"]) :is(.window-titlebar,.sidebar,.topbar) {
+  background: #101010;
+  border-color: #242424;
+}
+html:not([data-page="replay-menu"]) .window-content,
+html:not([data-page="replay-menu"]) .app-shell { background: #0d0d0d; }
+html:not([data-page="replay-menu"]) :is(
+  .panel,.editor,.clip-browser,.game-detail,.game-catalog,.history-catalog,
+  .history-detail,.shortcut-panel,.settings-card,.updates-panel
+) {
+  background: #101010;
+  border-color: #2b2b2b;
+}
+html[data-page="library"] #workspace .game-catalog {
+  border: 1px solid #2b2b2b;
+  border-radius: 16px;
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger) {
+  background: #171717;
+  border-color: #333333;
+}
+html:not([data-page="replay-menu"]) :is(.button,.precision-select-trigger):hover:not(:disabled) {
+  background: #212121;
+  border-color: #4a4a4a;
+}
+html:not([data-page="replay-menu"]) :is(.search,.field select,.microphone-device select,.steam-options-field textarea) {
+  background: #0d0d0d;
+  border-color: #333333;
+}
+html:not([data-page="replay-menu"]) :is(.chart,.history-view-toggle,.clip-collection,.clip-filter-panel) {
+  background: #0d0d0d;
+  border-color: #2d2d2d;
+}
+html:not([data-page="replay-menu"]) :is(.tabbar,.overlay-editor-tabs) { border-color: #2d2d2d; }
+html:not([data-page="replay-menu"]) [data-select-surface] { background: #151515; border-color: #3b3b3b; }
+
+/* Shared primary actions stay flat and keep their glyphs still. */
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .button.primary {
+  background: #7a3038; border-color: #ad4852; color: #fff1f2;
+  transition: background-color 150ms ease,border-color 150ms ease,color 150ms ease;
+  box-shadow: none; transform: none;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .button.primary:hover:not(:disabled) {
+  background: #8d343e; border-color: #d15a65;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .button.primary:active:not(:disabled) {
+  background: #65272e; border-color: #a9434e; transform: none;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .button.primary[aria-busy=true] { opacity: .85; cursor: progress; }
+html:not([data-page="replay-menu"]) #workspace .replay-save-actions .button.primary { gap: 10px; padding-inline: 14px; }
+html:not([data-page="replay-menu"]) #workspace .replay-shortcut-slot kbd {
+  padding: 3px 6px; border: 1px solid #ffffff24; border-radius: 5px;
+  background: #00000014; color: #efdadd; font-size: 9px;
+}
+html:not([data-page="replay-menu"]) .replay-save-label { display: grid; text-align: center; }
+html:not([data-page="replay-menu"]) .replay-save-label::before { content: 'Save replay'; visibility: hidden; grid-area: 1/1; }
+html:not([data-page="replay-menu"]) .replay-save-label > span { grid-area: 1/1; }
+html:not([data-page="replay-menu"]) #workspace #diagnostic-log-status:not([hidden]) { display: block; margin-top: 8px; }
+html:not([data-page="replay-menu"]) .precision-select-option[aria-selected="true"] { background: #202020; }
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button {
+  background: #161616;
+  border-color: #333333;
+}
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button.active,
+html:not([data-page="replay-menu"]) :is(.layout-grid,.preset-grid) button[aria-pressed="true"] {
+  background: #2a1518;
+  border-color: #74333d;
+}
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card):hover { background: #1d1d1d; }
+html:not([data-page="replay-menu"]) :is(.library-game,.history-row,.clip-card).selected {
+  background: #2a1518;
+  border-color: #74333d;
+}
+html:not([data-page="replay-menu"]) :is(.game-cover,.game-cover.yellow,.game-cover.green) {
+  background: #101010 !important;
+  background-image: none !important;
+}
+html:not([data-page="replay-menu"]) :is(.inheritance-banner,.info-note,.capture-explainer,.discovery-row,.updates-panel .update-check-row) {
+  background: #161616;
+  border-color: #343434;
+}
+html:not([data-page="replay-menu"]) :is(.capture-summary,.replay-capture-bar,.replay-save-row,.game-save-bar,.settings-save-bar) {
+  background: #121212;
+  border-color: #303030;
+}
+html:not([data-page="replay-menu"]) .status-footer.session-banner {
+  background: #141414;
+  border-color: #303030;
+  background-image: none;
+}
+html:not([data-page="replay-menu"]) .session-footer {
+  background: #0c0c0c;
+  border-top-color: #2b2b2b;
+}
+html:not([data-page="replay-menu"]) .session-game .game-mark { background: #1c1c1c; border-color: #3a3a3a; }
+html:not([data-page="replay-menu"]) .live-status { background: #171717; border-color: #353535; }
+html:not([data-page="replay-menu"]) .telemetry-row .stat { background: #171717; border-color: #333333; }
+html:not([data-page="replay-menu"]) .telemetry-row .stat:first-child { background: #171717; border-color: #333333; }
+html:not([data-page="replay-menu"]) .pacing-panel { background: #111111; }
+html:not([data-page="replay-menu"]) .panel-footer,
+html:not([data-page="replay-menu"]) :is(.field,.override-control,.hardware) { border-color: #2d2d2d; }
+html:not([data-page="replay-menu"]) .meter { background: #303030; }
+html:not([data-page="replay-menu"]) dialog { background: #151515; border-color: #444444; }
+html:not([data-page="replay-menu"]) #toast { background: #1d1d1d; border-color: #4a4a4a; }
+html[data-page="overview"] .overview-grid .telemetry-row .stat,
+html[data-page="overview"] .overview-grid .telemetry-row .stat:first-child {
+  background: transparent;
+  border-color: transparent;
+  border-left-color: #2b2b2b;
+}
+html[data-page="overview"] .overview-grid .telemetry-row .stat:first-child {
+  border-left-color: transparent;
+}
+
+/* Only the visible Overlay editor tab participates in layout. Keeping the
+   inactive panel in the grid made Appearance inherit the taller Metrics
+   panel's empty space. */
+html:not([data-page="replay-menu"]) #workspace .overlay-editor-panels {
+  position: relative;
+  display: block;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-editor-panel[data-editor-inactive] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+}
+
+/* Give the editor the same readable labels and control targets as the other
+   settings pages. Choice groups use the full width; each slider keeps its
+   label and value above the track instead of taking space from the track. */
+html:not([data-page="replay-menu"]) #workspace .overlay-editor-tabs {
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-style {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 32px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-style > :is(.overlay-palette-block,.overlay-layout-block) {
+  grid-column: 1;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-style > .overlay-appearance-controls {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .palette-grid {
+  gap: 10px;
+  margin-top: 12px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-palette {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border: 1px solid #383838;
+  border-radius: 12px;
+  background: radial-gradient(circle, var(--swatch) 0 10px, transparent 11px), #171717;
+  box-shadow: none;
+  transition: border-color 140ms ease, transform 120ms ease;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-palette:hover { border-color: #777; }
+html:not([data-page="replay-menu"]) #workspace .overlay-palette[aria-pressed="true"] { border-color: #b5b5b5; }
+html:not([data-page="replay-menu"]) #workspace .overlay-palette:active { transform: scale(.96); }
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-grid button {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields > .field {
+  grid-column: 1 / -1;
+  padding: 0;
+  min-height: 44px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields .precision-select {
+  width: 180px;
+  flex: 0 0 auto;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields .precision-select-trigger {
+  min-height: 44px;
+  font-size: 13px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields > .field:has(input[type="range"]) {
+  grid-column: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields .range-control {
+  display: contents;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields .range-control output {
+  width: auto;
+  font-size: 12px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-appearance-fields .range-control > input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .preset-grid button strong {
+  font-size: 13px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .preset-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-information .metric-groups {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-group {
+  padding: 0;
+  border: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-group-header h3 {
+  font-size: 13px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-group .metric-toggles {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label {
+  min-height: 44px;
+  padding: 10px 12px;
+  gap: 10px;
+  border: 1px solid #2b2b2b;
+  border-radius: 10px;
+  background: #141414;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label:has(input:checked) {
+  background: #1a1a1a;
+  border-color: #454545;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles span {
+  font-size: 13px;
+}
+html:not([data-page="replay-menu"]) #shortcut-feedback:empty { display: none; }
+@media (max-width: 1150px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-style {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-style > .overlay-appearance-controls {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-group .metric-toggles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields,
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-information .metric-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .preset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Keep the navigation and canvas edges square. The native compositor still
+   owns the outer window silhouette. */
+html:not([data-page="replay-menu"]) .sidebar {
+  border-right: 1px solid #242424;
+  border-radius: 0;
+}
+html:not([data-page="replay-menu"]) .app-shell {
+  margin-left: var(--sidebar-width);
+  border-radius: 0;
+}
+
+/* Overview chart support layers stay quieter than the established red trace
+   and area fill. The SVG geometry and red rules above remain unchanged. */
+html[data-page="overview"] .overview-timeline-chart .y-axis {
+  box-sizing: border-box;
+  padding-right: 8px;
+  text-align: right;
+  font: 8px/1 var(--mono);
+  color: #8e8e8e;
+  white-space: nowrap;
+}
+html[data-page="overview"] .overview-timeline-chart .gridline {
+  stroke: #292929;
+  stroke-dasharray: none;
+  opacity: .72;
+}
+html[data-page="overview"] .overview-timeline-chart .gridline-baseline {
+  stroke: #212121;
+  opacity: .58;
+}
+html[data-page="overview"] .overview-timeline-chart + .chart-axis {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
+  align-items: center;
+  gap: 16px;
+  margin: 12px 0 0 45px;
+  color: #858585;
+  font: 9px/1.2 var(--mono);
+  letter-spacing: .01em;
+}
+html[data-page="overview"] .overview-timeline-chart + .chart-axis > :last-child { text-align: right; }
+html[data-page="overview"] .overview-timeline-chart + .chart-axis .chart-axis-summary {
+  color: #777;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Session behavior sits beside the unchanged preview. The separate editor
+   follows the same label-left, control-right rows as the other settings pages. */
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-page {
+  display: grid;
+  gap: 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel,
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor {
+  min-width: 0;
+  padding: 24px;
+  background: #101010;
+  border: 1px solid #2b2b2b;
+  border-radius: 16px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(330px, .58fr);
+  align-items: center;
+  gap: 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel > .overlay-preview-panel {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel > .overlay-preview-panel > .overlay-scene {
+  width: 100%;
+  height: 220px;
+  min-height: 0;
+  margin: 0;
+  border: 1px solid #343434;
+  border-radius: 12px;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+/* The sample stays centered; the saved corner still controls the game overlay. */
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel .overlay-scene > .hud {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%) scale(calc(var(--hud-scale) * var(--hud-preview-fit, 1)));
+  transform-origin: center;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-runtime-section {
+  min-width: 0;
+  padding: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-runtime-section > .section-heading {
+  margin: 0 0 4px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-runtime-section > .section-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-runtime-section .overlay-preview-features {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-runtime-section .overlay-preview-features > section {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 18px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-runtime-section .overlay-preview-features > section + section {
+  border-top: 1px solid #2d2d2d;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-field-row > div {
+  min-width: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-setting-label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-field-row h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-field-row p {
+  max-width: 480px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor {
+  display: grid;
+  gap: 16px;
+  margin-top: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-editor-tabs {
+  width: fit-content;
+  justify-self: start;
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-editor-tabs button {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-editor-panels {
+  position: relative;
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-editor-panel {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-editor-panel[data-editor-inactive] {
+  position: absolute;
+  inset: 0;
+  width: auto;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-setting-row,
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field,
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field:has(input[type="range"]) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--settings-control-column);
+  align-items: center;
+  gap: 16px 32px;
+  min-width: 0;
+  min-height: 76px;
+  margin: 0;
+  padding: 16px 0;
+  border: 0;
+  border-bottom: 1px solid #2d2d2d;
+  border-radius: 0;
+  background: transparent;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-setting-copy {
+  min-width: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-setting-copy h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-setting-copy > span {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-setting-copy > span[hidden] {
+  display: none;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .palette-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 40px);
+  justify-content: space-between;
+  justify-items: start;
+  gap: 8px;
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-palette {
+  width: 100%;
+  max-width: 40px;
+  height: auto;
+  aspect-ratio: 1;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  display: inline-flex;
+  justify-self: end;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid #303030;
+  border-radius: 16px;
+  background: #0d0d0d;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button {
+  position: relative;
+  z-index: 1;
+  min-height: 36px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  line-height: 18px;
+  text-align: center;
+  box-shadow: none;
+  transition: color 120ms ease;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button strong {
+  font-size: 10px;
+  font-weight: 500;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button::after { content: none; }
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button:is(:hover,:active) {
+  transform: none;
+  box-shadow: none;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button:hover:not(:disabled):not([aria-pressed="true"]) {
+  color: var(--text);
+  background: #1b1b1b;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button[aria-pressed="true"] {
+  color: var(--text);
+  background: #242424;
+  border-color: #444444;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher[data-selection-indicator] > button[aria-pressed="true"] {
+  background: transparent;
+  border-color: transparent;
+}
+html:not([data-page="replay-menu"]) #workspace .layout-switcher > .selection-indicator::after { content: none; }
+@media(prefers-reduced-motion:reduce){
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .layout-switcher > button { transition: none; }
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-controls,
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field > :last-child {
+  justify-self: end;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields .precision-select {
+  width: min(100%, 240px);
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields .range-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .range-control > .slider-value {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: 12px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .range-control > input[type="range"] {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  min-height: 44px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-preset-row {
+  grid-template-columns: minmax(140px, 1fr) minmax(0, 2.3fr);
+  padding-top: 8px;
+  padding-bottom: 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-metric-header {
+  margin: 24px 0 6px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-hint {
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-validation:empty {
+  display: none;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-groups {
+  margin-top: 24px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-group-header {
+  margin: 0;
+  padding-bottom: 8px;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-group .metric-toggles {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label,
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label:has(input:checked) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 4px 0;
+  border: 0;
+  border-bottom: 1px solid #2d2d2d;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label:last-child,
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label:last-child:has(input:checked) {
+  border-bottom: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-toggles label:has(input:enabled):hover {
+  color: #ededed;
+}
+@media (max-width: 1050px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-preset-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel > .overlay-preview-panel {
+    max-width: 440px;
+    width: 100%;
+    order: -1;
+  }
+}
+@media (max-width: 700px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-panel,
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor {
+    padding: 18px;
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-setting-row,
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field,
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field:has(input[type="range"]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field > :last-child {
+    justify-self: start;
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-appearance-fields > .field:has(.switch) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .palette-grid {
+    grid-template-columns: repeat(8, 40px);
+    justify-content: start;
+    justify-items: start;
+  }
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-information .metric-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .palette-grid {
+    grid-template-columns: repeat(4, 40px);
+  }
+}

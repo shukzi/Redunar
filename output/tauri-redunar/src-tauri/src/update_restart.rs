@@ -34,19 +34,19 @@ pub async fn restart_redunar(app: tauri::AppHandle) -> Result<(), String> {
         Ok(())
     })
     .await
-    .map_err(|_| "Restart preparation stopped unexpectedly".to_owned())?
+    .map_err(|_| "Restart preparation failed.".to_owned())?
 }
 
 fn validate_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| "The installed Redunar executable is unavailable")?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "Installed Redunar executable unavailable.")?;
     if !metadata.is_file()
         || metadata.uid() != 0
         || metadata.mode() & 0o022 != 0
         || metadata.mode() & 0o111 == 0
     {
-        return Err("The installed Redunar executable has unsafe permissions".into());
+        return Err("Installed Redunar executable has unsafe permissions.".into());
     }
     Ok(())
 }

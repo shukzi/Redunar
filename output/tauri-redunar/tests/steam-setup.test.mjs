@@ -27,11 +27,11 @@ test('routine setup has one paste instruction, an accessible exact value and Cop
   const view=panel();
   await refreshSteamSetup(view,'1',async()=>setup);
   const markup=view.content.innerHTML;
-  assert.match(markup,/Paste this into Steam’s Launch Options, then press Play\./);
+  assert.match(markup,/Paste this into the Launch Options for this game in Steam\. Then press Play\./);
   assert.match(markup,/aria-label="Steam Launch Options"/);
   assert.match(markup,/readonly spellcheck="false">\/usr\/bin\/redunar-steam-launch --app-id 42 -- %command%</);
-  assert.match(markup,/>Copy<\/button>/);
-  assert.match(markup,/Set up once\. Redunar starts automatically with the game\./);
+  assert.match(markup,/class="copy-button-label"[^>]*>Copy<\/span>/);
+  assert.doesNotMatch(markup,/steam-setup-caption/);
   assert.doesNotMatch(markup,/steam-setup-status|check-steam-setup|Setup required|<ol|<label/);
 });
 
@@ -47,8 +47,8 @@ test('an older check cannot overwrite a newer configured response', async () => 
   pending.resolve(setup);
   await old;
   assert.equal(view.content.innerHTML,newer);
-  assert.match(newer,/Steam launch option detected/);
-  assert.match(newer,/Launch in Steam or through Redunar\./);
+  assert.match(newer,/Steam launch option found/);
+  assert.match(newer,/Start this game in Steam or Redunar\./);
   assert.match(newer,/data-copy-steam-options/);
   assert.doesNotMatch(newer,/Paste this|check-steam-setup|steam-setup-caption/);
   assert.equal(view.button.disabled,false);
@@ -61,7 +61,7 @@ test('failed checks show escaped errors and permit a successful retry', async ()
   assert.match(view.content.innerHTML,/check-steam-setup/);
   assert.equal(view.button.disabled,false);
   await refreshSteamSetup(view,'1',async()=>({...setup,launch_options:'"/fixture/a & b/wrapper" --app-id 42 -- %command%'}));
-  assert.match(view.content.innerHTML,/Paste this into Steam’s Launch Options/);
+  assert.match(view.content.innerHTML,/Paste this into the Launch Options for this game in Steam/);
   assert.match(view.content.innerHTML,/&quot;\/fixture\/a &amp; b\/wrapper&quot;/);
   assert.doesNotMatch(view.content.innerHTML,/check-steam-setup/);
 });
@@ -77,15 +77,15 @@ test('unavailable setup never offers an unusable launch option', async () => {
 test('running Steam gives a launch step without turning ambiguity into success', async () => {
   const view=panel();
   await refreshSteamSetup(view,'1',async()=>({...setup,configuration_state:'steam-running',status:'Needs attention: Steam is running, so its in-memory Launch Options may differ from the saved file'}));
-  assert.match(view.content.innerHTML,/Paste this into Steam’s Launch Options, then press Play\./);
+  assert.match(view.content.innerHTML,/Paste this into the Launch Options for this game in Steam\. Then press Play\./);
   assert.match(view.content.innerHTML,/data-copy-steam-options/);
-  assert.doesNotMatch(view.content.innerHTML,/Needs attention|in-memory|saved file|before it is saved|Steam launch option detected|steam-setup-status|check-steam-setup/);
+  assert.doesNotMatch(view.content.innerHTML,/Needs attention|in-memory|saved file|before it is saved|Steam launch option found|steam-setup-status|check-steam-setup/);
 });
 
 test('other ambiguous configuration reasons keep their explanation', async () => {
   const view=panel();
   await refreshSteamSetup(view,'1',async()=>({...setup,configuration_state:'needs-attention',status:'Steam user accounts do not agree on this game’s Launch Options'}));
-  assert.match(view.content.innerHTML,/Setup unconfirmed/);
+  assert.match(view.content.innerHTML,/Steam setup needs attention/);
   assert.match(view.content.innerHTML,/Steam user accounts do not agree/);
   assert.match(view.content.innerHTML,/check-steam-setup/);
   assert.doesNotMatch(view.content.innerHTML,/Steam is open|test the connection|before it is saved/);

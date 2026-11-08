@@ -31,20 +31,29 @@
 .clip-sort .precision-select-trigger { justify-content: flex-end; gap: 6px; min-height: 33px; padding: 6px 0 6px 9px; font-size: 12px; color: var(--muted); background: transparent; border: 0; }
 .clip-sort .precision-select-trigger:hover:not(:disabled), .clip-sort .precision-select-trigger[aria-expanded=true] { color:var(--text); }
 .clip-sort .precision-select-trigger>svg { width:12px; height:12px; }
-.replay-workspace .clip-browser .clip-list { margin-top: 12px; margin-bottom: 0; }
-.clip-storage { margin-top: 18px; padding-top: 16px; border-top: 1px solid #292929; }
-.storage-eyebrow { display: block; font-size: 11px; color: var(--muted); }
-.storage-free { display: block; margin-top: 6px; font-size: 24px; font-weight: 500; letter-spacing: -.5px; }
+.replay-workspace .clip-browser .clip-list { margin-top: 12px; margin-bottom: 0; padding-right: var(--scrollbar-clearance,22px); }
+.clip-storage { margin-top: 20px; padding: 0; border: 0; background: transparent; }
+.storage-summary { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.storage-free { display: block; flex: none; margin: 0; font-size: 12px; line-height: 20px; font-weight: 500; letter-spacing: 0; white-space: nowrap; }
 .storage-free small { font-size: 12px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
-.drive-capacity { height: 5px; margin-top: 14px; border-radius: 4px; overflow: hidden; background: #252525; }
+.drive-capacity { flex: 1; min-width: 48px; height: 4px; margin: 0; border-radius: 4px; overflow: hidden; background: #252525; }
 .drive-capacity i { display: block; height: 100%; background: #777; }
-.drive-scale { display: flex; justify-content: space-between; gap: 10px; margin-top: 7px; font-size: 10px; color: var(--muted); }
-.storage-recordings { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-top: 13px; margin-top: 13px; border-top: 1px solid #222; font-size: 11px; color: var(--muted); }
-.storage-recordings strong { font-size: 12px; font-weight: 400; color: #ccc; }
-.storage-limit { margin-top: 7px; font-size: 10px; line-height: 1.5; color: var(--muted); }
+.storage-limit { margin-top: 12px; font-size: 11px; line-height: 1.5; color: var(--red); }
 .storage-warning { padding: 10px; margin-top: 12px; border: 1px solid #653139; border-radius: 6px; background: #261518; color: #f1979c; font-size: 11px; line-height: 1.6; }
 .clip-storage.low-space .storage-free { color: #f1979c; }
 .clip-storage.low-space .drive-capacity i { background: #c86775; }
+/* The workspace keeps its side rail until 900px. Avoid the older 980px
+   full-width card grid while the browser is still beside the player. */
+@media (min-width: 901px) and (max-width: 980px) {
+  .replay-workspace .clip-browser .clip-list {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: min(42vh, 440px);
+    overflow-y: auto;
+    padding-right: var(--scrollbar-clearance,22px);
+    scrollbar-gutter: stable;
+  }
+  .replay-workspace .clip-browser .thumbnail { height: 90px; }
+}
 @media (max-width: 900px) {
   .clip-filter-fields { grid-template-columns: 1fr 1fr; }
   .clip-storage { max-width: 100%; }
@@ -62,6 +71,14 @@
 .clip-star svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
 .clip-star[aria-pressed=true] svg { fill: currentColor; }
 
-/* Editor and cards use the same star shape and favorite state. */
+/* Editor and cards share the favorite state. */
 [data-action="favorite-selected-clip"] .clip-favorite-icon { width:18px; height:18px; flex:none; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linejoin:round; }
 [data-action="favorite-selected-clip"][aria-pressed="true"] .clip-favorite-icon { fill:var(--red); stroke:var(--red); }
+@media(hover:hover) and (prefers-reduced-motion:no-preference){
+ /* Leave room for the scaled border inside the independently scrolling rail. */
+ html:not([data-page="replay-menu"]) #workspace .clip-list { padding:4px var(--scrollbar-clearance,22px) 4px 4px; }
+ html:not([data-page="replay-menu"]) #workspace .clip-list .clip-card { transform-origin: center; transition: transform 160ms cubic-bezier(.2,.8,.2,1),background-color 140ms ease,border-color 140ms ease; }
+ html:not([data-page="replay-menu"]) #workspace .clip-list .clip-card:hover { transform: scale(1.012); }
+}
+.clip-edit-actions .clip-action-button { display:inline-flex; align-items:center; justify-content:center; width:40px; min-width:40px; height:40px; min-height:40px; padding:0; border-radius:10px; flex:none; }
+.clip-edit-actions { gap:8px; }

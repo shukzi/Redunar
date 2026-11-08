@@ -1,3 +1,5 @@
+import {sliderValueMarkup} from './precision-sliders.js';
+
 // Generation checks cover late starts, polls, audio reads and navigation.
 export function microphoneTestClient({call, changed, schedule=setTimeout, unschedule=clearTimeout}) {
   let generation=0, id=null, timer=null;
@@ -39,7 +41,6 @@ function text(element,value){if(element.textContent!==value)element.textContent=
 function property(element,name,value){if(element[name]!==value)element[name]=value;}
 function attribute(element,name,value){if(element.getAttribute(name)!==value)element.setAttribute(name,value);}
 
-const signed=value=>`${value>0?'+':''}${value} dB`;
 const idleStatus='6-second check · not saved';
 const playbackTime=value=>{const seconds=Math.max(0,Math.floor(Number.isFinite(value)?value:0));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;};
 export function microphoneControlsMarkup(gain=0, icon=()=> '') {
@@ -47,9 +48,9 @@ export function microphoneControlsMarkup(gain=0, icon=()=> '') {
   return `<section class="microphone-controls" aria-label="Microphone recording level">
     <div class="microphone-gain-label">Microphone recording<small id="microphone-gain-help">Adjust your voice in saved clips.<br>Other apps stay unchanged.</small></div>
     <div class="microphone-fields">
-      <div class="microphone-gain-slider"><label for="microphone-gain"><span>Voice level</span><output for="microphone-gain">${signed(level)}</output></label><input id="microphone-gain" type="range" min="-12" max="24" step="1" value="${level}" aria-label="Microphone recording level" aria-describedby="microphone-gain-help microphone-test-status"></div>
+      <div class="microphone-gain-slider" data-slider-control><div class="microphone-gain-heading"><label for="microphone-gain">Voice level</label>${sliderValueMarkup({id:'microphone-gain-value',label:'Microphone recording level',value:level,unit:'dB'})}</div><input id="microphone-gain" type="range" data-tactile-range min="-12" max="24" step="1" value="${level}" aria-label="Microphone recording level" aria-describedby="microphone-gain-help microphone-test-status"></div>
       <div class="microphone-meter-wrap"><div class="microphone-meter-label"><span>Voice meter</span><span data-microphone-peak>Start a test to check</span></div><div class="microphone-meter" role="meter" aria-label="Recorded voice level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="No measurement"><i></i></div></div>
-      <div class="microphone-test-row"><button type="button" class="button secondary" data-microphone-test>Test microphone</button><button type="button" class="text-button" data-microphone-stop hidden>Stop test</button><span class="microphone-protection" title="Always on. Limits loud peaks in your recorded voice to help prevent distortion.">${icon('shieldCheck')}<span>Peak protection</span></span></div>
+      <div class="microphone-test-row"><button type="button" class="button secondary" data-microphone-test>Test microphone</button><button type="button" class="text-button" data-microphone-stop hidden>Stop test</button><span class="microphone-protection">${icon('shieldCheck')}<span>Peak protection</span></span></div>
       <p class="microphone-test-status" id="microphone-test-status" role="status">${idleStatus}</p>
       <div class="microphone-playback" hidden>
         <button type="button" class="icon-button" data-microphone-play aria-label="Play microphone test" aria-pressed="false" disabled>${icon('play')}</button>
@@ -94,9 +95,10 @@ export function microphoneControls({call, saved, locked, enabled, live, updateSl
     if(!root||!root.isConnected)return;
     const unavailable=locked()||!enabled()||saving;
     property(root.querySelector('#microphone-gain'),'disabled',unavailable||testing||starting);
+    property(root.querySelector('#microphone-gain-value'),'disabled',unavailable||testing||starting);
     property(root.querySelector('[data-microphone-test]'),'disabled',unavailable||testing||starting);
     property(root.querySelector('[data-microphone-stop]'),'hidden',!testing);
-    text(root.querySelector('[data-microphone-test]'),objectUrl?'Record again':'Test microphone');
+    text(root.querySelector('[data-microphone-test]'),'Test microphone');
     if(!live()||document.hidden||suspended){clearTimeout(liveTimer);liveTimer=null;if(!testing)meter(null);}
     else if(liveTimer===null&&!testing){
       const current=view;
@@ -135,17 +137,16 @@ export function microphoneControls({call, saved, locked, enabled, live, updateSl
       view++;suspended=false;clearTimeout(liveTimer);liveTimer=null;void stop();
       root=workspace.querySelector('.microphone-controls');if(!root)return;
       const input=root.querySelector('#microphone-gain');if(!saving)confirmed=Number(input.value);
-      input.addEventListener('input',()=>{root.querySelector('output').textContent=signed(Number(input.value));});
       input.addEventListener('change',async()=>{
-        if(locked()||testing||starting||saving){input.value=confirmed;return;}
+        if(locked()||!enabled()||testing||starting||saving){input.value=confirmed;updateSlider(input,{forceValue:true});return;}
         const current=view;const gainDb=Number(input.value);saving=true;update();
         await stop();
         try{
           const preferences=await call('set_microphone_gain',{gainDb});saved(preferences);confirmed=preferences.microphone_gain_db;
-          if(root?.isConnected){const visible=root.querySelector('#microphone-gain');visible.value=confirmed;root.querySelector('output').textContent=signed(confirmed);updateSlider(visible);}
+          if(root?.isConnected){const visible=root.querySelector('#microphone-gain');visible.value=confirmed;updateSlider(visible,{forceValue:true});}
           if(current===view)status('Recording level saved for your next game session.');
         }
-        catch(error){if(current===view){input.value=confirmed;root.querySelector('output').textContent=signed(confirmed);updateSlider(input);status(errorText(error),true);}}
+        catch(error){if(current===view){input.value=confirmed;updateSlider(input,{forceValue:true});status(errorText(error),true);}}
         finally{saving=false;update();}
       });
       root.querySelector('[data-microphone-test]').addEventListener('click',async()=>{

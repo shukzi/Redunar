@@ -64,7 +64,7 @@ pub fn check_for_updates(refresh_pending: bool) -> UpdateCheckStatus {
         return retained.unwrap_or_else(|| {
             unavailable(
                 current_version,
-                "Signed update checking is not configured in this build yet.",
+                "Signed update checks are not configured in this build.",
             )
         });
     };
@@ -73,7 +73,7 @@ pub fn check_for_updates(refresh_pending: bool) -> UpdateCheckStatus {
         return retained.unwrap_or_else(|| {
             unavailable(
                 current_version,
-                "Signed update checking is not configured in this build yet.",
+                "Signed update checks are not configured in this build.",
             )
         });
     }
@@ -91,7 +91,7 @@ pub fn check_for_updates(refresh_pending: bool) -> UpdateCheckStatus {
                 retained,
                 error_status(
                     current_version,
-                    &format!("Could not prepare update verification: {error}"),
+                    &format!("Cannot prepare update verification: {error}"),
                 ),
             )
         }
@@ -114,12 +114,27 @@ fn retained_or_error(
     retained: Option<UpdateCheckStatus>,
     failure: UpdateCheckStatus,
 ) -> UpdateCheckStatus {
-    retained.map_or(failure, |mut status| {
-        status.message.push_str(
-            " A newer release could not be checked; the retained verified package remains available.",
-        );
-        status
-    })
+    let Some(mut status) = retained else {
+        return failure;
+    };
+    let Some(version) = status.latest_version.as_deref() else {
+        return failure;
+    };
+    // Reconciliation can clear an obsolete package and return an up-to-date
+    // status. That status must not claim a verified package is still available.
+    if status.asset_name.is_none() || status.package_kind.is_none() {
+        return failure;
+    }
+    status.message = match status.state.as_str() {
+        "available" => format!(
+            "Cannot check for newer updates. Verified update {version} is still available."
+        ),
+        "handoff" => format!(
+            "Cannot check for newer updates. Installation of {version} is unconfirmed. The verified package is still available."
+        ),
+        _ => return failure,
+    };
+    status
 }
 
 fn hold_pending(status: &UpdateCheckStatus, refresh_pending: bool) -> bool {
@@ -191,7 +206,7 @@ where
         if let Err(error) = download(&format!("{source}/{name}"), path, allow_insecure) {
             return error_status(
                 current_version.to_owned(),
-                &format!("Could not download signed update metadata: {error}"),
+                &format!("Cannot download signed update metadata: {error}"),
             );
         }
     }
@@ -200,7 +215,7 @@ where
         Err(error) => {
             return error_status(
                 current_version.to_owned(),
-                &format!("Could not read update manifest: {error}"),
+                &format!("Cannot read the update manifest: {error}"),
             )
         }
     };
@@ -209,7 +224,7 @@ where
     {
         return error_status(
             current_version.to_owned(),
-            &format!("The update manifest signature is invalid: {error}"),
+            &format!("Update manifest signature check failed: {error}"),
         );
     }
     let manifest_entries = match parse_manifest(&manifest) {
@@ -217,7 +232,7 @@ where
         Err(error) => {
             return error_status(
                 current_version.to_owned(),
-                &format!("The update manifest is invalid: {error}"),
+                &format!("Update manifest is invalid: {error}"),
             )
         }
     };
@@ -226,7 +241,7 @@ where
         Err(error) => {
             return error_status(
                 current_version.to_owned(),
-                &format!("The signed release version is invalid: {error}"),
+                &format!("Signed release version is invalid: {error}"),
             )
         }
     };
@@ -248,17 +263,14 @@ where
         Err(error) => {
             return error_status(
                 current_version.to_owned(),
-                &format!("This system cannot select a Redunar update package: {error}"),
+                &format!("Cannot select an update package for this system: {error}"),
             )
         }
     };
     let Some(expected_digest) = manifest_entries.get(package.asset_name) else {
         return error_status(
             current_version.to_owned(),
-            &format!(
-                "The signed release does not include {}.",
-                package.asset_name
-            ),
+            &format!("Signed release is missing {}.", package.asset_name),
         );
     };
     let package_path = directory.join(package.asset_name);
@@ -270,25 +282,25 @@ where
     ) {
         return error_status(
             current_version.to_owned(),
-            &format!("Could not download the Redunar update package: {error}"),
+            &format!("Cannot download the update package: {error}"),
         );
     }
     if let Err(error) = verify_checksum(&package_path, expected_digest) {
         return error_status(
             current_version.to_owned(),
-            &format!("The downloaded update package failed checksum verification: {error}"),
+            &format!("Update package checksum check failed: {error}"),
         );
     }
     if let Err(error) = persist(&package_path, package, &latest_version, expected_digest) {
         return error_status(
             current_version.to_owned(),
-            &format!("The verified update package could not be retained: {error}"),
+            &format!("Cannot save the verified update package: {error}"),
         );
     }
     UpdateCheckStatus {
         current_version: current_version.to_owned(),
         state: "available".into(),
-        message: format!("Redunar {latest_version} has a verified update package."),
+        message: format!("Verified update: Redunar {latest_version}."),
         latest_version: Some(latest_version),
         package_kind: Some(package.kind.into()),
         asset_name: Some(package.asset_name.into()),
@@ -305,9 +317,7 @@ pub fn install_update() -> UpdateInstallStatus {
     };
     let target = match package_target() {
         Ok(target) => target,
-        Err(error) => {
-            return install_error(format!("This system cannot install the update: {error}"))
-        }
+        Err(error) => return install_error(format!("Cannot install this update: {error}")),
     };
     let directory = match update_cache_directory() {
         Ok(directory) => directory,
@@ -339,9 +349,9 @@ pub fn install_update() -> UpdateInstallStatus {
                 .map_err(|error| format!("could not request system authorization: {error}"))?;
             match status.code() {
                 Some(0) => Ok(installed_package_version(&pending_kind)),
-                Some(126) => Err("Authorization was cancelled. The update is still ready.".into()),
-                Some(127) => Err("System authorization is unavailable. Check that a graphical polkit agent is running.".into()),
-                _ => Err("The update could not be installed. The verified package is still ready; check your system package manager and retry.".into()),
+                Some(126) => Err("Authorization cancelled. The update is still ready.".into()),
+                Some(127) => Err("Authorization unavailable. Check that a graphical polkit agent is running.".into()),
+                _ => Err("Installation failed. The verified package is still ready. Check your package manager and retry.".into()),
             }
         },
     )
@@ -357,21 +367,21 @@ fn install_verified_update(
     launch: impl FnOnce(&Path, &Path) -> Result<Option<String>, String>,
 ) -> UpdateInstallStatus {
     if !is_newer_version(&pending.version, current_version) {
-        return install_error("The retained update is not newer than this build.".into());
+        return install_error("Saved update is not newer than this build.".into());
     }
     if pending.asset_name != target.asset_name || pending.kind != target.kind {
-        return install_error("The downloaded package does not match this system.".into());
+        return install_error("Update package does not match this system.".into());
     }
     let path = pending_package_path(directory, &pending);
     if let Err(error) = verify_checksum(&path, &pending.digest) {
-        return install_error(format!(
-            "The retained update package failed verification: {error}"
-        ));
+        return install_error(format!("Saved update package verification failed: {error}"));
     }
     if package_version_at_least(&pending, installed_version) {
         return UpdateInstallStatus {
             state: "restart-needed".into(),
-            message: "The new Redunar package is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.".into(),
+            message:
+                "Update installed. Fully quit Redunar, including its tray process, then reopen it."
+                    .into(),
         };
     }
     if !versioned_package_path(directory, &pending.asset_name, &pending.digest).is_file()
@@ -379,10 +389,12 @@ fn install_verified_update(
             .iter()
             .any(|name| !signed_metadata_path(directory, name, &pending.digest).is_file())
     {
-        return install_retry("This cached update predates direct installation. Check for updates again to refresh the signed package.".into());
+        return install_retry("Saved update format is outdated. Check for updates again.".into());
     }
     let Some(helper) = helper else {
-        return install_retry("The update helper is not installed. Update Redunar through your package manager once to enable direct updates.".into());
+        return install_retry(
+            "Update helper missing. Update Redunar once through your package manager.".into(),
+        );
     };
     if let Err(error) = write_pending_update_in_directory(
         directory,
@@ -391,7 +403,7 @@ fn install_verified_update(
             ..pending.clone()
         },
     ) {
-        return install_error(format!("Could not record the update attempt: {error}"));
+        return install_error(format!("Cannot save the update attempt: {error}"));
     }
     let installed_after = match launch(helper, directory) {
         Ok(version) => version,
@@ -404,7 +416,7 @@ fn install_verified_update(
                 },
             ) {
                 return install_error(format!(
-                    "{error} Could not restore the cached update state: {restore_error}"
+                    "{error} Cannot restore update state: {restore_error}"
                 ));
             }
             return install_retry(error);
@@ -413,12 +425,15 @@ fn install_verified_update(
     if package_version_at_least(&pending, installed_after.as_deref()) {
         return UpdateInstallStatus {
             state: "restart-needed".into(),
-            message: "The new Redunar package is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.".into(),
+            message:
+                "Update installed. Fully quit Redunar, including its tray process, then reopen it."
+                    .into(),
         };
     }
     UpdateInstallStatus {
         state: "handoff".into(),
-        message: "The installer finished, but Redunar could not confirm the new package version. Check again or retry installation.".into(),
+        message: "The installer finished. Installation is unconfirmed. Check for updates or retry."
+            .into(),
     }
 }
 
@@ -697,16 +712,16 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
     let installed = pending.state == "handoff" && installed_version_at_least(&pending);
     let message = if installed {
         format!(
-            "Redunar {} is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.",
+            "Redunar {} installed. Fully quit Redunar, including its tray process, then reopen it.",
             pending.version
         )
     } else if pending.state == "handoff" {
         format!(
-            "Redunar {} is not confirmed installed. Retry installation or check again.",
+            "Cannot confirm installation of {}. Retry or check for updates.",
             pending.version
         )
     } else {
-        format!("Redunar {} has a verified update package.", pending.version)
+        format!("Verified update: Redunar {}.", pending.version)
     };
     Some(UpdateCheckStatus {
         current_version: current_version.to_owned(),
@@ -734,10 +749,7 @@ pub(crate) fn ensure_restart_ready() -> Result<(), String> {
     if status.is_some_and(|value| value.state == "restart-needed") {
         Ok(())
     } else {
-        Err(
-            "A newer installed Redunar package has not been confirmed. Check for updates again."
-                .into(),
-        )
+        Err("Newer installed version not confirmed. Check for updates again.".into())
     }
 }
 
@@ -1160,19 +1172,44 @@ mod tests {
             super::error_status("0.1.3", "The source is offline."),
         );
         assert_eq!(offline.state, "available");
-        assert!(offline.message.contains("could not be checked"));
+        assert!(offline.message.contains("Cannot check for newer updates."));
+        assert!(offline.message.contains("0.1.4"));
+        assert_eq!(offline.asset_name, cached.asset_name);
         let handoff = UpdateCheckStatus {
             state: "handoff".into(),
             ..cached.clone()
         };
         assert!(hold_pending(&handoff, false));
         assert!(!hold_pending(&handoff, true));
+        let unconfirmed = retained_or_error(
+            Some(handoff.clone()),
+            super::error_status("0.1.3", "The source is offline."),
+        );
+        assert_eq!(unconfirmed.state, "handoff");
+        assert!(unconfirmed
+            .message
+            .contains("Installation of 0.1.4 is unconfirmed."));
         let installed = UpdateCheckStatus {
             state: "restart-needed".into(),
             ..cached
         };
         assert!(hold_pending(&installed, false));
         assert!(hold_pending(&installed, true));
+    }
+
+    #[test]
+    fn cleared_update_cache_does_not_claim_a_verified_package_is_available() {
+        let cleared = UpdateCheckStatus {
+            current_version: "0.1.4".into(),
+            state: "up-to-date".into(),
+            message: "Redunar 0.1.4 is up to date.".into(),
+            latest_version: Some("0.1.4".into()),
+            package_kind: None,
+            asset_name: None,
+        };
+        let failure =
+            super::error_status("0.1.4", "Cannot download signed update metadata: offline");
+        assert_eq!(retained_or_error(Some(cleared), failure.clone()), failure);
     }
 
     #[test]

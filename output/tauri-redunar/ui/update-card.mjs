@@ -1,9 +1,9 @@
+import {icon} from './icons.mjs';
 // Presentation only: the native updater owns verification, installation and restart.
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 export function updateIcon(kind='download') {
- const paths={download:'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',restart:'M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1',check:'M5 12l4 4L19 6',warning:'M12 8v5m0 4h.01M12 3 2 21h20Z',spinner:'M20 12a8 8 0 1 1-8-8'};
- return `<svg class="updater-icon ${kind==='spinner'?'updater-spinner':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[kind]||paths.download}"/></svg>`;
+ return icon(kind,`updater-icon ${kind==='spinner'?'updater-spinner':''}`);
 }
 
 export function updateSidebar(status,{version,pending}) {

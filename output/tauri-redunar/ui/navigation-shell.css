@@ -2,6 +2,7 @@
 .sidebar-toggle:hover { color: var(--text); }
 .sidebar-toggle:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; border-radius: 4px; }
 .sidebar-collapse-icon { width: 20px; height: 20px; flex: none; }
+.sidebar-collapse-icon .sidebar-chevron { transform-box: view-box; transform-origin: 15px 12px; transform: scaleX(1); }
 html[data-sidebar=collapsed] { --sidebar-width: 64px; }
 html[data-sidebar=collapsed] .sidebar { width: 64px; }
 html[data-sidebar=collapsed] .app-shell { margin-left: 64px; }
@@ -18,7 +19,7 @@ html[data-sidebar=collapsed] .sidebar .sidebar-toggle span,
 html[data-sidebar=collapsed] .sidebar .settings-link span,
 html[data-sidebar=collapsed] .sidebar .build-label { display: none; }
 html[data-sidebar=collapsed] .sidebar .settings-link { justify-content: center; }
-html[data-sidebar=collapsed] .sidebar-collapse-icon { transform: rotate(180deg); }
+html[data-sidebar=collapsed] .sidebar-collapse-icon .sidebar-chevron { transform: scaleX(-1); }
 /* Compact layouts already show icons, so an expansion control would be misleading. */
 @media (max-width: 700px) { .sidebar-toggle { display: none; } }
 @media (min-width: 701px) {
@@ -32,6 +33,6 @@ html[data-sidebar=collapsed] .sidebar-collapse-icon { transform: rotate(180deg);
 @media (prefers-reduced-motion: no-preference) {
   .sidebar { transition: width 220ms cubic-bezier(.2,0,0,1); }
   .app-shell { transition: margin-left 220ms cubic-bezier(.2,0,0,1); }
-  .sidebar-collapse-icon { transition: transform 220ms cubic-bezier(.2,0,0,1); }
+  .sidebar-collapse-icon .sidebar-chevron { transition: transform 220ms cubic-bezier(.2,0,0,1); }
   #workspace .change-save-bar { transition: left 220ms cubic-bezier(.2,0,0,1); }
 }

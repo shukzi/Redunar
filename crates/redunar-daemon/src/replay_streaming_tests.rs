@@ -359,7 +359,10 @@ fn unrepresentable_mp4_timestamps_leave_no_partial_clip() {
             )
             .is_err()
     );
-    assert!(store.inventory().unwrap().is_empty());
+    assert_eq!(
+        store.inventory().unwrap(),
+        [] as [crate::replay_store::ReplayClipEntry; 0]
+    );
     assert_eq!(
         fs::read_dir(&fixture.0).unwrap().count(),
         1,

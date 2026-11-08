@@ -498,7 +498,7 @@ pub async fn check_for_updates(refresh_pending: Option<bool>) -> UpdateCheckStat
         Err(error) => UpdateCheckStatusDto {
             current_version: env!("CARGO_PKG_VERSION").into(),
             state: "error".into(),
-            message: format!("Update check could not complete: {error}"),
+            message: format!("Update check failed: {error}"),
             latest_version: None,
             package_kind: None,
             asset_name: None,
@@ -527,7 +527,7 @@ pub async fn install_update() -> UpdateInstallStatusDto {
         },
         Err(error) => UpdateInstallStatusDto {
             state: "error".into(),
-            message: format!("Update installation could not start: {error}"),
+            message: format!("Update installation failed to start: {error}"),
         },
     }
 }

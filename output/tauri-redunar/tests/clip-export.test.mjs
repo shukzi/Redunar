@@ -14,7 +14,7 @@ test('selection estimates use full duration, including retries; tiny and missing
  assert.equal(selected.baselineBytes,20000000);assert.equal(selected.maxMb,20);assert.equal(selected.limitMb,10);assert.equal(selected.estimated,true);
  for(const args of [{sourceBytes:80000000},{sourceBytes:null,compression:true},{sourceBytes:90000,compression:true}])assert.equal(compressionSizePlan(args).available,false);
  const form=clipExportForm({fileName:'lap.mp4',sourceBytes:80000000,sourceDuration:120,start:30,end:60,outputName:'lap',options:{maxSizeMb:9.9},retry:true});
- assert.match(form,/Selection ≈ 20.00 MB/);assert.match(form,/max="20"/);assert.match(form,/name="sourceDuration" value="120"/);assert.match(form,/data-export-limit-label>9.9 MB/);
+ assert.match(form,/Selection ≈ 20.00 MB/);assert.match(form,/max="20"/);assert.match(form,/name="sourceDuration" value="120"/);assert.match(form,/<input id="export-size"[^>]*value="9\.9"/);
 });
 
 test('export accepts both containers and decimal MB limits, rejects invalid budgets',()=>{

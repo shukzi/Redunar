@@ -3,6 +3,7 @@ from webview_fixture import *
 
 extra = r"""
 bridge.idle=true;
+bridge.microphone='default';
 bridge.holdInputs=true;
 const originalInvoke=window.__TAURI_INTERNALS__.invoke;
 window.__TAURI_INTERNALS__.invoke=async(command,args={})=>{
@@ -20,7 +21,8 @@ manager.add_script(WebKit2.UserScript.new(extra,WebKit2.UserContentInjectedFrame
 try:
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#overview')
     pump(500)
-    wait_for("q('#session-name')?.textContent==='No active game'&&bridge.releaseUpdate")
+    wait_for("q('#session-name')?.textContent==='No game running'&&bridge.releaseUpdate")
+    test('Native sidebar clears the titlebar without a clipped page layer', "const header=q('.window-titlebar').getBoundingClientRect(),sidebar=q('.sidebar').getBoundingClientRect(),logo=q('.brand-wordmark').getBoundingClientRect(),shell=getComputedStyle(q('.app-shell'));check(Math.abs(sidebar.top-header.bottom)<1,'sidebar starts below titlebar');check(logo.top-header.bottom>=24,'wordmark has headroom');check(sidebar.bottom<=innerHeight,'sidebar stays inside window');check(shell.overflowX==='visible'&&shell.overflowY==='visible'&&shell.zIndex==='auto','no redundant page clipping or stacking layer');")
     test('Startup does not enumerate microphone devices', "check(!bridge.inputRequests,'no input discovery');check(q('.recent-capture-grid a'),'clips loaded');")
     js("window.summaryNode=q('#session-capture-summary').firstElementChild;window.summaryMutations=0;window.summaryObserver=new MutationObserver(records=>summaryMutations+=records.length);summaryObserver.observe(q('#session-capture-summary'),{childList:true,subtree:true});window.initialPolls=bridge.calls.filter(c=>c.command==='daemon_status').length;")
     pump(2300)
@@ -31,8 +33,14 @@ try:
     js("window.playerNode=q('#clip-video');window.railNode=q('.clip-list');window.playbackCalls=bridge.calls.filter(c=>c.command==='clip_playback_path').length;q('#clip-search').focus();q('#clip-search').value='long';q('#clip-search').dispatchEvent(new Event('input',{bubbles:true}));bridge.releaseUpdate();")
     wait_for("q('.sidebar-update-badge')")
     test('Startup update completion preserves Replay, filter and focus', "check(q('#clip-video')===playerNode,'player retained');check(q('.clip-list')===railNode,'rail retained');check(q('#clip-search').value==='long'&&document.activeElement===q('#clip-search'),'filter and focus retained');check(bridge.calls.filter(c=>c.command==='clip_playback_path').length===playbackCalls,'no repeated preparation');")
-    js("q('#toast').hidden=true")
+    js("qa('#toast .toast-dismiss').forEach(button=>button.click())")
     route('global')
+    pump(700)
+    js("window.idlePlateMutations=0;window.idlePlateObserver=new MutationObserver(records=>idlePlateMutations+=records.length);qa('.selection-indicator').forEach(plate=>idlePlateObserver.observe(plate,{attributes:true}));document.dispatchEvent(new Event('choice-switcher-sync'));")
+    pump(150)
+    test('Unchanged selection refresh does not repaint mounted plates', "idlePlateObserver.disconnect();check(idlePlateMutations===0,'redundant plate writes: '+idlePlateMutations);window.scrollControl=q('[data-global=scale]');window.scrollPlate=q('.global-tabs>.selection-indicator');q('.window-content').scrollTop=100;")
+    pump(100)
+    test('Native page scrolling retains settings and selection nodes', "check(q('[data-global=scale]')===scrollControl&&q('.global-tabs>.selection-indicator')===scrollPlate,'mounted controls retained');check(q('.window-content').scrollTop>0,'page scrolled');q('.window-content').scrollTop=0;")
     js("q('[data-global=scale]').value='105';q('[data-global=scale]').dispatchEvent(new Event('input',{bubbles:true}));click('[data-global-tab=replay]');")
     wait_for("bridge.releaseInputs")
     test('Microphone discovery is lazy and visibly pending', "check(bridge.inputRequests===1,'one request');check(q('.microphone-device-status').textContent.includes('Loading'),'pending feedback');check(q('[data-microphone-source]').disabled,'input disabled');window.settingsNode=q('[data-global=quality]');window.inputNode=q('[data-microphone-source]');q('[data-global=quality]').value='High';q('[data-global=quality]').dispatchEvent(new Event('change',{bubbles:true}));")
@@ -45,6 +53,7 @@ try:
     js("click('[data-global-tab=overlay]')")
     test('Discovery completion preserves the appearance draft', "check(q('[data-global=scale]').value==='105','appearance retained');click('[data-global-tab=replay]');bridge.failInputs=true;click('[data-action=reload-microphone-devices]');")
     wait_for("q('.microphone-device-status')?.textContent.includes('Fixture audio server unavailable')")
+    wait_for("!q('[data-action=reload-microphone-devices]').disabled")
     snap('performance-microphone-error')
     test('Failed discovery offers retry without replacing unrelated controls', "window.settingsNode=q('[data-global=quality]');check(settingsNode.value==='High','failed read retained draft');check(!q('[data-action=reload-microphone-devices]').disabled,'retry enabled');bridge.failInputs=false;click('[data-action=reload-microphone-devices]');")
     wait_for("!q('.microphone-device-status')")

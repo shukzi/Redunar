@@ -32,7 +32,7 @@ test('unimported Steam games remain selectable when another game shares their la
   for(const appId of [645630,960090,1273400]){
    const html=renderDiscovery(games,[candidate('Steam',appId,executable)]);
    assertSelectable(html,true);
-   assert.doesNotMatch(html,/Already in Redunar library/);
+   assert.doesNotMatch(html,/Already in your library/);
   }
  }
 });
@@ -42,7 +42,7 @@ test('an imported Steam app stays disabled even when its launcher changes or is 
  for(const executable of ['/usr/bin/steam','/usr/bin/flatpak',null]){
   const html=renderDiscovery(games,[candidate('Steam',949230,executable)]);
   assertSelectable(html,false);
-  assert.match(html,/Already in Redunar library/);
+  assert.match(html,/Already in your library/);
  }
 });
 
@@ -50,6 +50,6 @@ test('non-Steam discovery still matches imported executables',()=>{
  const games=[{steam_app_id:null,executable:'/usr/bin/prismlauncher'}];
  const existing=renderDiscovery(games,[candidate('Desktop entry',null,'/usr/bin/prismlauncher')]);
  assertSelectable(existing,false);
- assert.match(existing,/Already in Redunar library/);
+ assert.match(existing,/Already in your library/);
  assertSelectable(renderDiscovery(games,[candidate('Desktop entry',null,'/usr/bin/other-game')]),true);
 });

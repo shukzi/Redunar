@@ -942,7 +942,7 @@ mod tests {
             write_video_only_matroska(&mut output, &stream(), &empty),
             Err(MatroskaVideoError::EmptyRing)
         ));
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
 
         let mut malformed = ReplayRing::new(ReplaySettings::default());
         malformed
@@ -955,7 +955,7 @@ mod tests {
             write_video_only_matroska(&mut output, &stream(), &malformed),
             Err(MatroskaVideoError::InvalidPacket)
         ));
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
     }
 
     #[test]

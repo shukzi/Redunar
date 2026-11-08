@@ -1132,7 +1132,10 @@ mod tests {
             "\"AppState\" { \"appid\" \"8\" \"name\" \"Escape\" \"StateFlags\" \"4\" \"installdir\" \"../outside\" }",
         )
         .expect("manifest");
-        assert!(fixture.discovery().discover().expect("discover").is_empty());
+        assert_eq!(
+            fixture.discovery().discover().expect("discover"),
+            [] as [crate::steam_discovery::DiscoveredGame; 0]
+        );
     }
 
     #[test]
@@ -1151,7 +1154,10 @@ mod tests {
         )
         .expect("uninstalled manifest");
 
-        assert!(fixture.discovery().discover().expect("discover").is_empty());
+        assert_eq!(
+            fixture.discovery().discover().expect("discover"),
+            [] as [crate::steam_discovery::DiscoveredGame; 0]
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@
 Use --source-controls for only the current control modules, without a UI build.
 """
 import base64
+from functools import lru_cache
 import sys
 from webview_fixture import *
 
@@ -14,7 +15,7 @@ extra = r"""
 bridge.idle=true;bridge.automaticUpdates=false;
 bridge.motionStarts=[];
 document.addEventListener('animationstart',event=>bridge.motionStarts.push(event.animationName));
-window.motion=(element,name)=>element.getAnimations().find(a=>a.animationName===name);
+window.motion=(element,name)=>element.getAnimations().find(a=>a.animationName===name||a.id===name);
 window.editScale=value=>{const input=q('[data-global=scale]');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));};
 window.key=(target,key)=>target.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
 """
@@ -22,8 +23,17 @@ manager.add_script(WebKit2.UserScript.new(extra,WebKit2.UserContentInjectedFrame
 
 def source_control_checks():
     """Exercise the current control modules without rebuilding or trusting ui/dist."""
+    @lru_cache(None)
     def module_url(name):
-        return 'data:text/javascript;base64,' + base64.b64encode((NATIVE/'ui'/name).read_bytes()).decode()
+        source = (NATIVE/'ui'/name).read_text()
+        if name.endswith('.json'):
+            source = 'export default '+source+';'
+        else:
+            # Resolve the source control graph, including its JSON artwork,
+            # without depending on a potentially stale production bundle.
+            source = re.sub(r"from (['\"])\./([^'\"]+)\1(?: with \{type:'json'\})?",
+                            lambda match: 'from '+json.dumps(module_url(match[2])), source)
+        return 'data:text/javascript;base64,' + base64.b64encode(source.encode()).decode()
     styles = '\n'.join((NATIVE/'ui'/name).read_text() for name in
                        ['app.css', 'controls.css', 'precision-selects.css', 'workspace-motion.css', 'workspace-polish.css'])
     html = '''<!doctype html><html data-page="global"><head><style>''' + styles + '''
@@ -106,11 +116,11 @@ try:
     test('Completed dialog is fully visible without a retained animation', "check(getComputedStyle(q('#dialog')).opacity==='1','readable final state');check(!q('#dialog').getAnimations().length,'dialog animation released');")
     snap('motion-dialog-ready')
     js("click('#dialog [data-close]')")
-    route('global')
-    test('Dropdown entry preserves placement and keyboard ownership', "window.select=q('[data-global=position]');window.trigger=select.nextElementSibling;trigger.focus();key(trigger,'ArrowDown');const menu=q('.precision-select-menu'),a=motion(menu,'dropdown-enter');check(a,'menu entry');check(a.effect.getTiming().duration<=80,'menu entry bounded to 80 ms');check(document.activeElement===trigger,'keyboard focus retained');const r=trigger.getBoundingClientRect(),m=menu.getBoundingClientRect();check(m.left>=6&&m.right<=innerWidth-6,'menu fits horizontally');check(m.top>=r.bottom-2||m.bottom<=r.top+2,'menu placed outside trigger');check(m.top>=0&&m.bottom<=innerHeight,'menu fits vertically');a.pause();a.currentTime=0;check(parseFloat(getComputedStyle(menu).opacity)>=.85,'menu readable at first paint');a.currentTime=50;")
+    route('overview')
+    test('Dropdown entry preserves placement and keyboard ownership', "window.select=q('#save-duration');window.trigger=select.nextElementSibling;trigger.focus();key(trigger,'ArrowDown');const menu=q('.precision-select-menu'),a=motion(menu,'dropdown-open');check(a,'menu entry');check(a.effect.getTiming().duration===200,'menu entry takes 200 ms');check(document.activeElement===trigger,'keyboard focus retained');const r=trigger.getBoundingClientRect(),m=menu.getBoundingClientRect();check(m.left>=6&&m.right<=innerWidth-6,'menu fits horizontally');check(m.top>=r.bottom-2||m.bottom<=r.top+2,'menu placed outside trigger');check(m.top>=0&&m.bottom<=innerHeight,'menu fits vertically');a.pause();a.currentTime=0;check(parseFloat(getComputedStyle(menu).opacity)===0,'entry starts transparent');a.currentTime=100;")
     snap('motion-dropdown-entry')
-    test('Keyboard selection commits during entry and removes the menu', "key(trigger,'End');key(trigger,'Enter');check(select.value==='Bottom right','selection committed');check(!q('.precision-select-menu'),'no delayed removal');check(document.activeElement===trigger,'focus retained');trigger.click();check(motion(q('.precision-select-menu'),'dropdown-enter'),'new opening animates');key(trigger,'Escape');check(!q('.precision-select-menu'),'Escape immediate');check(trigger.getAttribute('aria-expanded')==='false','accessible state closed');")
-    test('Scroll dismisses a dropdown even during entry', "trigger.click();check(q('.precision-select-menu'),'open');q('.window-content').dispatchEvent(new Event('scroll'));check(!q('.precision-select-menu'),'scroll closes menu');click('[data-action=discard-global]');")
+    test('Keyboard selection commits during entry and removes the menu', "key(trigger,'End');key(trigger,'Enter');check(select.value==='900','selection committed');check(!q('.precision-select-menu'),'no delayed removal');check(document.activeElement===trigger,'focus retained');trigger.click();check(motion(q('.precision-select-menu'),'dropdown-open'),'new opening animates');key(trigger,'Escape');check(!q('.precision-select-menu'),'Escape releases input immediately');check(q('.precision-select-exit').inert&&motion(q('.precision-select-exit'),'dropdown-close'),'closing surface is inert and animates');check(trigger.getAttribute('aria-expanded')==='false','accessible state closed');")
+    test('Scroll dismisses a dropdown even during entry', "trigger.click();check(q('.precision-select-menu'),'open');q('.window-content').dispatchEvent(new Event('scroll'));check(!q('[data-select-surface]'),'scroll clears active and closing surfaces');")
     route('replay')
     test('Filters unfold at shared timing and rapid reversal preserves the latest choice', "window.filters=q('.clip-filter-panel');const summary=filters.querySelector('summary');summary.click();let a=filters.getAnimations()[0];check(a&&a.effect.getTiming().duration===220,'shared duration');a.pause();a.currentTime=100;summary.click();check(filters.querySelector('.clip-filter-fields').inert,'closing content cannot take focus');a=filters.getAnimations()[0];a.pause();a.currentTime=100;summary.click();filters.getAnimations()[0].finish();")
     pump(80)
@@ -119,9 +129,7 @@ try:
     test('External close cannot be undone by a stale unfolding completion', "filters.querySelector('summary').click();filters.open=false;")
     pump(300)
     test('Externally closed Filters remain closed', "check(!filters.open&&!filters.getAnimations().length,'no late reopening');")
-    test('Clip menu unfolds its content without moving the editor header', "window.clipMenu=q('.clip-action-menu');window.headerHeight=clipMenu.getBoundingClientRect().height;clipMenu.querySelector('summary').click();const panel=clipMenu.querySelector('.replay-more-menu');check(panel.getAnimations().length===1,'floating content animates');check(clipMenu.getBoundingClientRect().height===headerHeight,'header stays fixed');panel.getAnimations()[0].finish();")
-    pump(80)
-    test('Opening compression during menu dismissal leaves no stale panel', "click('[data-action=compress-selected-clip]');check(q('#trim-export-form'),'whole clip form opens');check(!clipMenu.open&&!clipMenu.querySelector('.replay-more-menu').getAnimations().length,'immediate action dismissal');click('#dialog [data-close]');bridge.steamSetup={available:true,configured:true,launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};")
+    test('Direct compression opens without a menu or editor reflow', "const header=q('.clip-title-tools'),height=header.getBoundingClientRect().height;check(!q('.clip-action-menu'),'no clip overflow menu');click('.clip-edit-actions [data-action=compress-selected-clip]');check(q('#trim-export-form'),'whole clip form opens');check(header.getBoundingClientRect().height===height,'header stays fixed');click('#dialog [data-close]');bridge.steamSetup={available:true,configured:true,launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};")
     route('library')
     wait_for("q('.steam-configured-details')")
     test('Detected Steam launch options share the smooth disclosure', "window.steamDetails=q('.steam-configured-details');steamDetails.querySelector('summary').click();const a=steamDetails.getAnimations()[0];check(a&&a.effect.getTiming().duration===220,'shared Steam duration');a.finish();")
@@ -139,14 +147,16 @@ try:
     # Evaluate the production stylesheet afresh under the reduced preference.
     view.reload();pump(500)
     wait_for("q('[data-global=scale]')?.value==='100'&&matchMedia('(prefers-reduced-motion: reduce)').matches")
-    test('Reduced motion keeps draft actions immediate and stationary', "editScale('105');const b=q('.settings-save-bar');check(!b.hidden&&!q('[data-action=save-global]').disabled,'actions ready');check(!b.getAnimations().length&&getComputedStyle(b).transform==='none','no bar motion: '+JSON.stringify({name:getComputedStyle(b).animationName,transform:getComputedStyle(b).transform,animations:b.getAnimations().map(a=>({name:a.animationName,state:a.playState}))}));click('[data-action=discard-global]');window.trigger=q('[data-global=position]').nextElementSibling;trigger.focus();trigger.click();check(!q('.precision-select-menu').getAnimations().length,'no dropdown motion');key(trigger,'Escape');")
+    test('Reduced motion keeps draft actions immediate and stationary', "editScale('105');const b=q('.settings-save-bar');check(!b.hidden&&!q('[data-action=save-global]').disabled,'actions ready');check(!b.getAnimations().length&&getComputedStyle(b).transform==='none','no bar motion: '+JSON.stringify({name:getComputedStyle(b).animationName,transform:getComputedStyle(b).transform,animations:b.getAnimations().map(a=>({name:a.animationName,state:a.playState}))}));click('[data-action=discard-global]');")
+    route('overview')
+    test('Reduced motion dropdowns release immediately', "const trigger=q('#save-duration').nextElementSibling;trigger.click();check(!q('.precision-select-menu').getAnimations().length,'no dropdown motion');key(trigger,'Escape');check(!q('[data-select-surface]'),'no retained surface');")
     route('library')
     test('Reduced motion dialogs retain opening focus and cancellation', "q('[data-action=add-game]').focus();click('[data-action=add-game]');check(q('#dialog').open&&!q('#dialog').getAnimations().length,'no dialog motion');check(document.activeElement===q('#dialog-title'),'neutral focus');click('#dialog [data-close]');check(document.activeElement===q('[data-action=add-game]'),'focus restored');check(bridge.errors.length===0,bridge.errors.join('; '));")
     route('replay')
     test('Reduced motion Filters open and close without delayed state', "const details=q('.clip-filter-panel');details.querySelector('summary').click();check(details.open&&!details.getAnimations().length,'immediate open');details.querySelector('summary').click();check(!details.open&&!details.getAnimations().length,'immediate close');")
     test('Reduced motion export busy feedback is a stationary labelled spinner', "const button=document.createElement('button');button.innerHTML='<span class=\"clip-export-spinner\"></span>Exporting…';document.body.append(button);check(!button.querySelector('span').getAnimations().length,'no spinner rotation');check(getComputedStyle(button.querySelector('span')).animationName==='none','stationary spinner');button.remove();")
     pump(300)
-    test('Settled workspace has no interaction animation work', "check(!document.getAnimations().some(a=>['dialog-enter','dropdown-enter','save-bar-enter'].includes(a.animationName)),'no residual interaction animation');")
+    test('Settled workspace has no interaction animation work', "check(!document.getAnimations().some(a=>['dialog-enter','dropdown-open','dropdown-close','save-bar-enter'].includes(a.animationName||a.id)),'no residual interaction animation');")
     (ARTIFACTS/'motion-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
     print(f'PASS: {len(checks)} motion checks. Screenshots: {ARTIFACTS}')
 finally:

@@ -1,0 +1,52 @@
+/* Shared Lucide geometry, with bounded original interaction feedback. */
+.icon { flex: none; stroke-width: 2; }
+.window-control .icon { stroke-width: 2; }
+.icon-strokes { transform-box: fill-box; transform-origin: center; }
+.precision-select-check .icon { width: 14px; height: 14px; }
+.clip-collection button > .icon { width: 13px; height: 13px; margin-right: 5px; vertical-align: -2px; }
+.filter-chevron { display: inline-flex; align-items: center; }
+.filter-chevron .icon,.clip-filter-chip .icon { width: 12px; height: 12px; }
+.clip-filter-chip { display: inline-flex; align-items: center; gap: 6px; }
+.game-more summary > .icon { width: 14px; height: 14px; }
+.clip-star .icon,[data-action="favorite-selected-clip"] .icon { stroke-width: 2; }
+[data-action="favorite-selected-clip"] { position: relative; }
+html:not([data-page="replay-menu"]) #workspace [data-action="favorite-selected-clip"] { width: 40px; min-width: 40px; height: 40px; min-height: 40px; padding: 0; flex: none; justify-content: center; }
+/* Favorite has one press spring; its heart and particles do not hover-wobble. */
+.favorite-icon-fill { fill: var(--red); opacity: 0; }
+[aria-pressed="true"] .favorite-icon-fill { opacity: 1; }
+.favorite-burst { position: fixed; z-index: 30; width: 0; height: 0; pointer-events: none; color: var(--red); }
+.favorite-particle { position: absolute; display: block; width: 8px; height: 8px; opacity: 0; }
+.favorite-particle > .favorite-particle-heart { display: block; width: 8px; height: 8px; fill: currentColor; stroke: none; }
+.favorite-particle-heart .icon-strokes { fill: currentColor; }
+html:not([data-page="replay-menu"]) #workspace :is(.clip-star,[data-action="favorite-selected-clip"]) {
+  transition: background-color 140ms ease,border-color 140ms ease,color 140ms ease;
+}
+html:not([data-page="replay-menu"]) #workspace :is(.clip-star,[data-action="favorite-selected-clip"]):active { transform: none; }
+/* Functional arrows and playback/save action glyphs remain still. */
+html:not([data-page="replay-menu"]) #workspace :is([data-action="save-replay"],[data-player],.center-play,.clip-select,.recent-capture-grid>a) {
+  transform: none; animation: none;
+  transition: background-color 140ms ease,border-color 140ms ease,color 140ms ease;
+}
+html:not([data-page="replay-menu"]) #workspace :is([data-action="save-replay"],[data-player],.center-play,.clip-select,.recent-capture-grid>a):is(:hover,:active) { transform: none; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .precision-select-trigger > svg,
+html:not([data-page="replay-menu"]) #workspace .filter-chevron,
+html:not([data-page="replay-menu"]) #workspace .steam-configured-toggle svg {
+  transform: none; transition: none; animation: none;
+}
+[data-copy-steam-options] { min-width: 100px; gap: 8px; }
+.copy-button-symbol { position: relative; display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; }
+.copy-button-symbol .icon { position: absolute; inset: 0; width: 16px; height: 16px; }
+.copy-button-symbol .copy-glyph-confirmed { opacity: 0; transform: scale(.5); filter: blur(2px); }
+.copy-button-symbol[data-copied="true"] .copy-glyph-original { opacity: 0; transform: scale(.5); filter: blur(2px); }
+.copy-button-symbol[data-copied="true"] .copy-glyph-confirmed { opacity: 1; transform: scale(1); filter: blur(0); }
+.copy-button-label { min-width: 42px; text-align: left; }
+[data-copy-steam-options][data-copy-state="copied"] .copy-button-symbol { color: #ededed; }
+@media(prefers-reduced-motion:no-preference){
+  .favorite-icon-fill { transition: opacity 140ms ease; }
+  .copy-button-symbol .icon { transition: opacity 150ms ease,transform 150ms cubic-bezier(.16,1,.3,1),filter 150ms ease; }
+  [data-copy-steam-options] { transition: background-color 140ms ease,border-color 140ms ease,transform 120ms ease; }
+  [data-copy-steam-options]:active:not(:disabled) { transform: scale(.97); }
+}
+@media(prefers-reduced-motion:reduce){ .favorite-burst { display: none; } }
+
+.copy-button-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

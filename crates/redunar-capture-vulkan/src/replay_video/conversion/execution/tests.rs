@@ -454,7 +454,7 @@ fn timeout_and_device_loss_do_not_destroy_pending_commands_fences_or_semaphores(
         DRIVER.with(|driver| {
             let driver = driver.borrow();
             assert_eq!(driver.waits, [(vec![11, 21], SLOT_WAIT_TIMEOUT_NS)]);
-            assert!(driver.destroyed.is_empty());
+            assert_eq!(driver.destroyed, [] as [&str; 0]);
         });
         // Inject eventual completion to exercise the same object's idempotent
         // successful teardown without leaking fixture storage.
@@ -469,7 +469,7 @@ fn recording_or_import_failure_before_submit_does_not_wait_an_unsignaled_reset_f
     reset();
     let mut resources = resources(false, false);
     assert!(unsafe { resources.shutdown() }.is_ok());
-    DRIVER.with(|driver| assert!(driver.borrow().waits.is_empty()));
+    DRIVER.with(|driver| assert_eq!(driver.borrow().waits, [] as [(std::vec::Vec<u64>, u64); 0]));
 }
 
 #[test]
@@ -496,7 +496,7 @@ fn failed_encode_submit_retains_both_queue_fences_and_never_reports_conversion_a
             driver.borrow().waits,
             [(vec![11, 21], SLOT_WAIT_TIMEOUT_NS)]
         );
-        assert!(driver.borrow().destroyed.is_empty());
+        assert_eq!(driver.borrow().destroyed, [] as [&str; 0]);
     });
     DRIVER.with(|driver| driver.borrow_mut().wait_result = VK_SUCCESS);
     assert!(unsafe { resources.shutdown() }.is_ok());

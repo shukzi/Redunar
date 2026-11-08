@@ -270,11 +270,11 @@ pub fn save_global_settings(
 
 pub(crate) fn overlay_save_notice(subject: &str, result: Result<Option<bool>, String>) -> String {
     match result {
-        Ok(Some(true)) => format!("{subject} saved. The running game's overlay is set to show."),
-        Ok(Some(false)) => format!("{subject} saved. The running game's overlay is set to hide."),
-        Ok(None) => format!("{subject} saved for the next game launch."),
+        Ok(Some(true)) => format!("{subject} saved. Current game overlay set to show."),
+        Ok(Some(false)) => format!("{subject} saved. Current game overlay set to hide."),
+        Ok(None) => format!("{subject} saved for the next game."),
         Err(error) => {
-            format!("{subject} saved, but the running overlay could not be updated: {error}")
+            format!("{subject} saved. Game overlay update failed: {error}")
         }
     }
 }

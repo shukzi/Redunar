@@ -1208,7 +1208,7 @@ mod tests {
     fn nvidia_render_node_requires_identification_and_never_claims_production_ready() {
         let fixture = ProbeFixture::new();
         fixture.node("renderD128", "nvidia", true);
-        assert!(fixture.probe(false).candidates().is_empty());
+        assert_eq!(fixture.probe(false).candidates(), []);
         let probe = fixture.probe(true);
         assert_eq!(probe.candidates().len(), 1);
         assert_eq!(probe.candidates()[0].driver(), "nvidia");
@@ -1259,7 +1259,7 @@ mod tests {
             fixture.node("renderD128", "nvidia", true);
             fixture.node("renderD129", driver, false);
             let probe = fixture.probe(true);
-            assert!(probe.candidates().is_empty());
+            assert_eq!(probe.candidates(), []);
             assert!(
                 probe
                     .blockers()

@@ -8,6 +8,11 @@ export default defineConfig({
   plugins: [{
     name: 'redunar-product-version',
     transformIndexHtml(html) { return html.replaceAll('__REDUNAR_VERSION__', version); },
+    generateBundle() {
+      // Keep the artwork notices beside embedded frontend assets as well as
+      // the package's documentation, including standalone preview builds.
+      this.emitFile({type:'asset',fileName:'assets/LICENSE-Lucide.txt',source:readFileSync(new URL('../../packaging/LICENSE-Lucide.txt',import.meta.url),'utf8')});
+    },
   }],
   root: 'ui', base: './',
   build: { rollupOptions: { input: {

@@ -347,7 +347,12 @@ fn an_unconfirmed_steam_timeout_does_not_invent_a_completed_game() {
     f.engine.tick(&monitor);
     assert!(!f.engine.launch_locked());
     assert!(f.engine.service.session_history().unwrap().is_empty());
-    assert!(f.engine.message.as_ref().unwrap().contains("not confirmed"));
+    assert!(f
+        .engine
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("Steam launch is unconfirmed."));
 }
 
 #[test]

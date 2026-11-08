@@ -317,7 +317,7 @@ mod tests {
         };
         let samples = vec![0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * usize::from(AUDIO_CHANNELS)];
         let packet = encoder.encode_frame(1, &samples).expect("silence packet");
-        assert!(!packet.bytes.is_empty());
+        assert_ne!(packet.bytes, []);
         assert!(packet.bytes.len() <= MAX_OPUS_PACKET_BYTES);
         assert_eq!(
             packet.bytes.capacity(),

@@ -82,7 +82,10 @@ export function renderReplayFilmstrip(player, canvas, status) {
       }
       status.hidden = true;
     } catch {
-      if (!signal.aborted) status.textContent = completed ? 'Some frame previews unavailable' : 'Frame previews unavailable · trimming still works';
+      if (!signal.aborted) {
+        status.hidden = false;
+        status.textContent = completed ? 'Some frame previews unavailable' : 'Frame previews unavailable · trimming still works';
+      }
     } finally {
       release();
     }

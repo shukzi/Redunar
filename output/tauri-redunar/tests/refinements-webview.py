@@ -38,7 +38,7 @@ try:
     test('Trash bin exposes restore without permanent deletion',"check(q('#dialog').open,'bin opens');check(q('[data-action=restore-trash-clip]'),'restore action');check(!q('[data-action=empty-trash]'),'no irreversible action');click('[data-action=restore-trash-clip]');",300)
     test('Restore returns the recording to Saved clips',"check(qa('[data-clip]').length===3,'all restored');check(!q('#dialog').open,'completed bin action closes');")
     route('history')
-    test('History filters clear stale selected details',"q('#history-search').value='no matching session';q('#history-search').dispatchEvent(new Event('input',{bubbles:true}));check(!q('.history-detail'),'stale details removed');check(q('.history-filter-empty'),'empty state');click('[data-action=clear-history-filters]');check(q('.history-detail'),'selection restored');")
+    test('History filters clear stale selected details',"q('#history-search').value='no matching session';q('#history-search').dispatchEvent(new Event('input',{bubbles:true}));check(!q('.history-summary')&&!q('.history-timeline-card'),'stale selected details removed');check(q('.history-empty h2').textContent==='No matching sessions','empty state');click('[data-action=clear-history-filters]');check(q('.history-summary')&&q('.history-timeline-card'),'selection restored');")
     route('global');js("click('[data-global-tab=overlay]');q('[data-global=scale]').value='105';q('[data-global=scale]').dispatchEvent(new Event('input',{bubbles:true}));")
     test('Draft marks both the settings tab and navigation',"check(!q('[data-global-tab=overlay] .unsaved-tab-marker').hidden,'tab dot');check(!q('a[href=\"#global\"] .nav-unsaved-marker').hidden,'sidebar dot');")
     route('library');route('global')

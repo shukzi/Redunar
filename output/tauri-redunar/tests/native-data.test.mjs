@@ -47,7 +47,7 @@ test('History renders a scrubber with FPS, temperatures, and hardware load',()=>
  assert.match(source,/data-history-cursor/);
  assert.match(source,/CPU temperature/);
  assert.match(source,/GPU temperature/);
- assert.match(source,/Long sessions retain the full time span/);
+ assert.match(source,/Calculated from saved frame times/);
  assert.match(css,/\.history-moment-grid/);
  assert.match(css,/\.history-cursor-line/);
 });
@@ -76,8 +76,10 @@ test('Overview timeline shares the stable trace and baseline-anchored area treat
  assert.match(source,/liveTimeline\.values\.push\(newest\/1e6\)/);
  assert.match(source,/overviewMetric==='fps'\?liveTimeline\.values\.map\(value=>1000\/value\):liveTimeline\.values/);
  assert.match(source,/aggregateTimelinePoints\(values\.map\(\(value,index\)=>\(\{x:index,value\}\)\)/);
- assert.match(source,/live\?'Older':'Sample 1'/);
- assert.match(source,/live\?'Latest sample':`Sample \$\{values\.length\}`/);
+ assert.match(source,/live\?'Older':'Reading 1'/);
+ assert.match(source,/const sampleLabel=values\.length===1\?'reading':'readings'/);
+ assert.match(source,/const spanLabel=live\?`\$\{values\.length\} \$\{sampleLabel\} over/);
+ assert.match(source,/live\?'Latest sample':`Reading \$\{values\.length\}`/);
  assert.match(source,/overview-area-gradient/);
  assert.match(source,/0,210 \$\{points\} 900,210/);
  assert.match(css,/\.overview-area\{fill:url\(#overview-area-gradient\)/);
@@ -163,7 +165,7 @@ test('global overlay preview includes the native metric hierarchy',()=>{
  assert.match(previewSource,/hud-native-lows/);
  assert.match(previewSource,/hud-native-hardware/);
  assert.match(previewSource,/--hud-native-height/);
- assert.match(previewSource,/In-game overlay layout/);
+ assert.doesNotMatch(previewSource,/In-game overlay layout/);
  assert.match(previewSource,/preset==='FPS only'/);
  assert.match(previewSource,/144/);
  assert.match(previewSource,/6\.9/);
@@ -178,7 +180,7 @@ test('global preview applies select changes and keeps FPS only on one row',()=>{
  assert.match(source,/draft\.metrics=t\.checked\?\[\.\.\.new Set\(\[\.\.\.draft\.metrics,t\.dataset\.metric\]\)\]/);
  assert.match(source,/const emptyCustom=globalTab==='overlay'&&draft\.preset==='Custom'&&!draft\.metrics\.length/);
  assert.match(source,/Select at least one metric to save a Custom layout/);
- assert.match(source,/Choose Custom to change individual metrics/);
+ assert.match(readFileSync(new URL('../ui/overlay-settings.mjs',import.meta.url),'utf8'),/Use Custom to choose individual metrics/);
  assert.match(source,/25\+\(frame\?38:0\)\+\(lows\?26:0\)\+\(hardware\?26:0\)/);
  assert.match(css,/.hud-native-frame\{position:relative;height:38px/);
  assert.match(css,/.hud-native-value\{position:absolute;top:6px/);
@@ -272,8 +274,9 @@ test('Native shell owns compact portable window chrome',()=>{
  assert.match(source,/getCurrentWindow/);
  assert.match(source,/appWindow\.startResizeDragging/);
  assert.match(source,/appWindow\.toggleMaximize/);
- assert.match(css,/\.window-titlebar \{[\s\S]*height: 28px/);
- assert.match(css,/\.window-content \{ position: fixed; inset: 28px 0 0;[\s\S]*overflow-y: auto/);
+ assert.match(css,/\.window-titlebar \{[\s\S]*height: var\(--window-titlebar-height\)/);
+ assert.match(css,/--window-titlebar-height: 28px/);
+ assert.match(css,/\.window-content \{ position: fixed; inset: var\(--window-titlebar-height\) 0 0;[\s\S]*overflow-y: auto/);
  assert.match(readFileSync(new URL('../ui/app.css',import.meta.url),'utf8'),/\.topbar\{[^}]*padding:0 16px 0 34px/);
 });
 test('Native window movement does not perform synchronous preference I/O',()=>{
@@ -307,7 +310,7 @@ test('Replay storage usage uses human-readable units without the verbose safety 
 test('Discovery hides Redunar entries and disables games already in the catalog',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  assert.match(source,/alreadyImported/);
- assert.match(source,/Already in Redunar library/);
+ assert.match(source,/Already in your library/);
  assert.match(source,/candidate\.importable&&!existing/);
 });
 test('Runtime polling keeps expensive diagnostics and display probing off the one-second path',()=>{

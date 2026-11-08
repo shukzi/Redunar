@@ -424,10 +424,9 @@ fn main() {
                 app.state::<clip_export::ClipExports>().cancel_restart();
                 tray::show_window(app);
                 if let Some(window) = app.get_webview_window("main") {
-                    let message = serde_json::to_string(&format!(
-                        "Session cleanup requires attention: {error}"
-                    ))
-                    .unwrap_or_default();
+                    let message =
+                        serde_json::to_string(&format!("Session cleanup needs attention: {error}"))
+                            .unwrap_or_default();
                     let _ = window.eval(format!(
                         "window.dispatchEvent(new CustomEvent('native-error',{{detail:{message}}}))"
                     ));

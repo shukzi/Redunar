@@ -1,10 +1,11 @@
 /* Shared Precision treatment; preserve each control's native range semantics. */
+#workspace{--settings-control-column:minmax(376px,44%)}
 #workspace input[type=range]:not(.trim-range){appearance:none;-webkit-appearance:none;display:block;height:32px;min-height:32px;padding:0;margin:0;border:0;border-radius:5px;background:transparent;cursor:ew-resize;accent-color:var(--red)}
-#workspace input[type=range]:not(.trim-range)::-webkit-slider-runnable-track{height:3px;border-radius:8px;background:linear-gradient(to right,var(--red) 0 var(--range-fill,0%),#37373d var(--range-fill,0%) 100%)}
-#workspace input[type=range]:not(.trim-range)::-moz-range-track{height:3px;border-radius:8px;background:linear-gradient(to right,var(--red) 0 var(--range-fill,0%),#37373d var(--range-fill,0%) 100%)}
+#workspace input[type=range]:not(.trim-range)::-webkit-slider-runnable-track{height:3px;border-radius:8px;background:linear-gradient(to right,var(--red) 0 var(--range-fill,0%),#373737 var(--range-fill,0%) 100%)}
+#workspace input[type=range]:not(.trim-range)::-moz-range-track{height:3px;border-radius:8px;background:linear-gradient(to right,var(--red) 0 var(--range-fill,0%),#373737 var(--range-fill,0%) 100%)}
 #workspace input[type=range]:not(.trim-range)::-moz-range-progress{height:3px;background:transparent}
-#workspace input[type=range]:not(.trim-range)::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;box-sizing:border-box;width:14px;height:14px;margin-top:-5.5px;background:#0d0d0f;border:3px solid var(--red);border-radius:50%;box-shadow:0 0 0 3px #0d0d0f}
-#workspace input[type=range]:not(.trim-range)::-moz-range-thumb{box-sizing:border-box;width:14px;height:14px;background:#0d0d0f;border:3px solid var(--red);border-radius:50%;box-shadow:0 0 0 3px #0d0d0f}
+#workspace input[type=range]:not(.trim-range)::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;box-sizing:border-box;width:14px;height:14px;margin-top:-5.5px;background:#0d0d0d;border:3px solid var(--red);border-radius:50%;box-shadow:0 0 0 3px #0d0d0d}
+#workspace input[type=range]:not(.trim-range)::-moz-range-thumb{box-sizing:border-box;width:14px;height:14px;background:#0d0d0d;border:3px solid var(--red);border-radius:50%;box-shadow:0 0 0 3px #0d0d0d}
 #workspace input[type=range]:not(.trim-range):not(:disabled):hover::-webkit-slider-thumb{box-shadow:0 0 0 5px #e7474f24}
 #workspace input[type=range]:not(.trim-range):not(:disabled):hover::-moz-range-thumb{box-shadow:0 0 0 5px #e7474f24}
 #workspace input[type=range]:not(.trim-range):focus-visible{outline:2px solid #ff8288;outline-offset:3px}
@@ -15,3 +16,31 @@
 
 #workspace .range-setting{gap:12px;min-width:140px}
 @media(pointer:coarse){#workspace input[type=range]:not(.trim-range){height:44px;min-height:44px}}
+
+/* Settings and listening levels share a comfortable target. Time and trim
+   controls retain their own thumb geometry and pointer-to-time alignment. */
+#workspace input[type=range][data-tactile-range]{height:44px;min-height:44px;border-radius:12px;cursor:pointer;touch-action:pan-y}
+#workspace input[type=range][data-tactile-range]::-webkit-slider-runnable-track{height:5px;border-radius:99px;background:linear-gradient(to right,var(--red) 0 var(--range-center,var(--range-fill,0%)),#373737 var(--range-center,var(--range-fill,0%)) 100%)}
+#workspace input[type=range][data-tactile-range]::-moz-range-track{height:5px;border-radius:99px;background:linear-gradient(to right,var(--red) 0 var(--range-center,var(--range-fill,0%)),#373737 var(--range-center,var(--range-fill,0%)) 100%)}
+#workspace input[type=range][data-tactile-range]::-webkit-slider-thumb{width:18px;height:18px;margin-top:-6.5px;border-width:3px;cursor:grab;transition:transform 120ms ease,box-shadow 120ms ease,background-color 120ms ease}
+#workspace input[type=range][data-tactile-range]::-moz-range-thumb{width:18px;height:18px;border-width:3px;cursor:grab;transition:transform 120ms ease,box-shadow 120ms ease,background-color 120ms ease}
+#workspace input[type=range][data-tactile-range]:not(:disabled):hover::-webkit-slider-thumb{transform:scale(1.12);box-shadow:0 0 0 5px #e7474f24}
+#workspace input[type=range][data-tactile-range]:not(:disabled):hover::-moz-range-thumb{transform:scale(1.12);box-shadow:0 0 0 5px #e7474f24}
+#workspace input[type=range][data-tactile-range]:not(:disabled):active::-webkit-slider-thumb{transform:scale(1.04);background:#3a191b;cursor:grabbing;box-shadow:0 0 0 6px #e7474f30}
+#workspace input[type=range][data-tactile-range]:not(:disabled):active::-moz-range-thumb{transform:scale(1.04);background:#3a191b;cursor:grabbing;box-shadow:0 0 0 6px #e7474f30}
+#workspace input[type=range][data-tactile-range]:disabled{cursor:not-allowed}
+#workspace input[type=range][data-tactile-range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
+#workspace input[type=range][data-tactile-range]:disabled::-moz-range-thumb{cursor:not-allowed}
+#workspace .slider-value{box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;flex:0 0 72px;width:72px;min-width:72px;height:40px;padding:0 9px;border:1px solid #333333;border-radius:10px;background:#151515;color:var(--text);transition:border-color 120ms ease,background-color 120ms ease}
+#workspace .slider-value:hover:not(:has(input:disabled)){border-color:#555555;background:#1a1a1a}
+#workspace .slider-value:focus-within{outline:2px solid #ff8288;outline-offset:3px;border-color:#b84a50}
+#workspace .slider-value:has(input:disabled){opacity:.4}
+#workspace .slider-value input{box-sizing:border-box;display:block;width:100%;min-width:0;height:100%;margin:0;padding:0;border:0;border-radius:0;outline:0;background:transparent;box-shadow:none;color:inherit;font:12px/1 var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+#workspace .slider-value input:focus-visible{outline:0;box-shadow:none}
+#workspace .slider-value input:disabled{opacity:1;cursor:not-allowed}
+#workspace .slider-value>span{font:11px/1 var(--sans);color:var(--muted);pointer-events:none}
+@media(prefers-reduced-motion:reduce){
+ #workspace input[type=range][data-tactile-range]::-webkit-slider-thumb{transition:none}
+ #workspace input[type=range][data-tactile-range]::-moz-range-thumb{transition:none}
+ #workspace .slider-value{transition:none}
+}

@@ -353,7 +353,10 @@ mod tests {
         .unwrap();
         let loaded = load(&root).unwrap();
         assert_eq!(loaded.len(), 1);
-        assert!(loaded[0].timeline.is_empty());
+        assert_eq!(
+            loaded[0].timeline,
+            [] as [crate::session_history::SessionTelemetrySample; 0]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -1,28 +1,28 @@
 /* Listening volume stays within the player, away from recording/export settings. */
 #workspace .player-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 #workspace .player-controls #player-seek{flex:1 1 140px;width:140px;min-width:100px;order:initial}
-#workspace .player-controls .timecode{order:initial;margin:0;flex:none}
-.playback-volume{display:flex;align-items:center;gap:7px;min-width:0;margin-left:auto;flex:0 0 185px}
-.playback-volume-field{width:148px;min-width:95px}
-.playback-volume-field label{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--text);white-space:nowrap}
-.playback-volume-field output{font-variant-numeric:tabular-nums;color:var(--muted)}
+#workspace .player-controls .timecode{order:initial;margin:0 0 0 auto;flex:none}
+.playback-volume{display:flex;align-items:center;gap:8px;min-width:0;margin-left:0;flex:1 1 240px;max-width:360px}
+.playback-volume-field{display:flex;align-items:center;gap:8px;width:100%;min-width:0}
+.playback-volume-help{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.playback-volume-field input[type=range]{flex:1 1 auto;width:100%;min-width:0}
 #workspace .player-controls .playback-mute{width:30px;min-width:30px;background:transparent;border-color:transparent}
 #workspace .player-controls .playback-mute .icon{width:17px;height:17px;stroke-width:1.5}
-.playback-volume-help{flex:1 0 100%;color:var(--muted);font-size:11px;line-height:1.6;margin:2px 0 0;padding-top:10px;border-top:1px solid var(--border)}
-.microphone-controls{display:grid;grid-template-columns:minmax(170px,1fr) minmax(260px,360px);gap:32px;padding:24px 0;border-bottom:1px solid var(--border);align-items:start}
+#workspace .player-controls > :is(.player-toggle,.transport-jump){width:40px;min-width:40px;height:40px;min-height:40px;padding:0;border-radius:10px}
+.microphone-controls{display:grid;grid-template-columns:minmax(0,1fr) var(--settings-control-column);gap:32px;padding:24px 0;border-bottom:1px solid var(--border);align-items:start}
 .microphone-gain-label{font-size:13px}
 .microphone-gain-label small{display:block;color:var(--muted);font-size:12px;line-height:1.7;margin-top:6px}
 .microphone-fields{display:grid;gap:17px;min-width:0}
 .microphone-gain-slider{min-width:0}
 .microphone-gain-slider input[type=range]{width:100%;min-width:0}
-.microphone-gain-slider label{display:flex;justify-content:space-between;gap:16px;color:var(--text);font-size:12px}
-.microphone-gain-slider output{font-variant-numeric:tabular-nums;color:var(--text)}
+.microphone-gain-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:4px}
+.microphone-gain-heading label{color:var(--text);font-size:12px}
 .microphone-test-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .microphone-protection{display:inline-flex;align-items:center;gap:6px;margin-left:auto;color:var(--muted);font-size:11px;white-space:nowrap}
 .microphone-protection .icon{width:13px;height:13px;flex:none}
 .microphone-meter-wrap{display:grid;gap:8px;min-width:0}
 .microphone-meter-label{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
-.microphone-meter{height:4px;background:#303034;border-radius:2px;overflow:hidden}
+.microphone-meter{height:4px;background:#303030;border-radius:2px;overflow:hidden}
 .microphone-meter>i{display:block;height:100%;width:0;background:var(--red)}
 .microphone-test-status{font-size:11px;line-height:1.7;color:var(--muted);margin:0;min-height:19px}
 .microphone-test-status[data-error=true]{color:var(--red)}
@@ -33,4 +33,4 @@
 .microphone-test-track input[type=range]{width:100%;min-width:0;margin:3px 0 0}
 .microphone-playback .text-button{flex:none}
 .microphone-controls [hidden]{display:none!important}
-@media(max-width:650px){.microphone-controls{grid-template-columns:minmax(0,1fr);gap:22px}}
+@media(max-width:700px){.microphone-controls{grid-template-columns:minmax(0,1fr);gap:22px}}
