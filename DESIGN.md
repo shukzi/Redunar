@@ -177,6 +177,10 @@ Give the frame graph more space than the active-session banner. Keep the timer
 beside End session and show session settings, saved clips, and feature choices
 in a separate status area. Use Recent captures and System metrics as labels.
 Replay status shows seconds buffered and audio activity.
+Capture phase, received-frame counts and transport drops appear in the collapsed
+Diagnostics section in Settings.
+Overview keeps capture failures and cleanup warnings visible without the routine
+capture counter line.
 
 Group CPU and GPU load, temperatures, RAM, and VRAM when available. Missing
 readings remain unavailable and retain their row height so monitor interruptions

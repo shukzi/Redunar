@@ -634,12 +634,9 @@ impl Engine {
                     snapshot.received_frame_count,
                     snapshot.metrics.is_some(),
                 );
-                self.message = snapshot.failure.clone().or_else(|| {
-                    Some(format!(
-                        "{:?} · {} frames received · {} transport drops",
-                        snapshot.phase, snapshot.received_frame_count, snapshot.dropped_frame_count
-                    ))
-                });
+                // Routine counters belong to the measurements DTO. Keep this
+                // message channel available for capture and cleanup failures.
+                self.message = snapshot.failure.clone();
             }
             match active.ownership {
                 GameLaunchProcessOwnership::DirectChild => release,

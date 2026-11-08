@@ -131,14 +131,16 @@ test('defaults round-trip real backend values, including frame metrics, zero opa
  const result=profilePayload(mapDefaults({values}),values.shortcuts);
  for(const key of Object.keys(values))assert.deepEqual(result[key],values[key]);
 });
-test('final settings surface omits internal runtime and diagnostics panels',()=>{
+test('Settings keeps runtime internals hidden and Diagnostics in a collapsed disclosure',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const start=source.indexOf('function settings()');
  const end=source.indexOf('function diagnosticsCard()',start);
  assert.ok(start>=0&&end>start,'settings renderer should remain explicit');
  const settingsSource=source.slice(start,end);
  assert.doesNotMatch(settingsSource,/Runtime connections/);
- assert.doesNotMatch(settingsSource,/diagnosticsCard\(\)/);
+ assert.match(settingsSource,/<details class="settings-diagnostics"/);
+ assert.match(settingsSource,/diagnosticsOpen\?'open':''/);
+ assert.match(settingsSource,/diagnosticsCard\(\)/);
 });
 test('obsolete desktop replay preview is absent',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
