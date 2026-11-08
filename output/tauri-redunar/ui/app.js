@@ -379,7 +379,7 @@ function overview() {
  const meter=(name)=>`<div class="hardware"><div class="hardware-heading"><span>${name}</span><strong><b id="${name}-load">—</b><small>%</small></strong></div><div class="meter"><i id="${name}-meter"></i></div><p id="${name}-model">Loading hardware details…</p><div class="temperature-heading"><span>Temperature</span><b id="${name}-temp">—</b></div><div class="meter temperature-meter" role="img" aria-label="${name} temperature scale from 0 to 100 degrees Celsius"><i id="${name}-temperature-meter"></i></div></div>`;
  return heading('Overview')+`
  <section class="session-banner status-footer"><div class="session-main"><div class="session-game"><span class="game-mark">${icon('play')}</span><div><small id="session-phase">Loading session…</small><h2 id="session-name">No game running</h2></div></div><div class="session-end"><div class="session-time"><small>Time played</small><time id="session-timer" aria-label="Session elapsed time">—</time></div>${button('End session','end-session',true,active()?'':'hidden')}</div></div><div class="session-footer"><span id="session-profile">Settings unavailable</span><span id="session-captures">Clip count unavailable</span><span id="session-features">Loading session status…</span></div></section>
- <div class="session-feedback"><p id="session-note"></p></div>${replayCaptureBar('overview')}
+ <div class="session-feedback"><p id="session-note" role="status"></p></div>${replayCaptureBar('overview')}
  <div id="library-start-guide" class="library-start-guide" ${showLibraryStartGuide()?'':'hidden'}><div><strong>Add your first game</strong><p>Open Library to find installed games or add a game.</p></div><a class="button" href="#library">Open Library</a></div>
  <div class="overview-grid"><section class="panel pacing-panel"><div class="section-heading"><div class="frame-pacing-heading"><h2>Frame pacing</h2></div><div class="history-view-toggle overview-view-toggle">${[['fps','FPS'],['frame','Frame time']].map(([id,label])=>`<button data-overview-view="${id}" class="${overviewMetric===id?'active':''}" aria-pressed="${overviewMetric===id}">${label}</button>`).join('')}</div></div><div class="telemetry-row">${stat('Average frame rate','—','FPS','','live-fps')}${stat('1% low','—','FPS','','live-low')}${stat('0.1% low','—','FPS','','live-lowest')}${stat('Average frame time','—','ms','','live-frame-time')}</div><div id="live-chart">${chart()}</div><div class="panel-footer"><span><i class="legend"></i><span id="overview-chart-label">Frame rate</span></span><a href="#history">Open History ${icon('arrow')}</a></div></section>
  <section class="panel system-panel"><h2>System metrics</h2><p>Current usage and temperatures</p>${meter('GPU')}${meter('CPU')}${['ram','vram'].map(name=>`<div class="memory-block"><div><span>${name.toUpperCase()}</span><b id="${name}-used">—</b></div><div class="meter"><i id="${name}-meter"></i></div><p id="${name}-total">Total memory unavailable</p><p id="${name}-available"></p></div>`).join('')}<p class="temperature-scale">Temperature bars: 0–100°C</p></section></div>
@@ -723,6 +723,7 @@ async function finishDraftRestart(save) {
 }
 function settings() {
  const logStatus=diagnosticDisplayStatus();
+ const diagnosticsOpen=$('.settings-diagnostics')?.open===true;
  const preferenceRow=(title,description,key,checked,extra='')=>`<div class="settings-option"><div class="settings-option-main"><div class="settings-option-copy"><h3>${title}</h3><p>${description}</p></div>${switchControl(key,title,checked,'preference',!native||!loaded.preferences||busy)}</div>${extra}</div>`;
  return heading('Settings')+
 `<div class="settings-grid settings-page">
@@ -731,12 +732,21 @@ function settings() {
   ${preferenceRow('Close to tray','Keep Redunar running when you close the window.','tray',preferences.tray===true)}
   ${preferenceRow('Debug log','Record diagnostic logs for troubleshooting. Logs may include game names and session details.','diagnostic-log',preferences.diagnosticLog===true,`<p id="diagnostic-log-status" class="settings-option-note" ${logStatus?'':'hidden'}>${escape(logStatus)}</p>${preferences.diagnosticLogPath?`<button class="button settings-log-action" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:''}`)}
  </section>
+ <details class="settings-diagnostics" ${diagnosticsOpen?'open':''}><summary class="button settings-diagnostics-summary"><span>Diagnostics</span>${icon('chevron-down')}</summary>${diagnosticsCard()}</details>
 </div>`;
 }
 
+function captureDiagnosticValues() {
+ const capture=activeSession?.measurements;
+ return {'diagnostic-capture-phase':capture?.phase||'—','diagnostic-capture-received':measurement(capture?.received_frame_count,0),'diagnostic-capture-dropped':measurement(capture?.dropped_frame_count,0)};
+}
+function captureDiagnosticRows() {
+ const values=captureDiagnosticValues();
+ return [['diagnostic-capture-phase','Capture phase'],['diagnostic-capture-received','Frames received'],['diagnostic-capture-dropped','Transport drops']].map(([id,label])=>`<div><span>${label}</span><b id="${id}">${escape(values[id])}</b></div>`).join('');
+}
 function diagnosticsCard() {
  if(!native) return `<section class="panel diagnostics-panel"><h2>Diagnostics</h2><p>Open the native app to inspect monitor, capture, and encoder readiness.</p></section>`;
- if(!diagnostics) return `<section class="panel diagnostics-panel"><h2>Diagnostics</h2><p>Collecting read-only runtime counters…</p></section>`;
+ if(!diagnostics) return `<section class="panel diagnostics-panel"><h2>Diagnostics</h2><p>Collecting read-only runtime counters…</p><div class="diagnostics-grid">${captureDiagnosticRows()}</div></section>`;
  const readiness=diagnostics.replay_readiness||{};
  const readyCount=Object.values(readiness).filter(Boolean).length;
  const candidateText=diagnostics.encoder_candidates?.length?diagnostics.encoder_candidates.map(c=>`${escape(c.driver)}${c.accessible?' · accessible':' · unavailable'}`).join(', '):'No eligible render node candidates found';
@@ -745,7 +755,7 @@ function diagnosticsCard() {
  const captured=diagnostics.captured_at_unix_ms==null?'—':new Date(diagnostics.captured_at_unix_ms).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
  const status=value=>pill(value?'Ready':'Not verified',value?'green':'red');
  const shortcutNote=diagnostics.shortcut_message||'Monitored by Redunar while the app is running; no desktop shortcut registry is used.';
- return `<section class="panel diagnostics-panel"><div class="section-heading"><div><h2>Diagnostics</h2><p>Read-only counters from the native workers.</p></div>${button('Refresh','reload-diagnostics')}</div><div class="diagnostics-grid"><div><span>Monitor samples</span><b>${diagnostics.hardware_samples}</b></div><div><span>Game scans</span><b>${diagnostics.game_scans}</b></div><div><span>Replay readiness</span><b>${readyCount}/6 ready</b></div><div><span>Capture runtime</span><b>${escape(diagnostics.capture_runtime)}</b></div><div><span>Shortcut monitor</span><b>${escape(diagnostics.shortcut_state||'Unknown')}</b></div><div><span>Frames received</span><b>${diagnostics.received_frame_count}</b></div><div><span>Encoded packets</span><b>${diagnostics.encoded_packet_count}</b></div><div><span>Audio packets</span><b>${diagnostics.audio_packet_count}</b></div><div><span>Audio bytes</span><b>${diagnostics.audio_byte_count}</b></div></div><div class="diagnostics-readiness"><div class="diagnostics-subheading"><h3>Replay readiness checks</h3><span>Backend verification</span></div>${readinessRows.map(([key,label])=>`<div class="diagnostics-readiness-row"><span>${label}</span>${status(Boolean(readiness[key]))}</div>`).join('')}</div><p class="small-note">Last snapshot ${captured} · sample ${diagnostics.last_hardware_sample_ms==null?'—':diagnostics.last_hardware_sample_ms+' ms'} · scan ${diagnostics.last_game_scan_ms==null?'—':diagnostics.last_game_scan_ms+' ms'} · overruns ${diagnostics.hardware_overruns+diagnostics.game_scan_overruns}</p><p class="small-note">Shortcut monitor: ${escape(shortcutNote)}</p><p class="small-note">Encoder candidates: ${candidateText}</p>${issue?`<p class="diagnostics-error">${escape(issue)}</p>`:''}</section>`;
+ return `<section class="panel diagnostics-panel"><div class="section-heading"><div><h2>Diagnostics</h2><p>Read-only counters from the native workers.</p></div>${button('Refresh','reload-diagnostics')}</div><div class="diagnostics-grid">${captureDiagnosticRows()}<div><span>Monitor samples</span><b>${diagnostics.hardware_samples}</b></div><div><span>Game scans</span><b>${diagnostics.game_scans}</b></div><div><span>Replay readiness</span><b>${readyCount}/6 ready</b></div><div><span>Capture runtime</span><b>${escape(diagnostics.capture_runtime)}</b></div><div><span>Shortcut monitor</span><b>${escape(diagnostics.shortcut_state||'Unknown')}</b></div><div><span>Replay frames received</span><b>${diagnostics.received_frame_count}</b></div><div><span>Encoded packets</span><b>${diagnostics.encoded_packet_count}</b></div><div><span>Audio packets</span><b>${diagnostics.audio_packet_count}</b></div><div><span>Audio bytes</span><b>${diagnostics.audio_byte_count}</b></div></div><div class="diagnostics-readiness"><div class="diagnostics-subheading"><h3>Replay readiness checks</h3><span>Backend verification</span></div>${readinessRows.map(([key,label])=>`<div class="diagnostics-readiness-row"><span>${label}</span>${status(Boolean(readiness[key]))}</div>`).join('')}</div><p class="small-note">Last snapshot ${captured} · sample ${diagnostics.last_hardware_sample_ms==null?'—':diagnostics.last_hardware_sample_ms+' ms'} · scan ${diagnostics.last_game_scan_ms==null?'—':diagnostics.last_game_scan_ms+' ms'} · overruns ${diagnostics.hardware_overruns+diagnostics.game_scan_overruns}</p><p class="small-note">Shortcut monitor: ${escape(shortcutNote)}</p><p class="small-note">Encoder candidates: ${candidateText}</p>${issue?`<p class="diagnostics-error">${escape(issue)}</p>`:''}</section>`;
 }
 
 function render() {
@@ -1187,6 +1197,7 @@ function updateObservedElements() {
 
  const replayCopy=replayStatusCopy(runtime);
  const values={
+  ...captureDiagnosticValues(),
   'session-timer':time(activeSession?.elapsed_seconds),
   'session-profile':activeSession?.profile_label==='Session profile'?'Session settings':activeSession?.profile_label||'Settings unavailable',
   'session-captures':activeSession?.captures_saved==null?'Clip count unavailable':`${activeSession.captures_saved} ${activeSession.captures_saved===1?'clip':'clips'} saved`,

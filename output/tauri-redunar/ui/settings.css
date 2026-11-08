@@ -31,3 +31,11 @@
 .settings-page .update-note{padding-top:19px;font-size:11px}
 @media(max-width:1200px){.settings-page{grid-template-columns:1fr}}
 @media(max-width:700px){.settings-page .panel{padding:21px}.settings-option-note{margin-right:0}.settings-page .update-check-row{grid-template-columns:auto minmax(0,1fr)}.settings-page .update-check-actions{grid-column:1/-1}.settings-page .update-check-actions .button{width:100%}.settings-page .updates-heading{align-items:start;flex-wrap:wrap}}
+
+.settings-diagnostics { min-width:0; grid-column:1/-1; }
+.settings-diagnostics-summary { display:flex; justify-content:space-between; width:100%; box-sizing:border-box; list-style:none; }
+.settings-diagnostics-summary::-webkit-details-marker { display:none; }
+.settings-diagnostics > .diagnostics-panel { margin-top:12px; }
+.settings-diagnostics :is(.diagnostics-grid>div,.diagnostics-readiness,.diagnostics-readiness-row) { border-color:var(--border); }
+.settings-diagnostics :is(.diagnostics-grid>div,.diagnostics-subheading span,.diagnostics-readiness-row) { color:var(--muted); }
+.settings-diagnostics .diagnostics-grid b { color:var(--text); }

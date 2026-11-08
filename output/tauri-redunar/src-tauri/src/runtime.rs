@@ -87,12 +87,38 @@ pub struct SessionStatusDto {
 #[derive(Debug, Serialize)]
 pub struct SessionMeasurements {
     revision: u64,
+    received_frame_count: u64,
+    dropped_frame_count: u64,
     average_fps: Option<f64>,
     frame_time_ms: Option<f64>,
     one_percent_low_fps: Option<f64>,
     point_one_percent_low_fps: Option<f64>,
     frame_intervals_ns: Vec<u64>,
     phase: String,
+}
+
+impl From<&redunar_daemon::CaptureSnapshot> for SessionMeasurements {
+    fn from(snapshot: &redunar_daemon::CaptureSnapshot) -> Self {
+        Self {
+            revision: snapshot.revision,
+            received_frame_count: snapshot.received_frame_count,
+            dropped_frame_count: snapshot.dropped_frame_count,
+            average_fps: snapshot.metrics.as_ref().map(|m| m.average_fps),
+            frame_time_ms: snapshot.metrics.as_ref().map(|m| m.newest_frame_time_ms),
+            one_percent_low_fps: snapshot.metrics.as_ref().map(|m| m.one_percent_low_fps),
+            point_one_percent_low_fps: snapshot
+                .metrics
+                .as_ref()
+                .map(|m| m.point_one_percent_low_fps),
+            frame_intervals_ns: snapshot
+                .recent_frame_intervals_ns
+                .iter()
+                .copied()
+                .take(240)
+                .collect(),
+            phase: format!("{:?}", snapshot.phase),
+        }
+    }
 }
 
 #[tauri::command]
@@ -113,23 +139,7 @@ pub fn session_status(sessions: tauri::State<'_, crate::sessions::Sessions>) -> 
             launch_locked: engine.launch_locked(),
             can_end: engine.can_end(),
             history_revision: engine.history_revision,
-            measurements: engine.capture.as_ref().map(|snapshot| SessionMeasurements {
-                revision: snapshot.revision,
-                average_fps: snapshot.metrics.as_ref().map(|m| m.average_fps),
-                frame_time_ms: snapshot.metrics.as_ref().map(|m| m.newest_frame_time_ms),
-                one_percent_low_fps: snapshot.metrics.as_ref().map(|m| m.one_percent_low_fps),
-                point_one_percent_low_fps: snapshot
-                    .metrics
-                    .as_ref()
-                    .map(|m| m.point_one_percent_low_fps),
-                frame_intervals_ns: snapshot
-                    .recent_frame_intervals_ns
-                    .iter()
-                    .copied()
-                    .take(240)
-                    .collect(),
-                phase: format!("{:?}", snapshot.phase),
-            }),
+            measurements: engine.capture.as_deref().map(SessionMeasurements::from),
         }
     })
 }

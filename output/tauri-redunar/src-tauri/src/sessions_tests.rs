@@ -100,6 +100,44 @@ fn duplicate_launch_is_rejected_before_any_second_child_starts() {
 }
 
 #[test]
+fn armed_capture_keeps_counters_without_a_routine_overview_message() {
+    let mut f = Fixture::new();
+    let library = f.root.join("fixture-layer.so");
+    std::fs::write(&library, b"fixture only; never loaded").unwrap();
+    let capture = f
+        .engine
+        .service
+        .start_capture_session(&CaptureSessionConfig::new(f.root.join("runtime"), library))
+        .unwrap();
+    let mut plan = f.plan("/bin/sleep", &["30"]);
+    plan.capture = Some(capture);
+    plan.request.metrics = true.into();
+    f.engine.start(plan).unwrap();
+    f.engine.tick(&MonitorSnapshot::default());
+    let snapshot = f.engine.capture.as_ref().unwrap();
+    assert_eq!(snapshot.phase, redunar_daemon::CapturePhase::Armed);
+    assert_eq!(snapshot.received_frame_count, 0);
+    assert_eq!(snapshot.dropped_frame_count, 0);
+    assert!(f.engine.message.is_none());
+    let mut observed = snapshot.as_ref().clone();
+    for (phase, received, dropped) in [
+        (redunar_daemon::CapturePhase::Armed, 0, 0),
+        (redunar_daemon::CapturePhase::Capturing, 42, 3),
+        (redunar_daemon::CapturePhase::Failed, 42, 3),
+    ] {
+        observed.phase = phase;
+        observed.received_frame_count = received;
+        observed.dropped_frame_count = dropped;
+        let value =
+            serde_json::to_value(crate::runtime::SessionMeasurements::from(&observed)).unwrap();
+        assert_eq!(value["phase"], format!("{phase:?}"));
+        assert_eq!(value["received_frame_count"], received);
+        assert_eq!(value["dropped_frame_count"], dropped);
+        assert!(value["average_fps"].is_null());
+    }
+}
+
+#[test]
 fn active_capture_accepts_global_overlay_changes_without_a_restart() {
     let mut f = Fixture::new();
     let library = f.root.join("fixture-layer.so");
@@ -288,7 +326,10 @@ fn history_failure_still_cleans_up_and_explicit_retry_writes_once() {
     );
     assert!(f.engine.can_end());
     assert!(f.engine.ensure_idle().is_err());
+    let warning = f.engine.message.clone().unwrap();
+    assert!(warning.contains("Session ended with pending work"));
     f.engine.tick(&MonitorSnapshot::default());
+    assert_eq!(f.engine.message.as_deref(), Some(warning.as_str()));
     assert_eq!(f.engine.history_revision, 0);
     std::fs::remove_file(history_path).unwrap();
     f.engine.finish().unwrap();
@@ -382,6 +423,8 @@ fn a_capture_failure_does_not_release_a_still_running_direct_child() {
             "fixture failure".into(),
         ));
     f.engine.tick(&MonitorSnapshot::default());
+    let failure = f.engine.capture.as_ref().unwrap().failure.as_ref().unwrap();
+    assert_eq!(f.engine.message.as_ref(), Some(failure));
     assert!(f.engine.launch_locked());
     f.engine.finish().unwrap();
     assert!(f
