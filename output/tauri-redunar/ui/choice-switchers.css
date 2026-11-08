@@ -1,0 +1,99 @@
+/* One small selection frame for finite choices, with native value owners. */
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid #303030;
+  border-radius: 16px;
+  background: #0d0d0d;
+  vertical-align: middle;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > select[hidden] { display: none !important; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 10px/18px var(--sans);
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: none;
+  transition: color 120ms ease;
+}
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button:hover:not(:disabled):not([aria-pressed="true"]) { background: #1b1b1b; color: var(--text); }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button:is(:hover,:active) { transform: none; box-shadow: none; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button[aria-pressed="true"] { background: #242424; border-color: #444; color: var(--text); }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher[data-selection-indicator] > button[aria-pressed="true"] { background: transparent; border-color: transparent; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button:focus-visible { outline: 2px solid #ff8288; outline-offset: 1px; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button:disabled { cursor: not-allowed; opacity: .4; }
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > .selection-indicator::after,
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button::after { content: none; }
+
+/* The color circles sit on the same moving plate as text choices. */
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .palette-switcher {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: start;
+  justify-self: end;
+  gap: 4px;
+  width: fit-content;
+  margin: 0;
+}
+html:not([data-page="replay-menu"]) #workspace .choice-switcher.palette-switcher > .overlay-palette {
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
+  height: 36px;
+  aspect-ratio: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: radial-gradient(circle,var(--swatch) 0 9px,transparent 10px);
+  box-shadow: none;
+}
+html:not([data-page="replay-menu"]) #workspace .choice-switcher.palette-switcher > .overlay-palette:hover:not([aria-pressed="true"]) { background: radial-gradient(circle,var(--swatch) 0 9px,transparent 10px),#1b1b1b; }
+html:not([data-page="replay-menu"]) #workspace .choice-switcher.palette-switcher > .overlay-palette[aria-pressed="true"] { background: radial-gradient(circle,var(--swatch) 0 9px,transparent 10px); border-color: transparent; }
+
+html:not([data-page="replay-menu"]) #workspace .override-control { max-width: 100%; }
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .preset-switcher { flex-wrap: wrap; }
+@media(max-width:1050px){
+  html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .preset-switcher { justify-self: start; }
+}
+@media(prefers-reduced-motion:reduce){
+  html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher > button { transition: none; }
+}
+
+/* One continuously moving surface owns selection feedback. Hover changes text
+   without flashing a second plate at the destination. */
+html:not([data-page="replay-menu"]) .selection-indicator { transition: none; animation: none; will-change: auto; }
+html:not([data-page="replay-menu"]) .selection-indicator[data-moving] { will-change: transform; }
+html:not([data-page="replay-menu"]) #workspace :is(.tabbar,.history-view-toggle,.overview-view-toggle,.clip-collection)[data-selection-indicator] > button,
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher:not(.palette-switcher)[data-selection-indicator] > button {
+  transition: color 160ms ease;
+}
+html:not([data-page="replay-menu"]) #workspace :is(.tabbar,.history-view-toggle,.overview-view-toggle,.clip-collection)[data-selection-indicator] > button:hover,
+html:not([data-page="replay-menu"]) :is(#workspace,#dialog) .choice-switcher:not(.palette-switcher)[data-selection-indicator] > button:hover {
+  background: transparent;
+}

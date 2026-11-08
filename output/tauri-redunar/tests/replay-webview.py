@@ -222,21 +222,15 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         """)
         js("""
         (()=>{
-         const menu=document.querySelector('.clip-action-menu'),summary=menu.querySelector('summary'),first=menu.querySelector('button'),search=document.querySelector('#clip-search');
-         summary.click();first.focus();
-         const escape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});first.dispatchEvent(escape);
-         check(!menu.open&&escape.defaultPrevented,'Escape dismisses the clip menu');
-         check(document.activeElement===summary,'Escape restores focus to the clip menu trigger');
-         summary.click();first.focus();
-         search.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));search.focus();search.click();
-         check(!menu.open&&document.activeElement===search,'outside control keeps its own focus');
-         summary.click();first.focus();
-         document.querySelector('#clip-video').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
-         check(!menu.open&&document.activeElement===summary,'outside picture dismissal does not strand focus in hidden menu');
+         const actions=document.querySelector('.clip-edit-actions'),buttons=[...actions.querySelectorAll('button')];
+         check(buttons.length===5&&!document.querySelector('.clip-action-menu'),'clip actions are inline');
+         const compress=actions.querySelector('[data-action=compress-selected-clip]');
+         compress.focus();check(document.activeElement===compress,'compression is keyboard reachable');
+         compress.click();check(document.querySelector('#trim-export-form'),'direct action opens compression');
+         document.querySelector('#dialog [data-close]').click();
+         check(document.activeElement===compress,'cancel restores focus to the direct action');
         })();
         """)
-        pump(250)
-        js("check(!document.querySelector('.clip-action-menu').open,'a late disclosure animation cannot reopen the dismissed clip menu')")
         # The selection made during the first thumbnail batch is retried once.
         pump(1000)
         js("bridge.thumbnails.splice(0).forEach(resolve=>resolve())")
@@ -343,7 +337,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         check(!form.elements.limitSize.checked&&form.elements.limitSize.getAttribute('aria-expanded')==='false','trim compression starts folded');
         check(form.elements.maxSizeMb.disabled,'folded size is not submitted');
         form.elements.limitSize.click();
-        check(form.querySelector('.clip-export-size-comparison').textContent.includes('Selection ≈ 66.67 MB'),'selection estimate uses full source duration');
+        check(form.querySelector('.clip-export-size-scale').textContent.includes('Selection ≈ 66.67 MB'),'selection estimate uses full source duration');
         check(form.elements.maxSizeMb.max==='66.6'&&Number(form.elements.maxSizeMb.value)<66.6,'selection maximum and default reduce its estimated size');
         form.elements.maxSizeMb.value='0.7';form.elements.maxSizeMb.dispatchEvent(new Event('input',{bubbles:true}));
         form.elements.outputFormat.value='mkv';form.elements.outputFormat.dispatchEvent(new Event('change',{bubbles:true}));
@@ -404,7 +398,6 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         """)
         screenshot("replay-load-failure.png")
         js("""
-        document.querySelector('.clip-action-menu summary').click();
         document.querySelector('[data-action=compress-selected-clip]').click();
         check(document.querySelector('#dialog-title').textContent==='Compress clip','legacy compression works from selected source metadata without decoded readiness');
         check(document.querySelector('[name=start]').value==='0'&&document.querySelector('[name=end]').value==='3','unready whole-source compression uses its own duration');
@@ -439,8 +432,17 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         js("check(Math.abs(document.querySelector('#clip-video').currentTime-1)<.1,'precision seek reaches requested time')")
         js("const selected=document.querySelector('[data-selected-clip-title]').textContent;document.querySelector('[data-action=delete-selected-clip]').click();check(JSON.parse(document.querySelector('#trash-clips-form [name=fileNames]').value)[0]===selected,'delete targets current selection');document.querySelector('#dialog [data-close]').click();")
         for viewport in [1400, 900, 640, 360]:
+            print(f'Checking trim footer at {viewport}px', flush=True)
             window.resize(viewport, 1000)
-            pump(200)
+            pump(100)
+            # Measure the trim change after the responsive sidebar transition,
+            # rather than confusing its remaining width change with Export.
+            for _ in range(20):
+                if js("![...document.querySelectorAll('.sidebar,.app-shell')].some(el=>el.getAnimations().some(a=>a.playState==='running'))") == 'true':
+                    break
+                pump(50)
+            else:
+                raise AssertionError('Responsive shell did not settle')
             js("""
             (()=>{
              document.querySelector('[data-action=reset-trim]').click();
@@ -455,7 +457,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
             (()=>{
              check(!document.querySelector('#export-clip-button').hidden,'trim reveals Export at each viewport');
              check(Math.abs(document.querySelector('.clip-editor-footer').getBoundingClientRect().height-footerGeometry.footer)<1,'revealing Export retains the reserved footer height');
-             check(Math.abs(document.querySelector('.editor').getBoundingClientRect().height-footerGeometry.editor)<1,'revealing Export retains editor geometry');
+             check(Math.abs(document.querySelector('.editor').getBoundingClientRect().height-footerGeometry.editor)<1,'revealing Export retains editor geometry '+JSON.stringify({width:innerWidth,before:footerGeometry.editor,after:document.querySelector('.editor').getBoundingClientRect().height,footer:document.querySelector('.clip-editor-footer').getBoundingClientRect().toJSON(),timeline:document.querySelector('#clip-timeline').getBoundingClientRect().toJSON()}));
              check(Math.abs(document.querySelector('#clip-timeline').getBoundingClientRect().top-footerGeometry.timeline)<1,'revealing Export does not move the timeline');
              check(document.querySelector('#clip-video')===footerGeometry.video,'responsive footer does not replace decoded media');
             })();
@@ -465,10 +467,10 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         js("const resetStartHandle=document.querySelector('#trim-start-bar');resetStartHandle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));check(!document.querySelector('[data-action=reset-trim]').disabled,'trim reset available');document.querySelector('[data-action=reset-trim]').click();check(document.querySelector('#trim-start-value').textContent==='00:00.0','trim starts at zero after reset');check(document.querySelector('#clip-selected-duration').textContent==='00:03.0','reset retains entire recording');check(document.querySelector('#export-clip-button').hidden,'reset to full recording hides Export again');check(!document.querySelector('#center-play').hidden,'center play visible while paused');document.querySelector('#center-play').click();")
         pump(300)
         js("check(!document.querySelector('#clip-video').paused,'center play starts video');check(document.querySelector('#center-play').hidden,'center control leaves playing picture clear');document.querySelector('#clip-play-toggle').click();")
-        js("(()=>{check(document.querySelector('#export-clip-button').hidden,'whole-source compression does not need footer Export');const menu=document.querySelector('.clip-action-menu');menu.querySelector('summary').click();check(menu.open,'far-right clip actions opened');const compress=menu.querySelector('[data-action=compress-selected-clip]');check(compress.textContent.trim()==='Compress clip…','legacy compression action restored');compress.click();check(!menu.open,'compression closes the ellipsis menu');})()")
+        js("(()=>{check(document.querySelector('#export-clip-button').hidden,'whole-source compression does not need footer Export');const compress=document.querySelector('.clip-edit-actions [data-action=compress-selected-clip]');check(compress.getAttribute('aria-label')==='Compress clip','direct compression action labeled');compress.click();check(document.querySelector('#trim-export-form'),'whole clip form opens');})()")
         pump(250)
         js("check(document.querySelector('#dialog-title').textContent==='Compress clip','whole-clip compression heading');check(document.querySelector('[name=start]').value==='0'&&document.querySelector('[name=end]').value==='3','whole recording ignores trim');check(document.querySelector('[name=copyRange]').value==='entire'&&document.querySelector('[name=limitSize]').checked,'entire clip with Compress copy selected');check(document.querySelector('[name=compression]').value==='true','whole-source size limiting requests native inspected duration');check(!document.querySelector('[name=maxSizeMb]').disabled,'maximum size enabled');check(document.querySelector('[name=outputFormat]').value==='mp4','source container default')")
-        js("(()=>{const form=document.querySelector('#trim-export-form'),field=form.elements.maxSizeMb,slider=form.querySelector('[data-export-size-slider]');check(field.max==='80'&&field.value==='40','whole clip starts at half its measured size');check(slider.max==='80','slider stops at original size');slider.value='80';slider.dispatchEvent(new Event('input',{bubbles:true}));check(form.querySelector('[type=submit]').disabled&&form.querySelector('#export-size-status').textContent.includes('Already under this limit'),'no-op compression explains that it already fits');field.value='100';field.dispatchEvent(new Event('change',{bubbles:true}));check(field.value==='80','typed size above source clamps on commit');slider.value='40';slider.dispatchEvent(new Event('input',{bubbles:true}));check(!form.querySelector('[type=submit]').disabled&&form.querySelector('[data-export-limit-label]').textContent==='40 MB','smaller size restores compression');})()")
+        js("(()=>{const form=document.querySelector('#trim-export-form'),field=form.elements.maxSizeMb,slider=form.querySelector('[data-export-size-slider]');check(field.max==='80'&&field.value==='40','whole clip starts at half its measured size');check(slider.max==='80','slider stops at original size');slider.value='80';slider.dispatchEvent(new Event('input',{bubbles:true}));check(form.querySelector('[type=submit]').disabled&&form.querySelector('#export-size-status').textContent.includes('Already under this limit'),'no-op compression explains that it already fits');field.value='100';field.dispatchEvent(new Event('change',{bubbles:true}));check(field.value==='80','typed size above source clamps on commit');slider.value='40';slider.dispatchEvent(new Event('input',{bubbles:true}));check(!form.querySelector('[type=submit]').disabled&&field.value==='40','smaller size restores compression');})()")
         screenshot('compress-clip-dialog.png')
         window.resize(360,800);pump(250)
         js("const dialog=document.querySelector('#dialog');check(dialog.scrollWidth<=dialog.clientWidth,'narrow compression dialog fits')")
@@ -478,7 +480,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         pump(150)
         js("bridge.failExport=false;bridge.holdExport=true;document.querySelector('#trim-export-form').requestSubmit();bridge.releaseOldStatus({active:true,progress:99})")
         pump(100)
-        js("(()=>{const working=document.querySelector('[data-export-working]');check(working.disabled&&working.getAttribute('aria-busy')==='true','busy button prevents another export');check(document.querySelector('#dialog-title').textContent==='Compressing clip','retry replaces the failure heading while working');check(working.querySelector('.clip-export-spinner')&&!working.querySelector('svg'),'simple spinner without a checkmark');check(document.querySelector('.clip-export-progress span').textContent==='Exporting','shared progress label');check(document.querySelector('.clip-export-source strong').textContent==='clip-18.mp4','progress keeps source filename');})()")
+        js("(()=>{const working=document.querySelector('[data-export-working]');check(working.disabled&&working.getAttribute('aria-busy')==='true','busy button prevents another export');check(document.querySelector('#dialog-title').textContent==='Compressing clip','retry replaces the failure heading while working');check(working.querySelector('.clip-export-spinner[data-lucide=loader-circle]')&&!working.querySelector('[data-lucide=check]'),'Lucide loader without a success mark');check(document.querySelector('.clip-export-progress span').textContent==='Exporting','shared progress label');check(document.querySelector('.clip-export-source strong').textContent==='clip-18.mp4','progress keeps source filename');})()")
         js("check(document.querySelector('#clip-export-progress').value!==99,'stale status cannot repaint a later export');check(document.querySelector('#clip-export-output').textContent==='Analysing clip','analysis has no misleading file size');check(document.querySelector('.clip-export-original').textContent==='Original · 80.00 MB','original size retained during encoding');bridge.exportPhase='encoding';bridge.exportBytes=1234567;")
         pump(350)
         screenshot('export-spinner-progress.png')
@@ -542,7 +544,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
                 check(Math.abs(rect.height-rect.width*{height}/{width})<1,'native {label} aspect at {viewport}');
                 check(Math.abs(box.height-rect.height)<1&&Math.abs(box.width-rect.width)<1,'video fills stage');
                 check(getComputedStyle(video).objectFit==='contain','whole frame preserved');
-                check(parseFloat(getComputedStyle(stage).borderTopLeftRadius)>0&&getComputedStyle(stage).overflow==='hidden','rounded image corners');
+                check(getComputedStyle(stage).borderTopLeftRadius==='0px'&&getComputedStyle(stage).borderTopRightRadius==='0px'&&getComputedStyle(stage).overflow==='hidden','square image corners below the clip header');
                 check(Math.abs(document.querySelector('.player-controls').getBoundingClientRect().top-box.bottom)<2,'controls directly below clip');
                 check(document.documentElement.scrollWidth<=innerWidth+1,'no horizontal overflow');
                 }}
@@ -554,7 +556,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         js("bridge.mediaPath='/ultrawide.mp4';window.aspectViewport=document.querySelector('.window-content');aspectViewport.scrollTop=100;window.aspectScroll=aspectViewport.scrollTop;window.aspectRail=document.querySelector('.clip-list');aspectRail.scrollTop=400;window.aspectRailTop=aspectRail.scrollTop;document.querySelector('[data-clip=\"clip-15.mp4\"]').focus({preventScroll:true});document.querySelector('[data-clip=\"clip-15.mp4\"]').click();")
         pump(700)
         js("check(aspectViewport.scrollTop===Math.min(aspectScroll,aspectViewport.scrollHeight-aspectViewport.clientHeight),'aspect change retains workspace scroll within available content');check(document.querySelector('.clip-list')===aspectRail&&aspectRail.scrollTop===aspectRailTop,'aspect change retains rail scroll');check(bridge.errors.length===0,bridge.errors.join(';')); ")
-        print('PASS: WebKitGTK rail/document scroll, filter, focus, save duration, thumbnails, readiness, unchanged control icons, rapid selection, eight real frame samples, keyboard trimming, stable conditional Export, clip menu dismissal/focus, distinct exported media, legacy ellipsis compression, shared ranges, format/size validation, retry snapshots, stale export status, cancellation retries despite failed/unresolved polls and decoded aspect ratios.')
+        print('PASS: WebKitGTK rail/document scroll, filter, focus, save duration, thumbnails, readiness, unchanged control icons, rapid selection, eight real frame samples, keyboard trimming, stable conditional Export, direct clip actions, distinct exported media, whole-source compression, shared ranges, format/size validation, retry snapshots, stale export status, cancellation retries despite failed/unresolved polls and decoded aspect ratios.')
     finally:
         window.destroy()
         server.shutdown()

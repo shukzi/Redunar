@@ -5,10 +5,19 @@ packaging metadata are maintained as original project work. Changing copied
 code would not remove its original license obligations, so clean-room work is
 the project rule.
 
-The application bundles a small selected set of Lucide SVG icons. Their MIT
-notice is retained verbatim at
-`packaging/LICENSE-Lucide.txt` and must be included in every
-binary distribution that ships those icons.
+The application bundles selected Lucide SVG icons from
+[Lucide 1.70.0](https://github.com/lucide-icons/lucide/tree/1.70.0/icons), with
+six shapes retained from
+[Lucide 0.468.0](https://github.com/lucide-icons/lucide/tree/0.468.0/icons).
+Group uses the unchanged artwork last revised in
+[Lucide 0.209.0](https://lucide.dev/icons/group).
+The desktop artwork is indexed in `output/tauri-redunar/ui/lucide-artwork.json`.
+The SVG geometry comes from that release; rendering, sizing, and interaction
+motion are implemented locally. Lucide uses ISC, with MIT terms for artwork
+inherited from Feather. The full notices are retained in
+`packaging/LICENSE-Lucide.txt` and must ship in every distribution containing
+these icons. Packaging stages them under `usr/share/doc/redunar/`; frontend
+builds also include the same text at `assets/LICENSE-Lucide.txt`.
 
 The in-game overlay embeds bounded antialiased subsets generated from Noto
 Sans Mono Regular and Noto Sans Regular (Copyright 2013 Google LLC). The

@@ -597,7 +597,10 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Redunar Tauri\nCategories=Game;\nExec=redunar-tauri\n",
         );
 
-        assert!(fixture.discovery().discover().expect("discover").is_empty());
+        assert_eq!(
+            fixture.discovery().discover().expect("discover"),
+            [] as [crate::steam_discovery::DiscoveredGame; 0]
+        );
     }
 
     #[test]
@@ -617,7 +620,10 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Path Game\nCategories=Game;\nPath=relative/path\nExec=native-game\n",
         );
 
-        assert!(fixture.discovery().discover().expect("discover").is_empty());
+        assert_eq!(
+            fixture.discovery().discover().expect("discover"),
+            [] as [crate::steam_discovery::DiscoveredGame; 0]
+        );
     }
 
     #[test]

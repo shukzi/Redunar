@@ -45,8 +45,12 @@ bridge.clips=Array.from({length:3},(_,i)=>({file_name:`polish-fixture-${i}.mp4`,
  bytes:8000000,modified_unix_ns:String(1000000000+i),duration_seconds:3}));
 const polishInvoke=window.__TAURI_INTERNALS__.invoke;
 window.__TAURI_INTERNALS__.invoke=async(command,args={})=>{
- if(command==='session_status'&&bridge.failSession)throw Error('Fixture session status unavailable');
- if(command==='session_status'&&bridge.sessionStatus)return structuredClone(bridge.sessionStatus);
+ if(command==='session_status'){
+  try{const result=bridge.sessionStatus?structuredClone(bridge.sessionStatus):await polishInvoke(command,args);
+   if(bridge.failSession)throw Error('Fixture session status unavailable');
+   setTimeout(()=>bridge.acceptedSessionPhase=result.phase,0);return result;
+  }catch(error){setTimeout(()=>bridge.acceptedSessionPhase='Unavailable',0);throw error;}
+ }
  if(command==='save_shortcuts'&&bridge.failShortcuts){
   bridge.calls.push({command,args:structuredClone(args)});
   throw Error('Fixture shortcut write rejected');
@@ -82,9 +86,8 @@ window.polish={
   const groups=qa('.metric-group');check(groups.length===2,'frame and hardware groups');
   for(const group of groups){
    const inputs=[...group.querySelectorAll('[data-metric]')];
-   const numbers=group.querySelector('.metric-group-count').textContent.match(/\d+/g)?.map(Number);
-   check(inputs.length>0&&numbers?.length===2,'group has metrics and readable counts');
-   check(numbers[0]===inputs.filter(i=>i.checked).length&&numbers[1]===inputs.length,'group count matches controls');
+   check(inputs.length>0,'group retains its metric controls');
+   check(!group.querySelector('.metric-group-count'),'section heading has no count');
   }
   check(parseInt(q('.overlay-metric-count').textContent,10)===qa('[data-metric]:checked').length,'total count matches controls');
  },
@@ -104,7 +107,8 @@ window.polish={
   const rows=[...root.querySelectorAll('.field')].filter(polish.visible);
   check(rows.length>0,'visible field rows');
   for(const row of rows){const s=getComputedStyle(row);
-   check(s.borderBottomStyle==='none'||parseFloat(s.borderBottomWidth)===0||s.borderBottomColor==='rgba(0, 0, 0, 0)','no field underline');}
+   check(parseFloat(s.borderBottomWidth)<=1,'field separators stay quiet');
+   check(s.borderBottomColor!=='rgb(231, 71, 79)','field separators do not use the accent');}
  },
  fit:()=>check(document.documentElement.scrollWidth<=innerWidth+1,'no horizontal page overflow'),
 };
@@ -222,20 +226,20 @@ try:
         check(document.activeElement!==inactive,'inert controls cannot take focus');
         polish.fields(q('.overlay-settings-editor'));
     """)
-    test('Live overlay and session metrics are stacked equal cards aligned to editor', r"""
-        const cards=qa('.overlay-preview-features>.panel');check(cards.length===2,'two independent feature cards');
-        const a=cards[0].getBoundingClientRect(),b=cards[1].getBoundingClientRect();
-        polish.near(a.left,b.left,'stacked left');polish.near(a.right,b.right,'equal width');
-        polish.near(a.height,b.height,'equal height');check(b.top>=a.bottom,'cards stack without overlap');
-        polish.near(b.bottom,q('.overlay-settings-editor').getBoundingClientRect().bottom,'shared bottom');
+    test('Live overlay and session metrics use aligned rows beside the preview', r"""
+        const rows=qa('.overlay-preview-features>section');check(rows.length===2,'two runtime rows');
+        const a=rows[0].getBoundingClientRect(),b=rows[1].getBoundingClientRect();
+        polish.near(a.left,b.left,'shared label edge');polish.near(a.right,b.right,'shared control edge');
+        check(b.top>=a.bottom&&b.width>0,'runtime rows stack without overlap');
+        check(q('.overlay-runtime-section').getBoundingClientRect().bottom<=q('.overlay-settings-editor').getBoundingClientRect().top,'editor follows runtime rows');
     """)
-    test('Idle overlay visibility stays below preview and requires Save', r"""
+    test('Idle overlay visibility keeps its own row and requires Save', r"""
         const input=q('[data-global=overlay]');
-        check(input.closest('.live-overlay-panel'),'idle visibility stays in its own left card');
+        check(input.closest('.live-overlay-panel'),'idle visibility stays in its own setting row');
         check(!q('.overlay-appearance-fields [data-global=overlay]'),'no duplicated appearance control');
-        check(q('.overlay-save-mode').textContent==='Saved with settings','idle save semantics explicit');
-        check(q('.live-overlay-panel .field p').textContent.includes('future game sessions'),'idle explanation');
-        window.polishVisibilityInput=input;window.polishCards=qa('.overlay-preview-features>.panel');
+        check(!q('.overlay-save-mode'),'no redundant save-mode label');
+        check(q('.live-overlay-panel .overlay-visibility-description').textContent.includes('Save changes to apply overlay visibility'),'stable explanation');
+        window.polishVisibilityInput=input;window.polishCards=qa('.overlay-preview-features>section');
         window.polishIdleWrites=polish.writes().length;input.click();
         polish.set('[data-global=scale]','105');input.focus();
         check(polish.writes().length===polishIdleWrites,'idle change does not auto-save');
@@ -245,58 +249,65 @@ try:
     pump(200)
     snap('overlay-idle-draft-wide')
     js('bridge.idle=false;bridge.replayInactive=false;')
-    wait_for("q('.overlay-save-mode').textContent==='Auto-saved'")
-    test('Session start updates the explanation without moving controls or dropping drafts', r"""
+    wait_for("bridge.acceptedSessionPhase==='Running'")
+    test('Session start preserves drafts without saving visibility', r"""
         check(q('[data-global=overlay]')===polishVisibilityInput,'visibility node retained');
-        check(polishCards.every((card,i)=>card===qa('.overlay-preview-features>.panel')[i]),'feature cards retained');
+        check(polishCards.every((card,i)=>card===qa('.overlay-preview-features>section')[i]),'runtime rows retained');
         check(document.activeElement===polishVisibilityInput,'focus retained');
         check(!polishVisibilityInput.checked&&q('[data-global=scale]').value==='105','idle drafts retained');
-        check(q('.live-overlay-panel .field p').textContent.includes('immediately'),'live explanation');
-        polishVisibilityInput.click();
+        check(polish.writes().length===polishIdleWrites,'session start does not save drafts');
+        check(!q('.live-overlay-panel .auto-saved-label'),'visibility is not marked Auto-saved');
+        click('[data-action=save-global]');
     """)
-    wait_for('polish.writes().length>polishIdleWrites&&!q("[data-global=overlay]").disabled')
-    test('Live visibility saves only visibility and retains pending appearance', r"""
+    wait_for('polish.writes().length>polishIdleWrites&&q(".settings-save-bar").hidden')
+    test('Explicit Save commits visibility and appearance while a session is running', r"""
         const write=polish.writes().at(-1);check(write.command==='save_global_settings','real save command');
-        check(write.args.input.overlay&&write.args.input.scale===polishBaseline.scale,'visibility-only payload');
-        check(q('[data-global=scale]').value==='105'&&values.scale===polishBaseline.scale,'appearance draft retained');
-        check(!q('.settings-save-bar').hidden,'appearance still needs Save');
-        bridge.conflict=true;window.polishLiveWrites=polish.writes().length;
-        q('[data-global=overlay]').click();
+        check(write.args.input.overlay===false&&write.args.input.scale===105,'complete explicit draft payload');
+        check(!values.overlay&&values.scale===105,'saved values acknowledged');
+        check(q('.settings-save-bar').hidden,'successful save clears profile draft');
+        window.polishCommitted=structuredClone(values);window.polishLiveWrites=polish.writes().length;
+        bridge.conflict=true;q('[data-global=overlay]').click();polish.set('[data-global=scale]','110');
+        check(polish.writes().length===polishLiveWrites,'running toggle does not auto-save');
+        check(!values.overlay&&values.scale===105,'edits leave saved values intact');
+        click('[data-action=save-global]');
     """)
-    wait_for('polish.writes().length>polishLiveWrites&&!q("[data-global=overlay]").disabled')
-    test('Rejected live visibility restores saved visibility without losing appearance', r"""
-        check(q('[data-global=overlay]').checked&&values.overlay,'failed immediate save rolled back');
-        check(q('[data-global=scale]').value==='105','appearance survived failure');
+    wait_for('polish.writes().length>polishLiveWrites&&!q("[data-action=save-global]").disabled')
+    test('Rejected Save retains requested visibility and appearance for retry', r"""
+        check(q('[data-global=overlay]').checked&&!values.overlay,'requested visibility retained without a saved change');
+        check(q('[data-global=scale]').value==='110'&&values.scale===105,'appearance draft survives rejection');
+        check(!q('.settings-save-bar').hidden,'failed draft remains available');
+        window.polishVisibilityInput=q('[data-global=overlay]');
         bridge.conflict=false;bridge.idle=true;bridge.replayInactive=true;
     """)
-    wait_for("q('.overlay-save-mode').textContent==='Saved with settings'")
-    test('Session end restores explicit Save semantics in the same card', r"""
+    wait_for("bridge.acceptedSessionPhase==='Idle'")
+    test('Session end retains pending edits and Discard restores the saved profile', r"""
         check(q('[data-global=overlay]')===polishVisibilityInput,'same input after session ends');
-        window.polishEndedWrites=polish.writes().length;q('[data-global=overlay]').click();
-        check(polish.writes().length===polishEndedWrites,'idle change again waits for Save');
+        check(q('[data-global=overlay]').checked&&q('[data-global=scale]').value==='110','pending edits survive session end');
         click('[data-action=discard-global]');
-        check(q('[data-global=overlay]').checked&&q('[data-global=scale]').value===String(polishBaseline.scale),'Discard restores both drafts');
-        bridge.idle=false;bridge.replayInactive=false;
-        window.polishWrites=polish.writes().length;
+        check(q('[data-global=overlay]').checked===polishCommitted.overlay&&q('[data-global=scale]').value===String(polishCommitted.scale),'Discard restores both saved values');
+        q('[data-global=overlay]').click();polish.set('[data-global=scale]',String(polishBaseline.scale));
+        click('[data-action=save-global]');
     """)
-    wait_for("q('.overlay-save-mode').textContent==='Auto-saved'")
+    wait_for("q('.settings-save-bar').hidden&&values.overlay===polishBaseline.overlay&&values.scale===polishBaseline.scale")
+    js("bridge.idle=false;bridge.replayInactive=false;window.polishWrites=polish.writes().length;")
+    wait_for("bridge.acceptedSessionPhase==='Running'")
     js("window.polishVisibilityInput=q('[data-global=overlay]');bridge.modules.in_game_overlay='Unavailable';bridge.sessionStatus={phase:'CleanupPending',can_end:true,launch_locked:true};")
     pump(2800)
-    test('An owned session with unavailable capture promises saving, not live readiness', r"""
-        check(q('.overlay-save-mode').textContent==='Auto-saved','automatic persistence label');
+    test('Unavailable capture describes saving without claiming live readiness', r"""
+        check(!q('.live-overlay-panel .auto-saved-label'),'no automatic persistence claim');
         const text=q('.live-overlay-panel').textContent;
-        check(text.includes('when available')&&!text.includes('Applies immediately'),'no false overlay readiness');
+        check(text.includes('Save changes to apply overlay visibility')&&!text.includes('Applies immediately'),'explicit save with capability limit');
         check(q('[data-global=overlay]')===polishVisibilityInput,'same control in cleanup state');
         bridge.failSession=true;
     """)
-    wait_for("q('.overlay-save-mode').textContent==='Saved with settings'")
-    test('Unknown session status retains cards and drafts without claiming live behavior', r"""
-        check(qa('.overlay-preview-features>.panel').length===2,'both cards still mounted');
+    wait_for("bridge.acceptedSessionPhase==='Unavailable'")
+    test('Unknown session status retains runtime rows and drafts without claiming live behavior', r"""
+        check(qa('.overlay-preview-features>section').length===2,'both runtime rows still mounted');
         check(q('[data-global=overlay]')===polishVisibilityInput,'same control on rejected read');
         check(q('.settings-save-bar').hidden,'poll failure does not create a draft');
         bridge.failSession=false;bridge.sessionStatus=null;bridge.modules.in_game_overlay='Enabled';
     """)
-    wait_for("q('.overlay-save-mode').textContent==='Auto-saved'")
+    wait_for("bridge.acceptedSessionPhase==='Running'")
     snap('overlay-appearance-wide')
     test('Appearance and custom metric drafts survive both inner tabs', r"""
         polish.set('[data-global=scale]','110');click('button[data-layout=Ribbon]');
@@ -314,13 +325,13 @@ try:
         const text=q('#global-save-feedback').textContent;
         check(text.includes('Overlay appearance')&&text.includes('Displayed metrics'),'all pending scopes named');
     """)
-    test('Metric groups keep checked and unchecked rows plain', r"""
+    test('Metric groups use aligned rows with quiet separators', r"""
         for(const label of qa('.metric-group .metric-toggles label')){
             const s=getComputedStyle(label);
-            check(s.backgroundImage==='none'&&s.backgroundColor==='rgba(0, 0, 0, 0)','no metric card fill');
+            check(s.backgroundImage==='none'&&s.backgroundColor==='rgba(0, 0, 0, 0)','metric rows share the card surface');
             check(s.boxShadow==='none','no row shadow');
-            for(const edge of ['Top','Right','Bottom','Left'])
-                check(parseFloat(s['border'+edge+'Width'])===0||s['border'+edge+'Color']==='rgba(0, 0, 0, 0)','no metric card border');
+            check(label.getBoundingClientRect().height>=48,'metric rows keep a comfortable target');
+            if(label.nextElementSibling)check(parseFloat(s.borderBottomWidth)>0,'adjacent rows have a quiet separator');
         }
     """)
     snap('overlay-metrics-wide')
@@ -598,14 +609,14 @@ try:
     """)
     wait_for("q('#clip-video')?.readyState>=2&&!q('#trim-start-bar').disabled", timeout_ms=15000)
     pump(400)
-    test('Wide Replay panels share a bottom and menu is last and far right', r"""
+    test('Wide Replay panels share a bottom and expose five inline actions', r"""
         const editor=q('.replay-workspace>.editor'),browser=q('.replay-workspace>.clip-browser');
         polish.near(editor.getBoundingClientRect().bottom,browser.getBoundingClientRect().bottom,'Replay panel bottoms');
-        const menu=q('.clip-action-menu'),header=menu.parentElement;
-        check(header.lastElementChild===menu,'menu last in header DOM');
-        const r=menu.getBoundingClientRect();
-        for(const sibling of [...header.children].filter(e=>e!==menu&&polish.visible(e)))
-            check(sibling.getBoundingClientRect().right<=r.left+2,'menu far right without overlap');
+        const header=q('.clip-edit-actions'),actions=[...header.querySelectorAll('button')];
+        check(actions.length===5&&!q('.clip-action-menu'),'five direct actions without an overflow menu');
+        check(actions.at(-1).dataset.action==='delete-selected-clip','trash remains last');
+        check(actions.every(action=>action.getAttribute('aria-label')&&action.querySelector('svg')),'icons have accessible labels');
+        for(const action of actions){const r=action.getBoundingClientRect();polish.near(r.width,40,'square action width');polish.near(r.height,40,'square action height');}
         const button=q('#export-clip-button');
         check(button.closest('.clip-editor-footer'),'Export belongs to trim footer');
         check(button.textContent.trim()==='Export','semantic Export label');
@@ -628,10 +639,9 @@ try:
             }
         }
     """)
-    test('Whole-clip compression remains reachable in the last menu', r"""
-        click('.clip-action-menu summary');
-        const action=q('.clip-action-menu [data-action=compress-selected-clip]');
-        check(polish.visible(action)&&/Compress clip/.test(action.textContent),'whole-clip action visible');
+    test('Whole-clip compression remains directly reachable', r"""
+        const action=q('.clip-edit-actions [data-action=compress-selected-clip]');
+        check(polish.visible(action)&&action.getAttribute('aria-label')==='Compress clip','whole-clip action visible');
         action.click();check(q('#trim-export-form'),'compression options open');
         check(q('[name=compression]').value==='true','whole-clip semantics retained');
         click('#dialog [data-close]');check(!bridge.calls.some(c=>c.command==='export_replay_clip'),'cancel does not submit');
@@ -644,10 +654,10 @@ try:
     """)
     snap('replay-trimmed-wide')
     window.resize(640, 800);pump(400)
-    test('Narrow Replay keeps trim actions and the last header menu inside the page', r"""
+    test('Narrow Replay keeps trim and inline actions inside the page', r"""
         polish.fit();const footer=q('.clip-editor-footer'),button=q('#export-clip-button');
         check(polish.visible(button)&&button.closest('.clip-editor-footer')===footer,'narrow Export retained');
-        for(const element of [button,q('.clip-action-menu')]){
+        for(const element of [button,...qa('.clip-edit-actions button')]){
             const r=element.getBoundingClientRect();check(r.left>=0&&r.right<=innerWidth+1,'action fits horizontally');
         }
         click('[data-action=reset-trim]');check(!polish.visible(q('#export-clip-button')),'reset hides whole-clip Export');

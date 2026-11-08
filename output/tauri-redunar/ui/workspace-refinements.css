@@ -27,7 +27,7 @@ html[data-sidebar=collapsed] .sidebar .nav-unsaved-marker { top:8px; right:8px; 
 @media(max-width:700px){.sidebar .nav-unsaved-marker { top:8px; right:8px; }}
 /* Keep status and its action on one row; errors can grow without clipping. */
 .settings-page .updates-panel { padding:24px; }
-.settings-page .update-status-card { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:12px 14px; margin-top:18px; padding:0 0 18px; border-bottom:1px solid var(--border); }
+.settings-page .update-status-card { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:12px 14px; margin-top:18px; padding:0; border-bottom:0; }
 .settings-page .update-emblem { width:42px; height:42px; display:grid; place-items:center; align-self:start; border:1px solid #63343a; background:#26171a; border-radius:11px; color:#f16b73; }
 .updater-icon { width:20px; height:20px; flex:none; }
 .update-status-copy { min-width:0; }
@@ -37,9 +37,11 @@ html[data-sidebar=collapsed] .sidebar .nav-unsaved-marker { top:8px; right:8px; 
 .update-status-description { margin-top:6px; font-size:12px; line-height:1.6; color:var(--muted); overflow-wrap:anywhere; }
 .update-card-actions { grid-column:3; grid-row:1; display:flex; flex-direction:row; align-items:center; gap:8px; }
 .update-card-actions .button { min-height:38px; }
-.update-refresh { display:grid; place-items:center; width:32px; height:38px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--muted); cursor:pointer; }
+.update-refresh { display:grid; place-items:center; flex:0 0 40px; width:40px; height:40px; padding:0; border:1px solid #383838; border-radius:11px; background:#1b1b1b; color:var(--muted); cursor:pointer; transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease,transform 120ms ease; }
 .update-refresh .updater-icon { width:17px; height:17px; }
-.update-refresh:hover:not(:disabled) { color:var(--text); background:#242424; }
+.update-refresh:hover:not(:disabled) { color:var(--text); background:#282828; border-color:#555; }
+.update-refresh:active:not(:disabled) { transform:scale(.95); }
+@media(prefers-reduced-motion:reduce){.update-refresh{transition:none}}
 .update-refresh:focus-visible { outline:2px solid var(--red); outline-offset:3px; }
 .update-refresh:disabled { opacity:.45; cursor:default; }
 .update-preferences { display:grid; gap:6px; padding-top:12px; }
@@ -100,11 +102,11 @@ html[data-sidebar=collapsed] .sidebar .settings-link .sidebar-update-badge { dis
 .history-filter-empty { display:grid; justify-items:center; gap:14px; padding:24px 12px; text-align:center; font-size:12px; color:var(--muted); }
 /* File dialogs share compact fields and one consistent action footer. */
 #dialog:has(.compact-clip-form) { box-sizing:border-box; width:min(460px,calc(100vw - 32px)); padding:24px; }
-#dialog:has(.compact-clip-form) .dialog-head { margin-bottom:20px; }
-#dialog:has(.compact-clip-form) .dialog-head h2 { font-size:20px; }
+:where(#dialog):has(.compact-clip-form) .dialog-head { margin-bottom:20px; }
+:where(#dialog):has(.compact-clip-form) .dialog-head h2 { font-size:20px; }
 .compact-clip-form { display:grid; gap:20px; }
 .compact-clip-form .form-label { margin:0; }
-#dialog .compact-clip-form .dialog-actions { margin-top:0; padding-top:16px; border-top:1px solid #2d2d2d; }
+:where(#dialog) .compact-clip-form .dialog-actions { margin-top:0; padding-top:16px; border-top:1px solid #2d2d2d; }
 .trash-confirm-content { display:grid; gap:12px; }
 .trash-confirm-content strong { font-size:13px; font-weight:500; line-height:1.6; overflow-wrap:anywhere; }
 .trash-confirm-content p { margin:0; font-size:12px; line-height:1.6; color:var(--muted); }

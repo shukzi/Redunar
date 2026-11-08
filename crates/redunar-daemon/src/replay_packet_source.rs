@@ -142,7 +142,10 @@ mod tests {
                 .save_streaming_tracks(&stream, &mut packets, &audio, format)
                 .unwrap_err();
             assert!(error.to_string().contains("cancelled"), "{error}");
-            assert!(store.inventory().unwrap().is_empty());
+            assert_eq!(
+                store.inventory().unwrap(),
+                [] as [crate::replay_store::ReplayClipEntry; 0]
+            );
             assert_eq!(
                 std::fs::read_dir(&root).unwrap().count(),
                 1,

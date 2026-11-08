@@ -99,12 +99,23 @@ impl ReplayReleaseTransport {
                 "replay release route limit reached",
             ));
         }
-        let token = self
-            .next_token
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                next.checked_add(1)
-            })
-            .map_err(|_| CaptureSessionError::new("replay export token exhausted"))?;
+        // Keep checked allocation on the minimum supported compiler without
+        // the deprecated atomic update API. Failed attempts never wrap tokens.
+        let mut token = self.next_token.load(Ordering::Relaxed);
+        loop {
+            let next = token
+                .checked_add(1)
+                .ok_or_else(|| CaptureSessionError::new("replay export token exhausted"))?;
+            match self.next_token.compare_exchange_weak(
+                token,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => token = current,
+            }
+        }
         targets.insert(
             token,
             ReplayExportOrigin {
@@ -183,6 +194,22 @@ mod tests {
     use std::fs;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn exhausted_tokens_never_wrap_or_register_an_unowned_route() {
+        let transport = ReplayReleaseTransport::new(
+            CaptureSessionId::new([1; 16]).unwrap(),
+            PathBuf::from("/fixture/replay/capture.sock"),
+            None,
+        );
+        transport.next_token.store(u64::MAX - 1, Ordering::Relaxed);
+        assert_eq!(transport.register(1, None).unwrap(), u64::MAX - 1);
+        for _ in 0..2 {
+            assert!(transport.register(2, None).is_err());
+            assert_eq!(transport.next_token.load(Ordering::Relaxed), u64::MAX);
+            assert_eq!(lock_unpoisoned(&transport.targets).len(), 1);
+        }
+    }
 
     #[test]
     fn actual_handle_shutdown_returns_with_routes_and_ingress_saturated() {

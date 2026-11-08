@@ -1,0 +1,88 @@
+/* Dialogs retain their established widths and native focus/dismissal behavior. */
+#dialog {
+  --dialog-padding: 28px;
+  box-sizing: border-box;
+  width: min(540px, 92vw);
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 48px);
+  padding: var(--dialog-padding);
+  overflow: auto;
+  background: #141414;
+  border: 1px solid #3c3c3c;
+  border-radius: 18px;
+  box-shadow: none;
+}
+#dialog:has(.clip-export-options,.clip-export-running) {
+  --dialog-padding: 24px;
+  width: min(440px, calc(100vw - 32px));
+}
+#dialog:has(.compact-clip-form) {
+  --dialog-padding: 24px;
+  padding: var(--dialog-padding);
+}
+#dialog::backdrop { background: #0009; backdrop-filter: blur(5px); }
+#dialog .dialog-head { align-items: center; gap: 16px; margin: 0 0 24px; }
+#dialog .dialog-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+#dialog .dialog-heading h2 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.4; letter-spacing: -.2px; }
+#dialog .dialog-heading h2:focus { outline: none; }
+#dialog .dialog-emblem {
+  display: grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px;
+  border: 1px solid #383838; border-radius: 12px; background: #1d1d1d; color: #bcbcbc;
+}
+#dialog .dialog-emblem svg { width: 19px; height: 19px; }
+#dialog .dialog-emblem[data-kind=confirm],
+#dialog .dialog-emblem[data-kind=warning] { color: #f07076; }
+#dialog .dialog-emblem[data-kind=success] { color: #eeeeee; }
+#dialog .dialog-close {
+  display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px;
+  padding: 0; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: #929292; cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+#dialog .dialog-close svg { width: 17px; height: 17px; }
+#dialog .dialog-close:hover:not(:disabled) { background: #242424; border-color: #3a3a3a; color: #f3f3f3; }
+#dialog .dialog-close:active:not(:disabled) { transform: scale(.94); }
+#dialog .dialog-close:disabled { opacity: .35; cursor: default; }
+#dialog .dialog-close:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+#dialog-body { min-width: 0; }
+#dialog-body > p { margin: 0; color: #b4b4b4; font-size: 13px; line-height: 1.7; }
+#dialog-body > .dialog-supporting { margin-top: 8px; color: #888; font-size: 12px; }
+#dialog-body > p + p { margin-top: 12px; }
+#dialog-body > p + form { margin-top: 20px; }
+#dialog .form-label { gap: 9px; color: #d5d5d5; }
+#dialog .form-label .picker-field { margin-top: 0; }
+#dialog .form-label input:not([type=range]),
+#dialog .form-label textarea { border-color: #373737; background: #101010; border-radius: 10px; }
+#dialog .form-label input:not([type=range]):focus,
+#dialog .form-label textarea:focus { border-color: var(--red); }
+#dialog .dialog-actions,
+#dialog :is(.compact-clip-form,.clip-export-options,.clip-export-running) .dialog-actions {
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px;
+  width: auto; margin: 24px calc(-1 * var(--dialog-padding)) calc(-1 * var(--dialog-padding));
+  padding: 20px var(--dialog-padding); border: 0; border-top: 1px solid #2c2c2c;
+  border-radius: 0 0 17px 17px; background: #111111;
+}
+#dialog :is(.compact-clip-form,.clip-export-options,.clip-export-running) .dialog-actions { margin-top: 4px; }
+#dialog .dialog-actions .button { min-height: 40px; padding: 10px 16px; border-radius: 10px; font-size: 12px; }
+#dialog .dialog-actions .button.primary { background: #882b32; border-color: #b7434c; color: #fff1f1; }
+#dialog .dialog-actions .button.primary:hover:not(:disabled) { background: #a13039; border-color: #df5962; }
+#dialog .dialog-actions > [data-close]:first-child:not(.primary) { margin-right: auto; background: transparent; border-color: transparent; color: #b4b4b4; }
+#dialog .dialog-actions > [data-close]:first-child:not(.primary):hover { background: #242424; border-color: #383838; color: #ededed; }
+#dialog .export-complete,
+#dialog .trash-confirm-content { padding: 18px; border: 1px solid #303030; border-radius: 12px; background: #191919; }
+#dialog .export-complete { display: grid; gap: 9px; margin: 0; }
+#dialog .export-complete strong { font-size: 14px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+#dialog .export-complete p { margin: 0; color: #999; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+#dialog .export-complete small { margin: 0; color: #b2b2b2; font: 11px/1.6 var(--mono); }
+#dialog .dialog-error { padding: 14px 16px; border-color: #684044; border-radius: 11px; background: #1d1919; color: #f0a3a7; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: no-preference) {
+  #dialog[open]::backdrop { animation: dialog-backdrop-enter 140ms ease-out; }
+}
+@keyframes dialog-backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #dialog .dialog-close { transition: none; } }
+@media (max-width: 480px) {
+  #dialog { --dialog-padding: 22px; }
+  #dialog .dialog-actions { gap: 10px; }
+  #dialog .dialog-actions .button { padding-inline: 12px; }
+}
+@media (max-width: 380px) { #dialog:has(.clip-export-options,.clip-export-running) { --dialog-padding: 20px; } }

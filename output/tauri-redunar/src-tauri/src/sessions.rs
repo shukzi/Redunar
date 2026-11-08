@@ -384,7 +384,7 @@ impl Engine {
 
     fn claim_update_restart(&mut self) -> Result<(), String> {
         self.ensure_idle()
-            .map_err(|_| "End the game session before restarting Redunar".to_owned())?;
+            .map_err(|_| "End the session to restart.".to_owned())?;
         // Same lock as manual launch and authenticated Steam attachment.
         self.shutdown = true;
         Ok(())
@@ -744,7 +744,7 @@ impl Engine {
             self.lifecycle
                 .needs_attention(self.message.clone().expect("cleanup failure message"));
         } else {
-            self.message = active.exit_failure.clone().or_else(|| Some(if !active.confirmed { "Steam launch was not confirmed. Redunar released its session resources; the game may still start." } else if active.completed { "Game session ended." } else { "Redunar's session ended. The game can keep running." }.into()));
+            self.message = active.exit_failure.clone().or_else(|| Some(if !active.confirmed { "Steam launch is unconfirmed. Session resources released. The game can still start." } else if active.completed { "Game session ended." } else { "Session ended. The game can keep running." }.into()));
         }
         if result.is_ok() && active.completed {
             self.active = None;

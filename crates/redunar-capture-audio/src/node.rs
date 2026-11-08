@@ -384,7 +384,7 @@ mod tests {
         for malformed in [b"malformed".as_slice(), b"[bad]", b"[{},]", b"{}"] {
             assert!(microphone_inputs_from_registry(malformed).is_err());
         }
-        assert!(microphone_inputs_from_registry(b"[ ]").unwrap().is_empty());
+        assert_eq!(microphone_inputs_from_registry(b"[ ]").unwrap(), []);
         assert!(microphone_inputs_from_registry(&vec![b' '; MAX_REGISTRY_BYTES + 1]).is_err());
     }
     #[test]

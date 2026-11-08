@@ -63,7 +63,7 @@ fn explicit_probe_exclusion_never_admits_nvidia() {
         .snapshot_with_nvidia_readiness()
         .expect("probe");
     assert_eq!(readiness, NvidiaReadiness::NotRequested);
-    assert!(snapshot.gpus.is_empty());
+    assert_eq!(snapshot.gpus, [] as [redunar_core::GpuSnapshot; 0]);
     let probe = fixture.probe();
     let sampler = LinuxTelemetrySampler::with_nvidia(probe.proc_root, probe.sys_root, false)
         .expect("sampler");
@@ -149,7 +149,7 @@ fn intel_hybrid_is_admitted_but_multiple_nvidia_gpus_are_withheld() {
             assert_eq!(snapshot.gpus.len(), 1);
         } else {
             assert_eq!(readiness, NvidiaReadiness::AmbiguousTopology);
-            assert!(snapshot.gpus.is_empty());
+            assert_eq!(snapshot.gpus, [] as [redunar_core::GpuSnapshot; 0]);
         }
     }
 }
@@ -166,7 +166,7 @@ fn missing_render_device_and_unidentified_render_node_fail_closed() {
         .snapshot_with_nvidia_readiness()
         .expect("probe");
     assert_eq!(readiness, NvidiaReadiness::NoRenderDevice);
-    assert!(snapshot.gpus.is_empty());
+    assert_eq!(snapshot.gpus, [] as [redunar_core::GpuSnapshot; 0]);
 
     fixture.write("sys/class/drm/card1/device/drm/renderD128/dev", "226:128\n");
     // The global render link can be missing in a restricted sysfs view;
@@ -187,7 +187,7 @@ fn missing_render_device_and_unidentified_render_node_fail_closed() {
         .snapshot_with_nvidia_readiness()
         .expect("probe");
     assert_eq!(readiness, NvidiaReadiness::AmbiguousTopology);
-    assert!(snapshot.gpus.is_empty());
+    assert_eq!(snapshot.gpus, [] as [redunar_core::GpuSnapshot; 0]);
 }
 
 #[test]

@@ -219,7 +219,6 @@ impl ReplayRing {
         })
     }
 
-    #[must_use]
     pub fn packets(&self) -> impl ExactSizeIterator<Item = &EncodedReplayPacket> {
         self.packets.iter()
     }

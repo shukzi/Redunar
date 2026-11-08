@@ -1,3 +1,4 @@
+import {icon} from './icons.mjs';
 // Unified copy form. The native host validates and owns all media work.
 const escape = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock = value => Number.isFinite(value)?`${Math.floor(value/60).toString().padStart(2,'0')}:${Math.floor(value%60).toString().padStart(2,'0')}`:'—';
@@ -29,8 +30,7 @@ export function compressionSizePlan({sourceBytes=null,sourceDuration=null,start=
  return {baselineBytes,estimated:!compression,maxMb,available,limitMb:available?Math.max(.1,Math.min(maxMb,preferred)):.1};
 }
 
-const svg=path=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"/></svg>`;
-export const clipExportSpinner = () => '<span class="clip-export-spinner" aria-hidden="true"></span>';
+export const clipExportSpinner = () => icon('spinner','clip-export-spinner');
 // Capture this once when opening the dialog. Neither a later player selection nor
 // Retry may replace the source/range. Exact equality avoids rounding away trims.
 export function clipExportSnapshot({fileName,thumbnail='',sourceBytes=null,sourceDuration=null,start,end,selectionStart=start,selectionEnd=end,copyRange,options={}}) {
@@ -51,7 +51,7 @@ function exportRange(snapshot,mode) {
 
 function clipExportSource({fileName,thumbnail='',sourceBytes=null,start,end,copyRange='selection'}) {
  const whole=copyRange==='entire';
- return `<div class="clip-export-source"><div class="clip-export-thumbnail">${thumbnail?`<img src="${escape(thumbnail)}" alt="">`:svg('M4 5h16v14H4zM10 9l5 3-5 3z')}</div><div class="clip-export-source-info"><strong title="${escape(fileName)}">${escape(fileName)}</strong><div class="clip-export-range"><span data-export-range-label>${whole?'Entire clip':'Selected range'}</span><span aria-hidden="true">·</span><strong data-export-range-time>${whole?clock(end):`${clock(start)}–${clock(end)}`}</strong></div>${clipExportSize(sourceBytes)?`<div class="clip-export-original">Original · ${clipExportSize(sourceBytes)}</div>`:''}</div></div>`;
+ return `<div class="clip-export-source"><div class="clip-export-thumbnail">${thumbnail?`<img src="${escape(thumbnail)}" alt="">`:icon('video')}</div><div class="clip-export-source-info"><strong title="${escape(fileName)}">${escape(fileName)}</strong><div class="clip-export-range"><span data-export-range-label>${whole?'Entire clip':'Selected range'}</span><span aria-hidden="true">·</span><strong data-export-range-time>${whole?clock(end):`${clock(start)}–${clock(end)}`}</strong></div>${clipExportSize(sourceBytes)?`<div class="clip-export-original">Original · ${clipExportSize(sourceBytes)}</div>`:''}</div></div>`;
 }
 
 export function clipExportProgressView({fileName,thumbnail='',sourceBytes=null,start,end,copyRange,options={},progress=0}) {
@@ -72,18 +72,16 @@ export function clipExportForm(context) {
  const hasSelection=validSelection&&(sourceDuration===null||selectionStart!==0||selectionEnd!==sourceDuration);
  const rangeChoices=[...(sourceDuration!==null||whole?[['entire','Entire clip']]:[]),...(hasSelection||!whole?[['selection','Selected range']]:[])];
  const size=compressionSizePlan({sourceBytes,sourceDuration,start,end,compression:whole,maxSizeMb:value.maxSizeMb}),limit=size.limitMb,maximum=size.available?size.maxMb:.1;
- const baseline=size.baselineBytes===null?'Size unavailable':`${whole?'Original ·':'Selection ≈'} ${clipExportSize(size.baselineBytes)}`;
+ const baseline=size.baselineBytes===null?'Size unavailable':whole?'0.1 MB':`Selection ≈ ${clipExportSize(size.baselineBytes)}`;
  return `<form id="trim-export-form" class="compact-clip-form clip-export-options" data-size-limited="${limited}" data-size-available="${size.available}" data-baseline-bytes="${size.baselineBytes??''}">
  <input type="hidden" name="fileName" value="${escape(fileName)}"><input type="hidden" name="start" value="${escape(start??'')}"><input type="hidden" name="end" value="${escape(end??'')}"><input type="hidden" name="compression" value="${limited&&whole}"><input type="hidden" name="sourceBytes" value="${clipExportSize(sourceBytes)?sourceBytes:''}"><input type="hidden" name="sourceDuration" value="${sourceDuration??''}"><input type="hidden" name="selectionStart" value="${escape(selectionStart??'')}"><input type="hidden" name="selectionEnd" value="${escape(selectionEnd??'')}"><input type="hidden" name="thumbnail" value="${escape(thumbnail)}">
  ${clipExportSource({fileName,thumbnail,sourceBytes,start,end,copyRange})}
- <div class="clip-copy-range"><label for="export-range">Range</label>${rangeChoices.length>1?`<select id="export-range" name="copyRange" aria-label="Export range">${choices(rangeChoices,copyRange)}</select>`:`<input type="hidden" name="copyRange" value="${copyRange}"><span>${whole?'Entire clip':'Selected range'}</span>`}</div>
- <div class="clip-export-format"><label for="export-format">Format</label><select id="export-format" name="outputFormat" aria-label="Export format">${choices([['mp4','MP4'],['mkv','MKV']],value.outputFormat)}</select></div>
- <div class="form-label"><label for="export-filename">Filename</label><div class="clip-export-filename"><input id="export-filename" name="outputName" required maxlength="200" value="${escape(outputName)}"><span data-export-extension>.${value.outputFormat}</span></div></div>
+ ${rangeChoices.length>1?`<div class="clip-copy-range"><label for="export-range">Range</label><select data-choice-switcher id="export-range" name="copyRange" aria-label="Export range">${choices(rangeChoices,copyRange)}</select></div>`:`<input type="hidden" name="copyRange" value="${copyRange}">`}
+ <div class="form-label"><div class="clip-export-file-heading"><label for="export-filename">Filename</label><div class="clip-export-format"><select data-choice-switcher id="export-format" name="outputFormat" aria-label="Export format">${choices([['mp4','MP4'],['mkv','MKV']],value.outputFormat)}</select></div></div><div class="clip-export-filename"><input id="export-filename" name="outputName" required maxlength="200" value="${escape(outputName)}"><span data-export-extension>.${value.outputFormat}</span></div></div>
  <section class="clip-compression-controls clip-export-foldout" aria-label="Compression options">
  <div class="clip-copy-compression-row"><label for="export-compress">Compress copy</label><label class="switch"><input id="export-compress" name="limitSize" type="checkbox" aria-label="Compress copy" aria-controls="export-size-controls" aria-expanded="${limited}" ${limited?'checked':''}><span></span></label></div>
- <div id="export-size-controls" data-export-size-controls><div class="clip-export-size-inner"><div class="clip-export-size-heading"><label for="export-size">Maximum size</label></div><div class="clip-export-size-value" data-export-size-field><input id="export-size" name="maxSizeMb" type="number" min="0.1" max="${maximum}" step="0.1" value="${limit}" aria-label="Maximum file size in MB" aria-describedby="export-size-note export-size-status"><span>MB</span></div>
- <input type="range" min="0.1" max="${maximum}" step="0.1" value="${limit}" data-export-size-slider aria-label="Maximum file size slider"><div class="clip-export-size-scale"><span>0.1 MB</span><span data-export-maximum>${size.available?`${maximum} MB`:'—'}</span></div>
- <div class="clip-export-size-comparison"><span data-export-baseline>${baseline}</span>${svg('M5 12h14m-5-5 5 5-5 5')}<strong>Under <output data-export-limit-label>${limit} MB</output></strong></div>
+ <div id="export-size-controls" data-export-size-controls><div class="clip-export-size-inner"><div class="clip-export-size-heading"><label for="export-size">Maximum size</label><div class="clip-export-size-value" data-export-size-field><input id="export-size" name="maxSizeMb" type="number" min="0.1" max="${maximum}" step="0.1" value="${limit}" aria-label="Maximum file size in MB" aria-describedby="export-size-note export-size-status"><span>MB</span></div></div>
+ <input type="range" min="0.1" max="${maximum}" step="0.1" value="${limit}" data-export-size-slider aria-label="Maximum file size slider"><div class="clip-export-size-scale"><span data-export-baseline>${baseline}</span><span data-export-maximum>${size.available?`${maximum} MB`:'—'}</span></div>
  <p id="export-size-status" class="clip-export-size-status" role="status"></p></div></div>
  <p class="clip-export-sr-only" id="export-size-note">Maximum size for the separate copy. Smaller files can lose detail, especially during movement.</p></section>
  <p data-export-range-status class="clip-export-size-status" role="status"></p>
@@ -129,8 +127,7 @@ export function bindClipExportForm(form,paintSlider=()=>{}) {
   const mb=numericField(fields.maxSizeMb),fits=available&&mb!==null&&mb*1000000>=baseline;
   const invalid=mb===null||!Number.isFinite(mb)||mb<.1||mb>Number(slider.max);
   form.querySelector('[data-export-maximum]').textContent=available?`${plan.maxMb} MB`:'—';
-  form.querySelector('[data-export-baseline]').textContent=baseline===null?'Size unavailable':`${whole?'Original ·':'Selection ≈'} ${clipExportSize(baseline)}`;
-  form.querySelector('[data-export-limit-label]').textContent=available&&mb!==null?`${fields.maxSizeMb.value} MB`:'—';
+  form.querySelector('[data-export-baseline]').textContent=baseline===null?'Size unavailable':whole?'0.1 MB':`Selection ≈ ${clipExportSize(baseline)}`;
   form.querySelector('#export-size-status').textContent=!available?(baseline===null?'Size unavailable. Export without compression.':'This range is already below 0.1 MB.'):fits?'Already under this limit. Choose a smaller size.':'';
   form.querySelector('[data-export-range-status]').textContent=error;
   form.querySelector('[type=submit]').disabled=Boolean(error)||(limited&&(!available||fits||invalid));

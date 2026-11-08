@@ -807,7 +807,10 @@ mod tests {
     fn default_resolves_to_videos_with_state_fallback() {
         let preferences = ReplayPreferences::default();
         assert_eq!(preferences.overlay_shortcut, "Alt+Shift+Z");
-        assert!(preferences.save_shortcuts.is_empty());
+        assert_eq!(
+            preferences.save_shortcuts,
+            [] as [crate::replay_preferences::ReplayShortcutBinding; 0]
+        );
         assert!(preferences.close_overlay_on_outside_click);
         assert_eq!(preferences.microphone, MicrophoneMode::DefaultInput);
         assert_eq!(

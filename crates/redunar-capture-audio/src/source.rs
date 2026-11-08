@@ -612,7 +612,7 @@ impl AudioCaptureStream {
         }
         let mut samples = [0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * AUDIO_CHANNELS as usize];
         let (pcm_chunks, remainder) = self.pcm.as_chunks::<2>();
-        debug_assert!(remainder.is_empty());
+        debug_assert_eq!(remainder, []);
         for (sample, bytes) in samples.iter_mut().zip(pcm_chunks) {
             *sample = i16::from_le_bytes([bytes[0], bytes[1]]);
         }

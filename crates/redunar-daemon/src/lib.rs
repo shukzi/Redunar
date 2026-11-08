@@ -2012,7 +2012,10 @@ mod tests {
         service
             .set_replay_clip_trashed("Great lap.mkv", true)
             .unwrap();
-        assert!(service.replay_clip_inventory().unwrap().is_empty());
+        assert_eq!(
+            service.replay_clip_inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         assert_eq!(
             service.replay_trash_inventory().unwrap()[0]
                 .game_name
@@ -2030,7 +2033,10 @@ mod tests {
                 .next()
                 .is_none()
         );
-        assert!(service.replay_clip_inventory().unwrap().is_empty());
+        assert_eq!(
+            service.replay_clip_inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         let mut secondary = RedunarService::with_state_directory(&state);
         secondary.read_only = true;
         assert!(
@@ -2170,11 +2176,11 @@ mod tests {
         assert!(!storage.initialized);
         assert_eq!(storage.directory, replay_directory);
         assert!(!replay_directory.exists());
-        assert!(
+        assert_eq!(
             service
                 .replay_clip_inventory()
-                .expect("inspect missing clip inventory")
-                .is_empty()
+                .expect("inspect missing clip inventory"),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
         );
         assert!(service.delete_replay_clip("../../not-a-clip").is_err());
         assert!(!replay_directory.exists());
@@ -2184,11 +2190,11 @@ mod tests {
             .expect("prepare replay store");
         assert_eq!(store.directory(), replay_directory);
         assert!(store.directory().is_dir());
-        assert!(
+        assert_eq!(
             service
                 .replay_clip_inventory()
-                .expect("inspect initialized clip inventory")
-                .is_empty()
+                .expect("inspect initialized clip inventory"),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
         );
         assert!(!service.replay_backend_readiness().activation_allowed());
         assert_eq!(

@@ -117,16 +117,18 @@ impl<I: Read> Keyboards<I> {
                     true
                 }
                 Ok(size) if size != 0 && size % INPUT_EVENT_BYTES == 0 => {
+                    let (input_events, remainder) = bytes[..size].as_chunks::<INPUT_EVENT_BYTES>();
+                    debug_assert_eq!(remainder, []);
                     // SYN_DROPPED means held-key state is no longer trustworthy.
                     // Retire this generation rather than inventing press edges.
-                    if bytes[..size].chunks_exact(INPUT_EVENT_BYTES).any(|event| {
+                    if input_events.iter().any(|event| {
                         u16::from_ne_bytes([event[16], event[17]]) == 0
                             && u16::from_ne_bytes([event[18], event[19]]) == 3
                     }) {
                         events.push(KeyboardEvent::Removed(device.generation));
                         return false;
                     }
-                    for event in bytes[..size].chunks_exact(INPUT_EVENT_BYTES) {
+                    for event in input_events {
                         if u16::from_ne_bytes([event[16], event[17]]) == EV_KEY {
                             events.push(KeyboardEvent::Key(KeyEvent {
                                 device: device.generation,

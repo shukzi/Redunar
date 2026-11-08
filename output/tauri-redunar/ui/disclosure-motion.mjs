@@ -1,4 +1,5 @@
 // Shared desktop motion for native details, including dynamically rendered panels.
+import {setPopupExpanded,cancelPopupMotion} from './popup-motion.mjs';
 const active=new WeakMap();
 const installed=new WeakSet();
 const timing={duration:220,easing:'cubic-bezier(.2,0,0,1)'};
@@ -7,6 +8,7 @@ function cancel(details,state) {
  if(!state)return;
  active.delete(details);
  if(state.animation){state.animation.onfinish=null;state.animation.cancel();}
+ if(state.floating)cancelPopupMotion(state.content);
  for(const [name,value] of Object.entries(state.styles))details.style[name]=value;
  state.content.inert=state.inert;
  delete details.dataset.expanded;
@@ -17,25 +19,27 @@ export function setDisclosureOpen(details,expanded,{immediate=false}={}) {
  const summary=details.querySelector(':scope > summary'),content=summary?.nextElementSibling;
  if(!summary||!content){details.open=expanded;return;}
  const previous=active.get(details),view=details.ownerDocument.defaultView;
- if(previous?.target===expanded)return;
+ if(previous?.target===expanded&&!immediate)return;
  if(!previous&&details.open===expanded)return;
  const start=details.getBoundingClientRect().height;
  const contentStyle=view.getComputedStyle(content);
  const floating=['absolute','fixed'].includes(contentStyle.position);
  // Read the painted frame before cancelling so rapid toggles reverse smoothly.
- const first=floating&&previous?{opacity:contentStyle.opacity,clipPath:contentStyle.clipPath,transform:contentStyle.transform}:null;
+ // Floating surfaces retain their own animation until the new target samples it.
+ if(floating&&previous)previous.floating=false;
  cancel(details,previous);
- if(immediate||view.matchMedia('(prefers-reduced-motion: reduce)').matches||!details.animate){details.open=expanded;return;}
+ if(immediate||view.matchMedia('(prefers-reduced-motion: reduce)').matches||!details.animate){cancelPopupMotion(content);details.open=expanded;return;}
  const state={target:expanded,content,inert:content.inert,styles:{height:details.style.height,overflow:details.style.overflow,boxSizing:details.style.boxSizing},animation:null};
  active.set(details,state);
  details.dataset.expanded=String(expanded);
  details.open=true;
  content.inert=!expanded;
+ const finish=()=>{if(active.get(details)!==state)return;cancel(details,state);details.open=expanded;};
  let frames;
  if(floating){
-  const folded={opacity:0,clipPath:'inset(0 0 100% 0)',transform:'translateY(-4px)'};
-  const unfolded={opacity:1,clipPath:'inset(0 0 0% 0)',transform:'translateY(0)'};
-  frames=[first||(expanded?folded:unfolded),expanded?unfolded:folded];
+  state.floating=true;
+  setPopupExpanded(content,expanded,{onfinish:finish});
+  return;
  }else{
   details.style.boxSizing='border-box';details.style.height='auto';
   const style=view.getComputedStyle(details);
@@ -44,11 +48,7 @@ export function setDisclosureOpen(details,expanded,{immediate=false}={}) {
   frames=[{height:`${start}px`},{height:`${end}px`}];
  }
  state.animation=(floating?content:details).animate(frames,timing);
- state.animation.onfinish=()=>{
-  if(active.get(details)!==state)return;
-  cancel(details,state);
-  details.open=expanded;
- };
+ state.animation.onfinish=finish;
 }
 
 export function installDisclosureMotion(root=document) {

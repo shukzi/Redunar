@@ -43,6 +43,15 @@ scroll animation. Unchanged measurements, labels, drafts, and mounted media
 retain their DOM nodes. Visibility observers disconnect when content is
 replaced or leaves the feature.
 
+Scrollbar styling uses one path per engine. WebKit uses the existing pseudo
+rules without a competing `scrollbar-color` override, so pressed native overlay
+thumbs retain their neutral appearance. Scrolling remains engine-owned.
+
+The square workspace shell adds no page-sized clipping or stacking layer.
+Selection feedback measures groups before painting, skips unchanged styles,
+and uses two-dimensional translation without a persistent layer hint. Its
+spring runs only while a selection or its geometry changes.
+
 Motion is short and functional. Dialogs, dropdowns, draft bars, thumbnail
 arrival, and selection feedback use bounded opacity/transform transitions;
 reduced motion disables them. No recurring animation or whole-document observer

@@ -15,10 +15,31 @@ mod cache;
 static CACHE: std::sync::LazyLock<std::sync::Mutex<cache::Cache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(cache::Cache::default()));
 const OUTPUT_LIMIT: u64 = 16 * 1024;
-struct ReaderPermit;
-impl Drop for ReaderPermit {
+struct ReaderPermit<'a>(&'a AtomicUsize);
+impl<'a> ReaderPermit<'a> {
+    fn acquire(readers: &'a AtomicUsize) -> Result<Self, &'static str> {
+        let mut count = readers.load(Ordering::Relaxed);
+        loop {
+            if count >= 2 {
+                return Err("Clip inspection is busy");
+            }
+            // Retain the same admission ordering and compiler compatibility
+            // without the deprecated atomic update API.
+            match readers.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(Self(readers)),
+                Err(current) => count = current,
+            }
+        }
+    }
+}
+impl Drop for ReaderPermit<'_> {
     fn drop(&mut self) {
-        READERS.fetch_sub(1, Ordering::Release);
+        self.0.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -35,12 +56,7 @@ pub async fn clip_metadata(
     file_name: String,
     include_fps: Option<bool>,
 ) -> Result<ClipMetadata, String> {
-    READERS
-        .fetch_update(Ordering::Acquire, Ordering::Relaxed, |count| {
-            (count < 2).then_some(count + 1)
-        })
-        .map_err(|_| "Clip inspection is busy")?;
-    let permit = ReaderPermit;
+    let permit = ReaderPermit::acquire(&READERS)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         inspect(&file_name, include_fps.unwrap_or(false))
@@ -194,6 +210,19 @@ fn recorded_fps(bytes: &[u8], duration: Option<f64>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inspection_permits_reject_overload_and_reopen_after_drop() {
+        let readers = AtomicUsize::new(0);
+        let first = ReaderPermit::acquire(&readers).unwrap();
+        let second = ReaderPermit::acquire(&readers).unwrap();
+        assert!(ReaderPermit::acquire(&readers).is_err());
+        assert_eq!(readers.load(Ordering::Relaxed), 2);
+        drop(first);
+        let replacement = ReaderPermit::acquire(&readers).unwrap();
+        assert_eq!(readers.load(Ordering::Relaxed), 2);
+        drop((second, replacement));
+        assert_eq!(readers.load(Ordering::Relaxed), 0);
+    }
     #[test]
     fn reads_real_container_values_without_trusting_nominal_frame_rate() {
         let result = parse(br#"{"format":{"duration":"29.5"},"streams":[{"width":2560,"height":1440,"avg_frame_rate":"60000/1001"}]}"#).unwrap();

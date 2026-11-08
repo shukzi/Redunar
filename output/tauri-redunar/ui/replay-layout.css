@@ -19,15 +19,41 @@
 .replay-capture-bar .replay-save-actions { display: flex; align-items: center; flex-wrap: wrap; flex: none; }
 .replay-capture-bar .replay-duration-label { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
 .replay-capture-bar .replay-duration-label select { min-width: 126px; }
+/* Empty playback has one frame and does not stretch to the browser's height. */
+html:not([data-page="replay-menu"]) .replay-workspace > .editor.replay-empty-editor { align-self: start; }
+.replay-empty-state {
+  min-height: 320px;
+  padding: 44px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+  background: var(--surface);
+  text-align: center;
+}
+.replay-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--red);
+}
+.replay-empty-icon .icon { width: 22px; height: 22px; }
+.replay-empty-copy { min-width: 0; max-width: 44ch; }
+.replay-empty-copy h2 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.4; }
+.replay-empty-copy p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .clip-title-tools { padding: 12px 16px; gap: 14px; }
 .clip-name { flex: 1; min-width: 0; }
 .clip-name strong { display: block; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .clip-name small { display: block; margin-top: 5px; font-size: 10px; color: var(--muted); }
 .clip-edit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .clip-edit-actions .button { min-height: 34px; padding: 7px 11px; }
-.clip-action-menu { position: relative; }
-.clip-action-menu summary { list-style: none; cursor: pointer; min-width: 36px; font-size: 20px; line-height: 18px; }
-.clip-action-menu summary::-webkit-details-marker { display: none; }
+/* Video meets the clip header flush; the surrounding editor stays rounded. */
+.replay-workspace .native-video-stage { border-top-left-radius: 0; border-top-right-radius: 0; }
 /* The production video rule retains the decoded display ratio at every width. */
 .replay-workspace .replay-clip-editor { padding: 20px 22px 10px; }
 .replay-workspace .clip-time-ruler { margin-bottom: 10px; }
@@ -54,6 +80,7 @@
   .clip-name { flex-basis: 100%; }
 }
 @media (max-width: 900px) {
+  .replay-empty-state { min-height: 280px; padding: 36px 24px; }
   .replay-capture-bar { align-items: start; padding: 14px; }
   .replay-capture-bar #session-capture-summary { flex-basis: 100%; }
   .replay-capture-bar .replay-save-actions { margin-left: 0; width: 100%; }

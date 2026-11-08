@@ -669,7 +669,7 @@ fn producer_uses_dedicated_allocation_from_either_external_support_or_buffer_req
             &mut context,
         )
     });
-    DRIVER.with(|driver| assert!(driver.borrow().dedicated_allocations.is_empty()));
+    DRIVER.with(|driver| assert_eq!(driver.borrow().dedicated_allocations, [] as [u64; 0]));
 }
 #[test]
 fn ordinary_resize_keeps_two_replacements_bounded_then_pauses_without_destroying_pending_resources()
@@ -803,7 +803,12 @@ fn copy_idle_and_export_release_are_insufficient_to_destroy_pending_present_wait
         reclaim_after_idle(&mut state, 42);
     }
     assert!(state.retired_routes[0].as_ref().unwrap().gpu_idle);
-    DRIVER.with(|driver| assert!(driver.borrow().destroyed.is_empty()));
+    DRIVER.with(|driver| {
+        assert_eq!(
+            driver.borrow().destroyed,
+            [] as [(std::string::String, u64); 0]
+        );
+    });
     let retained = state.retired_routes[0].as_mut().unwrap();
     DRIVER.with(|driver| {
         driver.borrow_mut().fences.insert(999, false);
@@ -885,7 +890,10 @@ fn every_creation_entry_including_queue_retrieval_preserves_full_retirement_budg
     }
     DRIVER.with(|driver| {
         assert_eq!(driver.borrow().next_handle, 100);
-        assert!(driver.borrow().destroyed.is_empty());
+        assert_eq!(
+            driver.borrow().destroyed,
+            [] as [(std::string::String, u64); 0]
+        );
     });
 }
 
@@ -900,7 +908,12 @@ fn retirement_invariant_violation_retains_ownership_without_panicking_or_replaci
     assert_eq!(state.quarantined_route.as_ref().unwrap().swapchain, 4);
     assert!(state.disabled);
     assert!(!state.can_create_route());
-    DRIVER.with(|driver| assert!(driver.borrow().destroyed.is_empty()));
+    DRIVER.with(|driver| {
+        assert_eq!(
+            driver.borrow().destroyed,
+            [] as [(std::string::String, u64); 0]
+        );
+    });
 }
 
 #[test]

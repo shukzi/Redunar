@@ -48,7 +48,10 @@ fn ram_save_preserves_reserve_and_recovers_without_stopping_capture() {
             error.to_string().contains("512 MiB safety reserve"),
             "{error}"
         );
-        assert!(pipeline.store.inventory().unwrap().is_empty());
+        assert_eq!(
+            pipeline.store.inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         assert!(fs::read_dir(&fixture.root).unwrap().all(|entry| {
             !entry
                 .unwrap()

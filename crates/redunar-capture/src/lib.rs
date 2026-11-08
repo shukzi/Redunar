@@ -114,7 +114,7 @@ impl CaptureSessionId {
         }
         let mut decoded = [0; 16];
         let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
-        debug_assert!(remainder.is_empty());
+        debug_assert_eq!(remainder, []);
         for (index, pair) in pairs.iter().enumerate() {
             decoded[index] = (decode_hex(pair[0])? << 4) | decode_hex(pair[1])?;
         }

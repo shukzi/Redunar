@@ -64,7 +64,7 @@ fn steam_play_requests_capture_before_exec_and_fail_open_preserves_literal_argv(
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(!result.stdout.is_empty());
+    assert_ne!(result.stdout, [] as [u8; 0]);
     assert!(activation.lock().unwrap().as_ref().unwrap().claimed());
 
     let marker = runtime.join("must-not-exist");

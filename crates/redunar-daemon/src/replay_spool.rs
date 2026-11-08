@@ -1493,7 +1493,10 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(guard);
         spool.shutdown();
-        assert!(store.inventory().unwrap().is_empty());
+        assert_eq!(
+            store.inventory().unwrap(),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1818,7 +1821,10 @@ mod tests {
         let plan = spool
             .snapshot_plan(ReplayDuration::Seconds15)
             .expect("snapshot plan");
-        assert!(!plan.segments.is_empty());
+        assert_ne!(
+            plan.segments,
+            [] as [crate::replay_spool::ReplaySpoolSegment; 0]
+        );
         assert!(
             plan.segments
                 .iter()
@@ -1831,12 +1837,18 @@ mod tests {
             early_long_clip.available_duration_ns
                 < u64::from(ReplayDuration::Seconds900.seconds()) * NANOSECONDS_PER_SECOND
         );
-        assert!(!early_long_clip.segments.is_empty());
+        assert_ne!(
+            early_long_clip.segments,
+            [] as [crate::replay_spool::ReplaySpoolSegment; 0]
+        );
         let before_repeat = spool.stats();
         let repeated = spool
             .snapshot_plan(ReplayDuration::Seconds15)
             .expect("repeated save must not consume history");
-        assert!(!repeated.segments.is_empty());
+        assert_ne!(
+            repeated.segments,
+            [] as [crate::replay_spool::ReplaySpoolSegment; 0]
+        );
         assert_eq!(spool.stats(), before_repeat);
         spool.shutdown();
         let _ = fs::remove_dir_all(root);
@@ -1903,7 +1915,10 @@ mod tests {
             .snapshot_plan(ReplayDuration::Seconds15)
             .expect("history remains");
         assert!(after.generation >= before.generation);
-        assert!(!after.segments.is_empty());
+        assert_ne!(
+            after.segments,
+            [] as [crate::replay_spool::ReplaySpoolSegment; 0]
+        );
         spool.shutdown();
         let _ = fs::remove_dir_all(root);
     }
@@ -2071,7 +2086,10 @@ mod tests {
 
         assert!(error.is_insufficient_history());
         assert!(error.to_string().contains("just started"));
-        assert!(store.inventory().expect("inventory").is_empty());
+        assert_eq!(
+            store.inventory().expect("inventory"),
+            [] as [crate::replay_store::ReplayClipEntry; 0]
+        );
         assert_eq!(spool.phase(), ReplaySpoolPhase::Running);
         spool.shutdown();
         let _ = fs::remove_dir_all(root);

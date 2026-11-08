@@ -1,6 +1,6 @@
 """Production UI with synthetic audio/video and fake native microphone commands.
 
-Run after building the frontend, under Xvfb with
+Run after building the frontend, under a private Xvfb or Broadway display with
 REDUNAR_PRIVATE_DESKTOP_FIXTURE=1. Never opens a microphone or the native app.
 """
 import io
@@ -9,8 +9,8 @@ import wave
 import subprocess
 
 if os.environ.get('REDUNAR_PRIVATE_DESKTOP_FIXTURE') != '1':
-    raise SystemExit('Use the isolated desktop fixture under Xvfb')
-os.environ['GDK_BACKEND'] = 'x11'
+    raise SystemExit('Use an isolated desktop fixture with REDUNAR_PRIVATE_DESKTOP_FIXTURE=1')
+os.environ.setdefault('GDK_BACKEND', 'x11')
 os.environ['GDK_SCALE'] = '1'
 os.environ['GDK_DPI_SCALE'] = '1'
 
@@ -84,17 +84,17 @@ try:
     snap('microphone-idle')
     js("const input=q('#microphone-gain');input.value=12;input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));")
     wait_for('bridge.microphoneGain===12&&!q("#microphone-gain").disabled')
-    test('Recording gain is labelled and separately persisted', "check(q('.microphone-gain-slider output').textContent==='+12 dB','gain value');check(bridge.calls.some(c=>c.command==='set_microphone_gain'&&c.args.gainDb===12),'typed gain request')")
+    test('Recording gain is labelled and separately persisted', "check(q('#microphone-gain-value').value==='12','gain value');check(bridge.calls.some(c=>c.command==='set_microphone_gain'&&c.args.gainDb===12),'typed gain request')")
     js("bridge.holdGain=true;const input=q('#microphone-gain');input.value=18;input.dispatchEvent(new Event('change',{bubbles:true}));")
     wait_for('typeof bridge.releaseGain==="function"')
     route('overview')
     route('global')
     js("bridge.holdGain=false;bridge.releaseGain()")
     wait_for('q("#microphone-gain").value==="18"&&!q("#microphone-gain").disabled')
-    test('A pending gain save stays consistent after returning to settings', "check(q('.microphone-gain-slider output').textContent==='+18 dB','late save updates recreated controls')")
+    test('A pending gain save stays consistent after returning to settings', "check(q('#microphone-gain-value').value==='18','late save updates recreated controls')")
     js("bridge.failGain=true;const input=q('#microphone-gain');input.value=24;input.dispatchEvent(new Event('change',{bubbles:true}));")
     wait_for('q(".microphone-test-status").dataset.error==="true"')
-    test('Failed save restores the actual saved level', "check(q('#microphone-gain').value==='18','restored gain');bridge.failGain=false")
+    test('Failed save restores the actual saved level', "check(q('#microphone-gain').value==='18','restored gain');check(q('#microphone-gain-value').value==='18','restored value field');bridge.failGain=false")
     js("click('[data-microphone-test]')")
     wait_for('q(".microphone-controls audio").src.startsWith("blob:")')
     wait_for('!q("[data-microphone-play]").disabled')
@@ -127,12 +127,13 @@ try:
     test('Playback volume changes listening only', "check(Math.abs(q('#clip-video').volume-.35)<.000001,'player volume');check(!bridge.calls.some(c=>c.command==='export_replay_clip'),'no export');check(q('#playback-volume-help').textContent.includes('exports stay unchanged'),'scope visible')")
     js("click('.playback-mute')")
     test('Mute and restore remember the listening level', "check(q('#clip-video').volume===0,'muted');click('.playback-mute');check(Math.abs(q('#clip-video').volume-.35)<.000001,'restored')")
+    test('Volume value precedes the speaker and slider, with matching transport heights', "const value=q('#playback-volume-value').closest('.slider-value'),mute=q('.playback-mute'),range=q('#clip-playback-volume'),r=value.getBoundingClientRect();check(r.right<=mute.getBoundingClientRect().left&&mute.getBoundingClientRect().right<=range.getBoundingClientRect().left,'value sits left of the volume bar');for(const control of qa('.player-controls>.player-toggle,.player-controls>.transport-jump'))check(Math.abs(control.getBoundingClientRect().height-r.height)<1,'transport matches the value field');")
     snap('playback-volume')
     js("window.oldPlayer=q('#clip-video');const other=qa('[data-clip]').find(el=>el.getAttribute('aria-pressed')!=='true');check(other,'another saved clip');other.click();")
     wait_for('q("#clip-video")!==window.oldPlayer&&q("#clip-video").readyState>=2')
-    test('Slider reconnects after selecting another clip without reloading the page', "const input=q('#clip-playback-volume');input.value=18;input.dispatchEvent(new Event('input',{bubbles:true}));check(Math.abs(q('#clip-video').volume-.18)<.000001,'new slider changes new player');check(q('.playback-volume output').textContent==='18%','new output updates');click('.playback-mute');check(q('#clip-video').volume===0,'new mute works');click('.playback-mute');check(Math.abs(q('#clip-video').volume-.18)<.000001,'new unmute works')")
+    test('Slider reconnects after selecting another clip without reloading the page', "const input=q('#clip-playback-volume');input.value=18;input.dispatchEvent(new Event('input',{bubbles:true}));check(Math.abs(q('#clip-video').volume-.18)<.000001,'new slider changes new player');check(q('#playback-volume-value').value==='18','new output updates');click('.playback-mute');check(q('#clip-video').volume===0,'new mute works');click('.playback-mute');check(Math.abs(q('#clip-video').volume-.18)<.000001,'new unmute works')")
     pump(250)
-    test('Drag bursts update immediately without per-input storage writes or speaker replacement', "const before=bridge.volumeWrites,speaker=q('.playback-mute .icon'),input=q('#clip-playback-volume');for(let value=1;value<=95;value++){input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}check(bridge.volumeWrites===before,'no storage writes inside drag handlers');check(q('.playback-mute .icon')===speaker,'stable speaker icon while dragging');check(q('.playback-volume output').textContent==='95%','immediate label');check(Math.abs(q('#clip-video').volume-.95)<.000001,'immediate player volume');window.volumeBurstWrites=before;")
+    test('Drag bursts update immediately without per-input storage writes or speaker replacement', "const before=bridge.volumeWrites,speaker=q('.playback-mute .icon'),input=q('#clip-playback-volume');for(let value=1;value<=95;value++){input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}check(bridge.volumeWrites===before,'no storage writes inside drag handlers');check(q('.playback-mute .icon')===speaker,'stable speaker icon while dragging');check(q('#playback-volume-value').value==='95','immediate label');check(Math.abs(q('#clip-video').volume-.95)<.000001,'immediate player volume');window.volumeBurstWrites=before;")
     pump(250)
     test('Only the final drag level is persisted', "check(bridge.volumeWrites===window.volumeBurstWrites+1,'one coalesced write');check(JSON.parse(localStorage.getItem('redunar.playback-volume.v1')).level===95,'latest level saved')")
     test('Clicking another control after dragging keeps it responsive', "click('.playback-mute');check(q('#clip-video').volume===0,'mute responds immediately');click('.playback-mute');check(Math.abs(q('#clip-video').volume-.95)<.000001,'unmute responds immediately');const input=q('#clip-playback-volume');input.value=35;input.dispatchEvent(new Event('input',{bubbles:true}));")
@@ -143,7 +144,8 @@ try:
     test('Listening preference survives player recreation', "check(Math.abs(q('#clip-video').volume-.35)<.000001,'new player uses saved preference');check(bridge.errors.length===0,JSON.stringify(bridge.errors))")
     window.resize(960, 820)
     pump(400)
-    test('Narrow player controls do not overlap', "const a=q('.playback-volume').getBoundingClientRect(),b=q('#clip-time').getBoundingClientRect();check(a.top>=b.bottom||a.left>=b.right,'volume and time do not overlap');check(a.right<=q('.editor').getBoundingClientRect().right,'volume fits inside editor');const children=[...q('.player-controls').children];check(children.every(el=>el.getBoundingClientRect().right<=q('.editor').getBoundingClientRect().right),'every control fits inside editor')")
+    test('Narrow player controls do not overlap', "const a=q('.playback-volume').getBoundingClientRect(),b=q('#clip-time').getBoundingClientRect();check(a.top>=b.bottom||a.bottom<=b.top||a.left>=b.right||a.right<=b.left,'volume and time do not overlap');check(a.right<=q('.editor').getBoundingClientRect().right,'volume fits inside editor');const children=[...q('.player-controls').children];check(children.every(el=>el.getBoundingClientRect().right<=q('.editor').getBoundingClientRect().right),'every control fits inside editor')")
+    test('Side-by-side Saved clips retain readable cards and their own scroll', "const rail=q('.clip-list'),card=q('.clip-card').getBoundingClientRect();check(q('.clip-browser').getBoundingClientRect().left>=q('.editor').getBoundingClientRect().right,'side rail fixture');check(card.width>rail.clientWidth*.8,'card fills rail instead of becoming a tiny column');check(q('.thumbnail').getBoundingClientRect().height>=70,'readable thumbnail');check(rail.scrollHeight>rail.clientHeight,'clips stay in their scroll area');")
     snap('playback-volume-narrow')
     js("click('.playback-mute')")
     view.reload()

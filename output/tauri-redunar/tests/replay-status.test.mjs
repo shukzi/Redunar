@@ -13,14 +13,14 @@ test('a native source rejection remains visible while the recorder is inactive',
 
 test('healthy buffering does not reuse an earlier unavailable reason', () => {
   const status = replayStatusCopy({ phase: 'Buffering', buffered_seconds: 3 });
-  assert.equal(status.title, 'Buffering replay');
+  assert.equal(status.title, 'Preparing replay');
   assert.equal(status.statusClass, 'pending');
 });
 
 test('waiting for frames is pending and does not imply recording is ready', () => {
   const detail = 'Waiting for recordable game frames.';
   assert.deepEqual(replayStatusCopy({phase:'Inactive',pending_reason:detail,can_save:false}), {
-    title:'Waiting for Replay frames',detail,statusClass:'pending',
+    title:'Waiting for game video',detail,statusClass:'pending',
   });
 });
 
@@ -34,7 +34,7 @@ test('explicit encoder failure or source rejection takes priority over pending t
 });
 
 test('idle and healthy states ignore stale pending-frame copy', () => {
-  assert.equal(replayStatusCopy({phase:'Inactive'}).title,'Replay inactive');
+  assert.equal(replayStatusCopy({phase:'Inactive'}).title,'Replay not running');
   const status = replayStatusCopy({phase:'Buffering',can_save:true,buffered_seconds:3,pending_reason:'Waiting for frames.'});
   assert.equal(status.title,'Ready to save');
   assert.equal(status.statusClass,'ready');

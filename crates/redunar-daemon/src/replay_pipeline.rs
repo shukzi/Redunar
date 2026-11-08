@@ -1213,7 +1213,7 @@ mod tests {
         pipeline
             .submit_frame(11, frame(&fixture.root, 1, 1_920, 1_080))
             .expect("first frame remains in flight");
-        assert!(pipeline.take_completed_inputs().is_empty());
+        assert_eq!(pipeline.take_completed_inputs(), [] as [u64; 0]);
 
         pipeline
             .submit_frame(12, frame(&fixture.root, 2, 1_920, 1_080))
@@ -1708,9 +1708,9 @@ mod tests {
         assert!(pipeline.shutdown().is_err());
         assert_eq!(pipeline.phase(), ReplayPipelinePhase::Shutdown);
         // A failed device-idle shutdown cannot prove GPU ownership ended.
-        assert!(pipeline.take_completed_inputs().is_empty());
+        assert_eq!(pipeline.take_completed_inputs(), [] as [u64; 0]);
         assert!(pipeline.shutdown().is_err());
-        assert!(pipeline.take_completed_inputs().is_empty());
+        assert_eq!(pipeline.take_completed_inputs(), [] as [u64; 0]);
         assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
     }
 
@@ -1746,10 +1746,10 @@ mod tests {
                 .is_err()
         );
         runtime.fail(crate::ReplayFailure::EncoderFailed);
-        assert!(runtime.take_completed_exports().is_empty());
+        assert_eq!(runtime.take_completed_exports(), [] as [u64; 0]);
         assert!(runtime.shutdown().is_err());
         assert!(runtime.shutdown().is_err());
-        assert!(runtime.take_completed_exports().is_empty());
+        assert_eq!(runtime.take_completed_exports(), [] as [u64; 0]);
         assert_eq!(runtime.status().phase, crate::ReplayPhase::Failed);
         assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
     }

@@ -1,16 +1,16 @@
 /* Settings keeps the desktop choices together and uses one visual rhythm for
    every preference. This file follows the shared control styles in index.html. */
-.settings-page{grid-template-columns:minmax(0,1.12fr) minmax(0,.88fr);gap:20px;align-items:start}
-.settings-page .panel{padding:28px}
-.settings-card-heading h2,.settings-page .updates-heading h2{font-size:19px;line-height:1.3}
+.settings-page{grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
+.settings-page .panel{padding:24px}
+.settings-card-heading h2,.settings-page .updates-heading h2{font-size:16px;line-height:1.4}
 .settings-card-heading p,.settings-page .updates-heading p{margin-top:7px;font-size:12px;line-height:1.5;color:var(--muted)}
 .settings-option{padding:21px 0;border-top:1px solid var(--border)}
 .settings-card-heading+.settings-option{margin-top:24px}
 .settings-option:last-child{padding-bottom:0}
 .settings-option-main{display:flex;align-items:center;justify-content:space-between;gap:24px}
 .settings-option-copy{min-width:0}
-.settings-option h3{font-size:14px;font-weight:500;line-height:1.45;color:var(--text)}
-.settings-option-copy p{margin-top:5px;font-size:12px;line-height:1.55;color:#c1c1c1}
+.settings-option h3{font-size:13px;font-weight:500;line-height:1.45;color:var(--text)}
+.settings-option-copy p{max-width:64ch;margin-top:5px;font-size:12px;line-height:1.6;color:var(--muted)}
 .settings-option-note{margin:10px 64px 0 0;font-size:11px;line-height:1.6;color:var(--muted)}
 .settings-option .switch,.settings-page .updates-panel .switch{width:54px;min-width:54px;height:44px}
 .settings-option .switch span,.settings-page .updates-panel .switch span{width:44px;height:24px;border-color:#656168;background:#171719;transition:background .15s ease,border-color .15s ease}
@@ -20,6 +20,7 @@
 .settings-option .switch:hover:not(:has(input:disabled)) span,.settings-page .updates-panel .switch:hover:not(:has(input:disabled)) span{border-color:#c6676e}
 .settings-log-action{min-height:34px;margin-top:12px;padding:6px 11px;font-size:11px}
 .settings-page .updates-heading{align-items:center}
+.settings-page .update-preferences{margin-top:20px;padding-top:16px;border-top:1px solid #2d2d2d}
 .settings-page .updates-heading .pill{white-space:nowrap;flex:none}
 .settings-page .update-check-row{margin-top:24px;padding:22px 0}
 .settings-page .update-check-row strong{white-space:normal;font-size:13px}

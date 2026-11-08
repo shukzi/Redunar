@@ -7,7 +7,6 @@
 .steam-setup-card h3{margin-bottom:10px;font-size:14px}
 .steam-setup-card p{font-size:11px;line-height:1.6;color:var(--muted)}
 .steam-setup-card .steam-setup-status{color:var(--text);font-weight:500;margin-bottom:6px}
-.steam-setup-card .steam-setup-caption{margin-top:10px;font-size:10px}
 .steam-setup-notice{margin-top:16px}
 .steam-setup-retry{margin-top:10px}
 .steam-options-field{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;margin-top:12px}

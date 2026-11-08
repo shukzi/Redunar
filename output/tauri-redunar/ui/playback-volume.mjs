@@ -1,4 +1,5 @@
 // A listening preference only. Never pass it to recording, trimming or export.
+import {sliderValueMarkup} from './precision-sliders.js';
 const key = 'redunar.playback-volume.v1';
 export const playbackLevel = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 100;
 
@@ -33,10 +34,9 @@ export function playbackVolume({storage, getVideo, icon, updateSlider}) {
   }
   function paint(syncRange=false) {
     const controls=host?.querySelector('.playback-volume');if(!controls)return;
-    const input=controls.querySelector('input');
-    if(syncRange){input.value=level;updateSlider(input);}
-    const output=controls.querySelector('output'),text=level+'%';
-    if(output.textContent!==text)output.textContent=text;
+    const input=controls.querySelector('input[type="range"]');
+    if(syncRange)input.value=level;
+    updateSlider(input);
     const button=controls.querySelector('button'),muted=String(level===0);
     if(button.getAttribute('aria-pressed')!==muted){
       button.setAttribute('aria-label',level===0?'Unmute playback':'Mute playback');
@@ -51,7 +51,7 @@ export function playbackVolume({storage, getVideo, icon, updateSlider}) {
     apply(getVideo());paint(syncRange);saveLater();
   }
   return {
-    markup:()=>`<div class="playback-volume"><button type="button" class="icon-button playback-mute" aria-label="${level===0?'Unmute playback':'Mute playback'}" aria-pressed="${level===0}">${icon(level===0?'speakerMuted':'speaker')}</button><div class="playback-volume-field"><label for="clip-playback-volume">Playback volume <output for="clip-playback-volume">${level}%</output></label><input id="clip-playback-volume" type="range" min="0" max="100" step="1" value="${level}" style="--range-fill:${level}%" aria-describedby="playback-volume-help"></div></div>`,
+    markup:()=>`<div class="playback-volume" role="group" aria-label="Playback volume"><div class="playback-volume-field" data-slider-control>${sliderValueMarkup({id:'playback-volume-value',label:'Playback volume',value:level})}<button type="button" class="icon-button playback-mute" aria-label="${level===0?'Unmute playback':'Mute playback'}" aria-pressed="${level===0}">${icon(level===0?'speakerMuted':'speaker')}</button><input id="clip-playback-volume" type="range" data-tactile-range min="0" max="100" step="1" value="${level}" aria-label="Playback volume" aria-describedby="playback-volume-help" style="--range-fill:${level}%"></div><span class="playback-volume-help" id="playback-volume-help">Changes listening volume only. Recordings and exports stay unchanged.</span></div>`,
     mount(root) {
       if(host!==root){
         subscriptions?.abort();subscriptions=new AbortController();host=root;

@@ -9,8 +9,8 @@ function applySidebarPreference() {
   const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
   toggle.setAttribute('aria-expanded', String(!collapsed));
   toggle.setAttribute('aria-label', label);
-  toggle.title = label;
-  toggle.querySelector('span').textContent = label;
+  toggle.removeAttribute('title');
+  toggle.querySelector('span:not([data-ui-icon])').textContent = label;
 }
 applySidebarPreference();
 toggle?.addEventListener('click', () => {

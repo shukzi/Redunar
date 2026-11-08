@@ -1581,7 +1581,7 @@ mod tests {
         assert_eq!(refreshed[0].display_name, "ARC Raiders");
         assert_eq!(refreshed[0].profile, profile);
         assert_eq!(refreshed[0].launch.executable, replacement);
-        assert!(
+        assert_eq!(
             refresh_discovered_launches(
                 &fixture.root,
                 vec![AddGameRequest::external_launcher(
@@ -1594,8 +1594,8 @@ mod tests {
                     vec![GameMatchRule::SteamAppId(42)],
                 )],
             )
-            .expect("ignore unknown identity")
-            .is_empty()
+            .expect("ignore unknown identity"),
+            [] as [redunar_core::GameRecord; 0]
         );
     }
 

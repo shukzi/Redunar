@@ -32,7 +32,7 @@ fn begin_close(app: &tauri::AppHandle, settle: SettleGame) {
     if let Err(error) = crate::tray::set_enabled(app, true) {
         show_failure(
             app,
-            &format!("Keep Redunar open while the game is running. Tray unavailable: {error}"),
+            &format!("Tray unavailable. Keep Redunar open during the game. {error}"),
         );
         return;
     }
@@ -47,10 +47,7 @@ fn begin_close(app: &tauri::AppHandle, settle: SettleGame) {
             });
         }
         #[cfg(not(target_os = "linux"))]
-        show_failure(
-            app,
-            "Keep Redunar open while the game is running. The tray is unavailable.",
-        );
+        show_failure(app, "Tray unavailable. Keep Redunar open during the game.");
     }
 }
 
@@ -60,10 +57,7 @@ fn finish_close(app: &tauri::AppHandle, ticket: u64, settle: SettleGame) {
         return;
     }
     if !crate::tray::registered(app) {
-        show_failure(
-            app,
-            "Keep Redunar open while the game is running. The tray is unavailable.",
-        );
+        show_failure(app, "Tray unavailable. Keep Redunar open during the game.");
         return;
     }
     if let Some(window) = app.get_webview_window("main") {
@@ -72,7 +66,7 @@ fn finish_close(app: &tauri::AppHandle, ticket: u64, settle: SettleGame) {
         } else {
             show_failure(
                 app,
-                "Redunar could not move to the tray. Keep it open while the game is running.",
+                "Cannot move Redunar to the tray. Keep it open during the game.",
             );
         }
     }
