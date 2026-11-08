@@ -490,6 +490,7 @@ impl VulkanVideoH264Encoder {
         self.parameters.encoded_parameters()
     }
 
+    #[must_use = "use the returned iterator to access descriptor sets"]
     pub fn descriptor_sets(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
         self.slots.iter().map(|slot| slot.descriptor_set)
     }
