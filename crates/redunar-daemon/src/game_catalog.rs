@@ -1,9 +1,9 @@
 use redunar_core::{
     EffectiveGameProfile, GameCatalog, GameId, GameLaunchConfig, GameMatchRule, GameProcess,
-    GameRecord, GameResolution, GlobalGameProfile, Inheritable, OverlayCorner, OverlayLayout,
-    OverlayMetricSet, OverlayOpacity, OverlayPalette, OverlayPreset, OverlayScale, PerGameProfile,
-    ReplayDuration, ReplayFrameRate, ReplayQuality, ReplaySettings, ReplayStorageLimit,
-    resolve_game,
+    GameRecord, GameResolution, GlobalGameProfile, Inheritable, OverlayCorner, OverlayEdgeSpacing,
+    OverlayLayout, OverlayMetricSet, OverlayOpacity, OverlayPalette, OverlayPreset, OverlayScale,
+    PerGameProfile, ReplayDuration, ReplayFrameRate, ReplayQuality, ReplaySettings,
+    ReplayStorageLimit, resolve_game,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
@@ -31,6 +31,7 @@ const CATALOG_HEADER_V9: &str = "redunar-games-v9";
 const CATALOG_HEADER_V10: &str = "redunar-games-v10";
 const CATALOG_HEADER_V11: &str = "redunar-games-v11";
 const CATALOG_HEADER_V12: &str = "redunar-games-v12";
+const CATALOG_HEADER_V13: &str = "redunar-games-v13";
 const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
 const MAX_GAMES: usize = 256;
 const MAX_IMPORT_GAMES: usize = 64;
@@ -722,10 +723,16 @@ fn validate_stored(stored: &StoredCatalog) -> Result<(), GameCatalogError> {
 
 fn serialize(stored: &StoredCatalog) -> String {
     let catalog = &stored.catalog;
-    let mut output = String::from(CATALOG_HEADER_V12);
+    let spacing = catalog.global_profile.overlay_edge_spacing;
+    let custom_spacing = spacing != OverlayEdgeSpacing::default();
+    let mut output = String::from(if custom_spacing {
+        CATALOG_HEADER_V13
+    } else {
+        CATALOG_HEADER_V12
+    });
     output.push('\n');
     writeln!(output, "next\t{}", stored.next_id).expect("write to string");
-    writeln!(
+    write!(
         output,
         "global\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         bool_token(catalog.global_profile.capture_metrics),
@@ -747,6 +754,10 @@ fn serialize(stored: &StoredCatalog) -> String {
         bool_token(catalog.global_profile.overlay_branding)
     )
     .expect("write to string");
+    if custom_spacing {
+        write!(output, "\t{}", spacing.pixels()).expect("write to string");
+    }
+    output.push('\n');
     for game in &catalog.games {
         let working_directory = game
             .launch
@@ -797,6 +808,7 @@ fn parse(contents: &str) -> Result<StoredCatalog, GameCatalogError> {
         Some(CATALOG_HEADER_V10) => 10,
         Some(CATALOG_HEADER_V11) => 11,
         Some(CATALOG_HEADER_V12) => 12,
+        Some(CATALOG_HEADER_V13) => 13,
         _ => {
             return Err(GameCatalogError::new(
                 "catalog header or version is invalid",
@@ -846,7 +858,7 @@ fn parse(contents: &str) -> Result<StoredCatalog, GameCatalogError> {
 fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, GameCatalogError> {
     let fields = line.split('\t').collect::<Vec<_>>();
     let expected_fields = if version >= 12 {
-        18
+        18 + usize::from(version >= 13)
     } else if version >= 11 {
         17
     } else if version >= 10 {
@@ -894,6 +906,15 @@ fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, Ga
             OverlayCorner::default()
         } else {
             parse_overlay_corner(fields[usize::from(version >= 5) + 4])?
+        },
+        overlay_edge_spacing: if version < 13 {
+            OverlayEdgeSpacing::default()
+        } else {
+            fields[18]
+                .parse::<u8>()
+                .ok()
+                .and_then(OverlayEdgeSpacing::new)
+                .ok_or_else(|| GameCatalogError::new("catalog overlay edge spacing is invalid"))?
         },
         overlay_opacity: if version < 4 {
             OverlayOpacity::default()
@@ -2059,6 +2080,7 @@ mod tests {
             overlay_metrics: OverlayMetricSet::DETAILED,
             overlay_corner: OverlayCorner::BottomRight,
             overlay_opacity: OverlayOpacity::new(65).expect("opacity"),
+            overlay_edge_spacing: OverlayEdgeSpacing::default(),
             overlay_scale: OverlayScale::default(),
             gamescope_enabled: false,
             gamemode_enabled: false,
@@ -2079,6 +2101,33 @@ mod tests {
             effective_profile(&fixture.root, game.id).expect("effective profile"),
             loaded.games[0].profile.resolve(global)
         );
+    }
+
+    #[test]
+    fn overlay_edge_spacing_round_trips_without_upgrading_default_catalogs() {
+        let fixture = Fixture::new();
+        let path = fixture.root.join(CATALOG_FILE);
+        let profile = GlobalGameProfile {
+            overlay_visible: true,
+            ..Default::default()
+        };
+        update_global_profile(&fixture.root, profile).unwrap();
+        let legacy = fs::read_to_string(&path).unwrap();
+        assert!(legacy.starts_with(CATALOG_HEADER_V12));
+        assert_eq!(load(&fixture.root).unwrap().global_profile, profile);
+
+        let custom = GlobalGameProfile {
+            overlay_edge_spacing: OverlayEdgeSpacing::new(0).unwrap(),
+            ..profile
+        };
+        update_global_profile(&fixture.root, custom).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.starts_with(CATALOG_HEADER_V13));
+        assert_eq!(load(&fixture.root).unwrap().global_profile, custom);
+        let (profile_line, _) = saved.lines().nth(2).unwrap().rsplit_once('\t').unwrap();
+        assert!(parse_global_profile(&format!("{profile_line}\t255"), 13).is_err());
+        update_global_profile(&fixture.root, profile).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), legacy);
     }
 
     #[test]

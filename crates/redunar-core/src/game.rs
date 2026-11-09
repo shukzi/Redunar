@@ -250,6 +250,42 @@ impl Default for OverlayScale {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OverlayEdgeSpacing(u8);
+
+impl OverlayEdgeSpacing {
+    pub const DEFAULT_PIXELS: u8 = 12;
+    pub const MAX_PIXELS: u8 = 96;
+    pub const STEP_PIXELS: u8 = 4;
+
+    #[must_use]
+    pub const fn new(pixels: u8) -> Option<Self> {
+        if pixels <= Self::MAX_PIXELS && pixels.is_multiple_of(Self::STEP_PIXELS) {
+            Some(Self(pixels))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn pixels(self) -> u8 {
+        self.0
+    }
+
+    /// Leave at least half of a small surface available for the overlay.
+    #[must_use]
+    pub fn fit(self, width: u32, height: u32) -> u8 {
+        self.0
+            .min(u8::try_from(width.min(height) / 4).unwrap_or(u8::MAX))
+    }
+}
+
+impl Default for OverlayEdgeSpacing {
+    fn default() -> Self {
+        Self(Self::DEFAULT_PIXELS)
+    }
+}
+
 /// Closed replay durations keep both encoded ring memory and save latency
 /// predictable before a recording backend is enabled.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -380,6 +416,7 @@ pub struct GlobalGameProfile {
     pub overlay_branding: bool,
     pub overlay_metrics: OverlayMetricSet,
     pub overlay_corner: OverlayCorner,
+    pub overlay_edge_spacing: OverlayEdgeSpacing,
     pub overlay_opacity: OverlayOpacity,
     pub overlay_scale: OverlayScale,
     pub gamescope_enabled: bool,
@@ -399,6 +436,7 @@ impl Default for GlobalGameProfile {
             overlay_branding: true,
             overlay_metrics: OverlayMetricSet::default(),
             overlay_corner: OverlayCorner::default(),
+            overlay_edge_spacing: OverlayEdgeSpacing::default(),
             overlay_opacity: OverlayOpacity::default(),
             overlay_scale: OverlayScale::default(),
             gamescope_enabled: false,
@@ -438,6 +476,7 @@ impl PerGameProfile {
             overlay_branding: global.overlay_branding,
             overlay_metrics: global.overlay_metrics,
             overlay_corner: global.overlay_corner,
+            overlay_edge_spacing: global.overlay_edge_spacing,
             overlay_opacity: global.overlay_opacity,
             overlay_scale: global.overlay_scale,
             gamescope_enabled: global.gamescope_enabled,
@@ -469,6 +508,7 @@ pub struct EffectiveGameProfile {
     pub overlay_branding: bool,
     pub overlay_metrics: OverlayMetricSet,
     pub overlay_corner: OverlayCorner,
+    pub overlay_edge_spacing: OverlayEdgeSpacing,
     pub overlay_opacity: OverlayOpacity,
     pub overlay_scale: OverlayScale,
     pub gamescope_enabled: bool,
@@ -720,6 +760,7 @@ mod tests {
                 overlay_branding: true,
                 overlay_metrics: OverlayMetricSet::COMPACT,
                 overlay_corner: OverlayCorner::TopLeft,
+                overlay_edge_spacing: OverlayEdgeSpacing::default(),
                 overlay_opacity: OverlayOpacity::default(),
                 overlay_scale: OverlayScale::default(),
                 gamescope_enabled: false,
@@ -746,6 +787,7 @@ mod tests {
                 overlay_branding: true,
                 overlay_metrics: OverlayMetricSet::COMPACT,
                 overlay_corner: OverlayCorner::TopLeft,
+                overlay_edge_spacing: OverlayEdgeSpacing::default(),
                 overlay_opacity: OverlayOpacity::default(),
                 overlay_scale: OverlayScale::default(),
                 gamescope_enabled: false,

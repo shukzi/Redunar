@@ -11,9 +11,11 @@ use redunar_capture::{
     CaptureSessionId, MAX_MESSAGE_BYTES, OVERLAY_HARDWARE_TELEMETRY_BYTES,
     OverlayHardwareTelemetry, REPLAY_MENU_TELEMETRY_BYTES, ReplayMenuTelemetry, ReplayPixelFormat,
     decode_message, encode_overlay_hardware_telemetry, encode_replay_menu_telemetry,
+    set_overlay_hardware_edge_spacing,
 };
 use redunar_core::{
-    EffectiveGameProfile, GameLaunchConfig, GameRecord, GlobalGameProfile, SystemSnapshot,
+    EffectiveGameProfile, GameLaunchConfig, GameRecord, GlobalGameProfile, OverlayEdgeSpacing,
+    SystemSnapshot,
 };
 use redunar_platform::{
     CaptureLaunchPlan, GameLaunchProcessOwnership, OverlayLaunchConfig, ReplayTransferLaunchConfig,
@@ -494,7 +496,7 @@ impl CaptureSessionHandle {
             overlay_telemetry_path,
             overlay_telemetry_file,
             overlay_telemetry_revision: AtomicU64::new(2),
-            overlay_config: AtomicU64::new(pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true)),
+            overlay_config: AtomicU64::new(default_overlay_config()),
             overlay_replay_saved_revision: AtomicU16::new(0),
             launch_started_at: Instant::now(),
             lifecycle: CaptureLaunchLifecycle::new(),
@@ -950,6 +952,7 @@ impl CaptureSessionHandle {
             overlay_layout_code(profile.overlay_layout),
             overlay_palette_code(profile.overlay_palette),
             profile.overlay_branding,
+            profile.overlay_edge_spacing,
         );
         let packed = packed
             | ((if profile.overlay_visible {
@@ -1111,6 +1114,7 @@ fn write_overlay_config(file: &File, revision: &AtomicU64, packed: u64) -> io::R
     let odd = next - 1;
     file.write_all_at(&odd.to_le_bytes(), 16)?;
     file.write_all_at(&odd.to_le_bytes(), 40)?;
+    set_overlay_hardware_edge_spacing(&mut bytes, unpack_overlay_edge_spacing(packed));
     bytes[12] = u8::try_from(packed & 0xff).expect("masked corner fits");
     bytes[13] = u8::try_from((packed >> 8) & 0xff).expect("masked preset fits");
     bytes[14..16].copy_from_slice(
@@ -1839,6 +1843,7 @@ fn create_overlay_telemetry_file(directory: &Path) -> io::Result<(PathBuf, File)
         metrics: 1,
         opacity_percent: 50,
         scale_percent: 100,
+        edge_spacing_px: None,
         replay_saved_revision: 0,
         metrics_visible: None,
         branding_visible: true,
@@ -1903,6 +1908,7 @@ fn write_overlay_hardware(
         metrics: ((packed_config >> 16) & 0xffff) as u16,
         opacity_percent: ((packed_config >> 32) & 0xff) as u8,
         scale_percent: ((packed_config >> 40) & 0xff) as u8,
+        edge_spacing_px: unpack_overlay_edge_spacing(packed_config),
         replay_saved_revision,
         metrics_visible: match (packed_config >> 48) & 0xff {
             value if value & 0x03 == 1 => Some(true),
@@ -1929,9 +1935,13 @@ fn write_overlay_hardware(
     file.write_all_at(&bytes, 0)
 }
 
+fn default_overlay_config() -> u64 {
+    pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true, OverlayEdgeSpacing::default())
+}
+
 #[expect(
     clippy::too_many_arguments,
-    reason = "the fixed wire layout has eight independent fields"
+    reason = "pack the independent overlay settings into one atomic snapshot"
 )]
 fn pack_overlay_config(
     corner: u8,
@@ -1942,15 +1952,30 @@ fn pack_overlay_config(
     layout: u8,
     palette: u8,
     branding_visible: bool,
+    edge_spacing: OverlayEdgeSpacing,
 ) -> u64 {
+    // Five unused bits hold spacing in four-pixel steps. Zero keeps the legacy format.
+    let spacing_code = if edge_spacing == OverlayEdgeSpacing::default() {
+        0
+    } else {
+        edge_spacing.pixels() / OverlayEdgeSpacing::STEP_PIXELS + 1
+    };
+    debug_assert!(spacing_code <= 0x1f);
     u64::from(corner)
         | (u64::from(preset) << 8)
         | (u64::from(metrics) << 16)
         | (u64::from(opacity) << 32)
         | (u64::from(scale) << 40)
         | (u64::from(branding_visible) << 50)
+        | (u64::from(spacing_code) << 51)
         | (u64::from(layout & 0x0f) << 56)
         | (u64::from(palette & 0x0f) << 60)
+}
+
+fn unpack_overlay_edge_spacing(packed: u64) -> Option<u8> {
+    let code = ((packed >> 51) & 0x1f) as u8;
+    code.checked_sub(1)
+        .map(|steps| steps * OverlayEdgeSpacing::STEP_PIXELS)
 }
 
 const fn overlay_corner_code(value: redunar_core::OverlayCorner) -> u8 {
@@ -2177,15 +2202,20 @@ mod tests {
             )
             .unwrap()
         };
-        for visible in [false, true, false] {
+        for (visible, spacing) in [(false, 12), (true, 0), (false, 96)] {
             profile.overlay_visible = visible;
+            profile.overlay_edge_spacing = OverlayEdgeSpacing::new(spacing).unwrap();
+            let wire_spacing = (spacing != 12).then_some(spacing);
             capture.update_overlay_config(&profile).unwrap();
+            assert_eq!(read().edge_spacing_px, wire_spacing);
             capture.update_overlay_hardware(None).unwrap();
+            assert_eq!(read().edge_spacing_px, wire_spacing);
             assert_eq!(read().metrics_visible, Some(visible));
             assert_eq!(read().opacity_percent, profile.overlay_opacity.percent());
         }
         capture.publish_replay_saved_notice().unwrap();
         assert_eq!(read().metrics_visible, Some(false));
+        assert_eq!(read().edge_spacing_px, Some(96));
         assert_ne!(read().replay_saved_revision, 0);
         let before = capture.overlay_config.load(Ordering::Relaxed);
         let good = fs::read(&capture.overlay_telemetry_path).unwrap();
@@ -2194,7 +2224,9 @@ mod tests {
         assert!(capture.update_overlay_config(&profile).is_err());
         assert_eq!(capture.overlay_config.load(Ordering::Relaxed), before);
         fs::write(&capture.overlay_telemetry_path, good).unwrap();
+        profile.overlay_edge_spacing = OverlayEdgeSpacing::default();
         capture.update_overlay_config(&profile).unwrap();
+        assert_eq!(read().edge_spacing_px, None);
         assert_eq!(read().metrics_visible, Some(true));
         capture.shutdown();
     }
@@ -2468,7 +2500,7 @@ mod tests {
             &revision,
             Some(&hardware),
             hardware.gpus.first(),
-            pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true),
+            default_overlay_config(),
             0,
         )
         .expect("write telemetry");
@@ -2489,15 +2521,8 @@ mod tests {
         assert_eq!(noticed.revision, 6);
         assert_eq!(noticed.replay_saved_revision, 9);
 
-        write_overlay_hardware(
-            &file,
-            &revision,
-            None,
-            None,
-            pack_overlay_config(0, 0, 1, 50, 100, 0, 0, true),
-            9,
-        )
-        .expect("clear telemetry");
+        write_overlay_hardware(&file, &revision, None, None, default_overlay_config(), 9)
+            .expect("clear telemetry");
         file.read_exact_at(&mut bytes, 0)
             .expect("read cleared telemetry");
         let cleared = decode_overlay_hardware_telemetry(&bytes).expect("decode cleared telemetry");

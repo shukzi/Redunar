@@ -1,4 +1,5 @@
 export const FPS_ONLY = 'FPS only';
+export const overlayEdgeSpacing = {defaultPixels:12,maxPixels:96,stepPixels:4};
 export const overlayLayouts = ['Ribbon', 'Telemetry', FPS_ONLY];
 export const panelPresets = ['Compact', 'Detailed', 'Custom'];
 

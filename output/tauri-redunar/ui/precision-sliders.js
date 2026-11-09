@@ -1,8 +1,9 @@
 // Native ranges own pointer/keyboard input. Exact-value fields commit through
 // those same events, keeping draft and recording-save behavior in their owners.
 const escapeAttribute=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const unitLabel=unit=>unit==='%'?'percent':unit==='px'?'pixels':'decibels';
 export function sliderValueMarkup({id,label,value,unit='%'}) {
-  return `<span class="slider-value"><input id="${escapeAttribute(id)}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-slider-value aria-label="${escapeAttribute(label)}, ${unit==='%'?'percent':'decibels'}" value="${escapeAttribute(value)}"><span aria-hidden="true">${escapeAttribute(unit)}</span></span>`;
+  return `<span class="slider-value"><input id="${escapeAttribute(id)}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-slider-value aria-label="${escapeAttribute(label)}, ${unitLabel(unit)}" value="${escapeAttribute(value)}"><span aria-hidden="true">${escapeAttribute(unit)}</span></span>`;
 }
 
 export function normalizedSliderValue(raw,min,max,step) {
@@ -28,7 +29,7 @@ export function updatePrecisionSlider(input,{forceValue=false}={}) {
   if(value){
     if(value.disabled!==input.disabled)value.disabled=input.disabled;
     if((forceValue||input.ownerDocument.activeElement!==value)&&value.value!==input.value)value.value=input.value;
-    const unit=value.nextElementSibling?.textContent==='%'?'percent':'decibels';
+    const unit=unitLabel(value.nextElementSibling?.textContent);
     const label=`${input.value} ${unit}`;
     if(input.getAttribute('aria-valuetext')!==label)input.setAttribute('aria-valuetext',label);
   }

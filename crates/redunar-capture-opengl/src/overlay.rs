@@ -9,7 +9,7 @@ use redunar_capture::{
     REPLAY_MENU_VARIABLE_FPS, ReplayMenuStatus, ReplayMenuTelemetry,
     decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
 };
-use redunar_core::{OverlayMetricSet, overlay_font};
+use redunar_core::{OverlayEdgeSpacing, OverlayMetricSet, overlay_font};
 use std::env;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -27,7 +27,7 @@ const OVERLAY_BRANDING_ENV: &str = "REDUNAR_OVERLAY_BRANDING";
 const OVERLAY_METRICS_ENV: &str = "REDUNAR_OVERLAY_METRICS";
 const OVERLAY_OPACITY_ENV: &str = "REDUNAR_OVERLAY_OPACITY_PERCENT";
 
-const PANEL_MARGIN: i32 = 12;
+const PANEL_MARGIN: i32 = OverlayEdgeSpacing::DEFAULT_PIXELS as i32;
 const TELEMETRY_INTERVAL_NS: u64 = 50_000_000;
 const MENU_TELEMETRY_INTERVAL_NS: u64 = 8_000_000;
 const REPLAY_SAVED_NOTICE_NS: u64 = 3_000_000_000;
@@ -167,6 +167,7 @@ struct OverlayState {
     layout: Layout,
     metrics: u16,
     scale_percent: u8,
+    edge_spacing: OverlayEdgeSpacing,
     opacity_percent: u8,
     branding_visible: bool,
     hardware: MetricSnapshot,
@@ -194,6 +195,7 @@ impl OverlayState {
             layout: layout_from_environment(),
             metrics: metrics_from_environment(),
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             opacity_percent: opacity_from_environment(),
             branding_visible: branding_from_environment(),
             hardware: MetricSnapshot::default(),
@@ -232,6 +234,10 @@ impl OverlayState {
                 self.layout = layout_from_index(telemetry.layout);
                 self.metrics = telemetry.metrics;
                 self.scale_percent = telemetry.scale_percent;
+                self.edge_spacing = telemetry
+                    .edge_spacing_px
+                    .and_then(OverlayEdgeSpacing::new)
+                    .unwrap_or_default();
                 self.opacity_percent = telemetry.opacity_percent;
                 self.branding_visible = telemetry.branding_visible;
                 self.hardware.cpu_percent = telemetry.cpu_utilization_tenths.map(round_percent);
@@ -317,6 +323,7 @@ struct RenderConfig {
     layout: Layout,
     metrics: u16,
     scale_percent: u8,
+    edge_spacing: OverlayEdgeSpacing,
     opacity_percent: u8,
     branding_visible: bool,
 }
@@ -447,6 +454,7 @@ pub(crate) fn render(context: usize, api: ApiFlavor) {
         layout: state.layout,
         metrics: state.metrics,
         scale_percent: state.scale_percent,
+        edge_spacing: state.edge_spacing,
         opacity_percent: state.opacity_percent,
         branding_visible: state.branding_visible,
     };
@@ -502,11 +510,16 @@ fn render_metrics_surface(
 ) -> bool {
     let metrics = selected_metrics(snapshot, config);
     let (logical_width, logical_height) = layout_extent(config, metrics);
+    let margin = i32::from(config.edge_spacing.fit(
+        u32::try_from(viewport[2]).unwrap_or(0),
+        u32::try_from(viewport[3]).unwrap_or(0),
+    ));
     let scale_percent = effective_scale(
         viewport,
         logical_width,
         logical_height,
         config.scale_percent,
+        margin,
     );
     if scale_percent == 0 {
         return true;
@@ -519,6 +532,7 @@ fn render_metrics_surface(
         logical_height,
         scale_percent,
         config.corner,
+        margin,
     );
     let Ok(mut cache) = RENDER_CACHE.try_lock() else {
         return true;
@@ -575,6 +589,7 @@ fn render_menu_surface(
         REPLAY_MENU_WIDTH,
         REPLAY_MENU_HEIGHT,
         REPLAY_MENU_SCALE_PERCENT,
+        PANEL_MARGIN,
     );
     // Keep the menu near the 89%-of-scene proportions of the approved
     // reference on small GL viewports, matching the Vulkan presentation.
@@ -692,7 +707,13 @@ fn render_saved_notice_surface(
     viewport: [i32; 4],
     source_revision: u64,
 ) -> bool {
-    let scale = effective_scale(viewport, SAVED_NOTICE_WIDTH, SAVED_NOTICE_HEIGHT, 100);
+    let scale = effective_scale(
+        viewport,
+        SAVED_NOTICE_WIDTH,
+        SAVED_NOTICE_HEIGHT,
+        100,
+        PANEL_MARGIN,
+    );
     if scale == 0 {
         return true;
     }
@@ -1477,9 +1498,9 @@ fn scale_value(value: i32, percent: u32) -> i32 {
     i32::try_from(i64::from(value).saturating_mul(i64::from(percent)) / 100).unwrap_or(i32::MAX)
 }
 
-fn effective_scale(viewport: [i32; 4], width: i32, height: i32, requested: u8) -> u32 {
-    let available_width = viewport[2].saturating_sub(PANEL_MARGIN * 2).max(0);
-    let available_height = viewport[3].saturating_sub(PANEL_MARGIN * 2).max(0);
+fn effective_scale(viewport: [i32; 4], width: i32, height: i32, requested: u8, margin: i32) -> u32 {
+    let available_width = viewport[2].saturating_sub(margin * 2).max(0);
+    let available_height = viewport[3].saturating_sub(margin * 2).max(0);
     let width_limit = u32::try_from(available_width)
         .unwrap_or(0)
         .saturating_mul(100)
@@ -1497,13 +1518,14 @@ fn panel_origin(
     height: i32,
     scale_percent: u32,
     corner: Corner,
+    margin: i32,
 ) -> (i32, i32) {
     let physical_width = scale_value(width, scale_percent);
     let physical_height = scale_value(height, scale_percent);
-    let left = viewport[0] + PANEL_MARGIN;
-    let right = viewport[0] + viewport[2] - physical_width - PANEL_MARGIN;
-    let bottom = viewport[1] + PANEL_MARGIN;
-    let top = viewport[1] + viewport[3] - physical_height - PANEL_MARGIN;
+    let left = viewport[0] + margin;
+    let right = viewport[0] + viewport[2] - physical_width - margin;
+    let bottom = viewport[1] + margin;
+    let top = viewport[1] + viewport[3] - physical_height - margin;
     match corner {
         Corner::TopLeft => (left, top),
         Corner::TopRight => (right, top),
@@ -1909,10 +1931,10 @@ fn round_temp(tenths: u16) -> i16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Canvas, Corner, FixedText, FrameHistory, Layout, MetricSnapshot, OverlayState, Preset,
-        REPLAY_MENU_HEIGHT, REPLAY_MENU_WIDTH, RenderConfig, SAVED_NOTICE_HEIGHT,
-        SAVED_NOTICE_WIDTH, draw_text_scaled, layout_extent, palette_from_index, panel_origin,
-        render_plan, render_replay_menu, render_saved_notice,
+        Canvas, Corner, FixedText, FrameHistory, Layout, MetricSnapshot, OverlayEdgeSpacing,
+        OverlayState, PANEL_MARGIN, Preset, REPLAY_MENU_HEIGHT, REPLAY_MENU_WIDTH, RenderConfig,
+        SAVED_NOTICE_HEIGHT, SAVED_NOTICE_WIDTH, draw_text_scaled, layout_extent,
+        palette_from_index, panel_origin, render_plan, render_replay_menu, render_saved_notice,
     };
     use redunar_capture::{
         OVERLAY_HARDWARE_TELEMETRY_BYTES, OverlayHardwareTelemetry, REPLAY_MENU_TELEMETRY_BYTES,
@@ -1992,6 +2014,7 @@ mod tests {
             layout: Layout::Ribbon,
             metrics: 0,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             opacity_percent: 65,
             branding_visible: false,
         };
@@ -2029,6 +2052,7 @@ mod tests {
             layout: Layout::Telemetry,
             metrics: 0,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             opacity_percent: 65,
             branding_visible: false,
         };
@@ -2061,12 +2085,34 @@ mod tests {
     fn panel_origin_honors_viewport_offset_and_corner() {
         let viewport = [10, 20, 640, 360];
         assert_eq!(
-            panel_origin(viewport, 160, 36, 100, Corner::TopLeft),
+            panel_origin(viewport, 160, 36, 100, Corner::TopLeft, PANEL_MARGIN),
             (22, 332)
         );
         assert_eq!(
-            panel_origin(viewport, 160, 36, 100, Corner::BottomRight),
+            panel_origin(viewport, 160, 36, 100, Corner::BottomRight, PANEL_MARGIN),
             (478, 32)
+        );
+        for (corner, expected) in [
+            (Corner::TopLeft, (58, 296)),
+            (Corner::TopRight, (442, 296)),
+            (Corner::BottomLeft, (58, 68)),
+            (Corner::BottomRight, (442, 68)),
+        ] {
+            assert_eq!(panel_origin(viewport, 160, 36, 100, corner, 48), expected);
+        }
+        let small = [10, 20, 160, 60];
+        let margin = i32::from(OverlayEdgeSpacing::new(96).unwrap().fit(160, 60));
+        let scale = super::effective_scale(small, 300, 148, 200, margin);
+        assert!(scale > 0);
+        let (x, y) = panel_origin(small, 300, 148, scale, Corner::TopRight, margin);
+        assert!(x >= small[0] + margin && y >= small[1] + margin);
+        assert_eq!(
+            x + super::scale_value(300, scale),
+            small[0] + small[2] - margin
+        );
+        assert_eq!(
+            y + super::scale_value(148, scale),
+            small[1] + small[3] - margin
         );
     }
 
@@ -2087,6 +2133,7 @@ mod tests {
             layout: Layout::Telemetry,
             metrics: 1,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             opacity_percent: 50,
             branding_visible: true,
         };
@@ -2124,6 +2171,7 @@ mod tests {
                 metrics: 1,
                 opacity_percent: 50,
                 scale_percent: 100,
+                edge_spacing_px: Some(48),
                 replay_saved_revision: 0,
                 metrics_visible: Some(true),
                 branding_visible: true,
@@ -2149,6 +2197,7 @@ mod tests {
             layout: Layout::Ribbon,
             metrics: 1,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             opacity_percent: 50,
             branding_visible: false,
             hardware: MetricSnapshot::default(),
@@ -2166,6 +2215,7 @@ mod tests {
         assert_eq!(state.palette, palette_from_index(7));
         assert_eq!(state.preset, Preset::FpsOnly);
         assert_eq!(state.scale_percent, 100);
+        assert_eq!(state.edge_spacing.pixels(), 48);
         fs::remove_file(path).expect("remove telemetry");
     }
 
@@ -2226,6 +2276,7 @@ mod tests {
                     layout: Layout::Ribbon,
                     metrics: 0,
                     scale_percent: 100,
+                    edge_spacing: OverlayEdgeSpacing::default(),
                     opacity_percent: 60,
                     branding_visible: true,
                 };
@@ -2247,6 +2298,7 @@ mod tests {
                     layout: Layout::Telemetry,
                     metrics: 0,
                     scale_percent: 100,
+                    edge_spacing: OverlayEdgeSpacing::default(),
                     opacity_percent: 60,
                     branding_visible: true,
                 };
@@ -2320,6 +2372,7 @@ mod tests {
                 metrics: 1,
                 opacity_percent: 50,
                 scale_percent: 100,
+                edge_spacing_px: None,
                 replay_saved_revision: 3,
                 metrics_visible: Some(false),
                 branding_visible: true,
@@ -2366,6 +2419,7 @@ mod tests {
             layout: Layout::Telemetry,
             metrics: 1,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             opacity_percent: 50,
             branding_visible: true,
             hardware: MetricSnapshot::default(),

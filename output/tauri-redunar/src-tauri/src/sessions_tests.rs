@@ -162,6 +162,7 @@ fn active_capture_accepts_global_overlay_changes_without_a_restart() {
         )
         .unwrap(),
         overlay_corner: redunar_core::OverlayCorner::BottomRight,
+        overlay_edge_spacing: redunar_core::OverlayEdgeSpacing::new(76).unwrap(),
         overlay_opacity: redunar_core::OverlayOpacity::new(72).unwrap(),
         overlay_scale: redunar_core::OverlayScale::new(135).unwrap(),
         ..GlobalGameProfile::default()
@@ -176,6 +177,10 @@ fn active_capture_accepts_global_overlay_changes_without_a_restart() {
     assert_eq!(active.profile.overlay_palette, requested.overlay_palette);
     assert_eq!(active.profile.overlay_metrics, requested.overlay_metrics);
     assert_eq!(active.profile.overlay_corner, requested.overlay_corner);
+    assert_eq!(
+        active.profile.overlay_edge_spacing,
+        requested.overlay_edge_spacing
+    );
     assert_eq!(active.profile.overlay_opacity, requested.overlay_opacity);
     assert_eq!(active.profile.overlay_scale, requested.overlay_scale);
 

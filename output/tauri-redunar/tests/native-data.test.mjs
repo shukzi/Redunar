@@ -127,7 +127,7 @@ test('catalog identifiers retain precision and edits do not mutate backend respo
  assert.equal(game.id,source[0].id);assert.equal(source[0].overrides.overlay,false);
 });
 test('defaults round-trip real backend values, including frame metrics, zero opacity and temperatures',()=>{
- const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replay:true,fps:60,quality:'Efficient',format:'MP4',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
+ const values={overlay:false,preset:'Custom',layout:'Telemetry',palette:'Glacier',position:'Bottom right',edgeSpacing:0,scale:200,opacity:0,metrics:['GPU temperature'],captureMetrics:false,replay:true,fps:60,quality:'Efficient',format:'MP4',shortcuts:{overlay:'Shift+Tab','30':'F8'}};
  const result=profilePayload(mapDefaults({values}),values.shortcuts);
  for(const key of Object.keys(values))assert.deepEqual(result[key],values[key]);
 });
@@ -191,7 +191,7 @@ test('saving Global settings reports whether the live overlay was updated',()=>{
 });
 test('Global numeric controls keep u8 and FPS values numeric on change',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
- assert.match(source,/draft\[key\]=t\.type==='checkbox'\?t\.checked:\['fps','scale','opacity'\]\.includes\(key\)\?Number\(t\.value\):t\.value;/);
+ assert.match(source,/draft\[key\]=t\.type==='checkbox'\?t\.checked:\['fps','edgeSpacing','scale','opacity'\]\.includes\(key\)\?Number\(t\.value\):t\.value;/);
 });
 test('core navigation remains available and retired module writes are not exposed',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');

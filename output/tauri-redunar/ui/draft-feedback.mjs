@@ -9,7 +9,7 @@ export function profileDraftScopes(current,saved) {
  const layoutChanged=selectedOverlayLayout(current)!==selectedOverlayLayout(saved);
  const panelPresetChanged=current.preset!==FPS_ONLY&&saved.preset!==FPS_ONLY&&changed('preset');
  return [
-  ['Overlay appearance',layoutChanged||['layout','palette','branding','position','scale','opacity'].some(changed)],
+  ['Overlay appearance',layoutChanged||['layout','palette','branding','position','edgeSpacing','scale','opacity'].some(changed)],
   ['Displayed metrics',panelPresetChanged||changed('metrics')],
   ['Overlay visibility',changed('overlay')],
   ['Session metrics',changed('captureMetrics')],
