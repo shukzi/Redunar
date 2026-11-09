@@ -43,6 +43,13 @@ scroll animation. Unchanged measurements, labels, drafts, and mounted media
 retain their DOM nodes. Visibility observers disconnect when content is
 replaced or leaves the feature.
 
+Load saved session timelines only when History is open. A history change
+outside that page does not load its graphs. The first visit and explicit
+refresh read saved history off the window thread. Keep loaded data for return
+visits. Stop periodic webview refreshes while the window is hidden and resume
+on return. Native monitoring, session supervision, and shortcuts run
+independently.
+
 Scrollbar styling uses one path per engine. WebKit uses the existing pseudo
 rules without a competing `scrollbar-color` override, so pressed native overlay
 thumbs retain their neutral appearance. Scrolling remains engine-owned.
@@ -83,6 +90,12 @@ Record:
 - workload, duration, capture mode, resolution, frame rate and audio backend;
 - Redunar CPU/RSS, game frame pacing, GPU/VRAM use, encoder latency, drops,
   output duration, decodability, and cleanup result.
+
+For an idle desktop comparison, match the viewport, renderer, saved inventory,
+and settling time. Record whether History was opened. Measure the main process
+and its WebKit children. Summed RSS counts shared pages once for each process;
+PSS divides those pages among the processes that use them. Report idle CPU as a
+percentage of one core over the same sample interval.
 
 Use fake hardware and isolated state for ordinary tests. Use
 [REAL-GAME-TESTING.md](REAL-GAME-TESTING.md) for live-game checks. Synthetic

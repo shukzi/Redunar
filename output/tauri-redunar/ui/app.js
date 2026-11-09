@@ -22,7 +22,7 @@ import { mergeGameDrafts } from './game-drafts.mjs';
 import { globalDraftFeedback } from './draft-feedback.mjs';
 import { overlaySettings, updateOverlayEditor, updateOverlaySessionState } from './overlay-settings.mjs';
 import { refreshWorkspacePresentation, retainControlGroups, setControlHint } from './workspace-presentation.mjs';
-import { startRuntime, latestRuntimeRefresh } from './runtime-polling.mjs';
+import { startRuntime, latestRuntimeRefresh, pollVisibleRuntime } from './runtime-polling.mjs';
 import { clipPreviewLoader } from './clip-library.mjs';
 import { clipVisibilityTracker } from './clip-visibility.mjs';
 import { replayStatusCopy } from './replay-menu-view.mjs';
@@ -88,7 +88,7 @@ const appWindow = native ? getCurrentWindow() : null;
 const loaded = {catalog:false,clips:false,history:false,global:false,preferences:false,replayPreferences:false};
 const errors = {};
 let hardware = null, runtime = null, modules = null, diagnostics = null, displayCapability = null, activeSession = null, replayPreferences = null, storageStatus = null, globalRevision = null, savedShortcutMap = {}, busy = false;
-let lastLoadedHistoryRevision = null;
+let observedHistoryRevision = null, lastLoadedHistoryRevision = null, historyRead = null;
 const refreshFeedback=createRefreshFeedback({changed:()=>updateObservedElements()});
 window.addEventListener('pagehide',()=>refreshFeedback.clear());
 let observedSaveRevision = null, loadedClipRevision = null;
@@ -607,14 +607,14 @@ function historyComparison(selected,peer) {
  return `<section class="panel history-comparison"><div class="section-heading"><div><h3>Session comparison</h3><p>Compared with ${escape(peer.date)} at ${escape(peer.time)}</p></div>${pill('Same game')}</div><div class="comparison-grid"><div><span>Average FPS</span><b>${deltaText(selected.averageFps,peer.averageFps,' FPS')}</b></div><div><span>1% low</span><b>${deltaText(selected.onePercentLowFps,peer.onePercentLowFps,' FPS')}</b></div><div><span>0.1% low</span><b>${deltaText(selected.pointOnePercentLowFps,peer.pointOnePercentLowFps,' FPS')}</b></div><div><span>Saved frame time</span><b>${deltaText(selectedFrame,peerFrame,' ms')}</b></div></div></section>`;
 }
 function historyCatalog() {
- return `<aside class="history-catalog" aria-label="Saved sessions"><div class="history-catalog-heading"><h2>Sessions</h2><button type="button" class="icon-button" data-action="reload-history" data-refresh-key="history" aria-label="Refresh history" title="Refresh history">${refreshButtonContent('history')}</button></div><label class="search">${icon('search')}<input id="history-search" type="search" placeholder="Find a session" aria-label="Find a session" value="${escape(historyFilters.search)}"></label>${historyFiltersMarkup(sessions,historyFilters)}<div class="catalog-label" id="history-result-count">${errors.history?'Sessions unavailable':`${filterSessions(sessions,historyFilters).length} of ${sessions.length} ${sessions.length===1?'session':'sessions'}`}</div><div id="session-list">${historyRows()}</div><div class="catalog-note">${icon('info')}<p>Saved on this computer.</p></div></aside>`;
+ return `<aside class="history-catalog" aria-label="Saved sessions"><div class="history-catalog-heading"><h2>Sessions</h2><button type="button" class="icon-button" data-action="reload-history" data-refresh-key="history" aria-label="Refresh history" title="Refresh history">${refreshButtonContent('history')}</button></div><label class="search">${icon('search')}<input id="history-search" type="search" placeholder="Find a session" aria-label="Find a session" value="${escape(historyFilters.search)}"></label>${historyFiltersMarkup(sessions,historyFilters)}<div class="catalog-label" id="history-result-count">${errors.history?'Sessions unavailable':!loaded.history?'Loading…':`${filterSessions(sessions,historyFilters).length} of ${sessions.length} ${sessions.length===1?'session':'sessions'}`}</div><div id="session-list">${historyRows()}</div><div class="catalog-note">${icon('info')}<p>Saved on this computer.</p></div></aside>`;
 }
 function history() {
  const visible=filterSessions(sessions,historyFilters),s=visible.length?sessions[selectedSession]:null;
  if(!s){
-  const title=errors.history?'History unavailable':sessions.length?'No matching sessions':'No saved sessions yet';
-  const note=errors.history||(sessions.length?'Change the search, game, or date to see more sessions.':'Start a game from Library or a game set up for Redunar in Steam. Its readings appear here after the session ends.');
-  return `<div class="history-workspace">${historyCatalog()}<section class="history-detail"><section class="panel empty-panel history-empty"><span class="shortcut-icon">${icon('history')}</span><h2>${title}</h2><p>${escape(note)}</p>${sessions.length&&!errors.history?button('Clear filters','clear-history-filters'):''}</section></section></div>`;
+  const title=errors.history?'History unavailable':!loaded.history?'Loading sessions…':sessions.length?'No matching sessions':'No saved sessions yet';
+  const note=errors.history||(!loaded.history?'':sessions.length?'Change the search, game, or date to see more sessions.':'Start a game from Library or a game set up for Redunar in Steam. Its readings appear here after the session ends.');
+  return `<div class="history-workspace">${historyCatalog()}<section class="history-detail"><section class="panel empty-panel history-empty"><span class="shortcut-icon">${icon('history')}</span><h2>${title}</h2>${note?`<p>${escape(note)}</p>`:''}${sessions.length&&!errors.history?button('Clear filters','clear-history-filters'):''}</section></section></div>`;
  }
  const peer=historyPeer(s),timeline=historyTimeline(s),duration=historyDuration(s,timeline.samples);
  if(historyCursor===null||historyCursor>duration)historyCursor=timeline.samples.at(-1)?.elapsed??0;
@@ -624,6 +624,7 @@ function history() {
 }
 function historyRows() {
  if(errors.history)return '<p class="history-list-empty">Sessions unavailable</p>';
+ if(!loaded.history)return '';
  return filterSessions(sessions,historyFilters).map(s=>`<button class="history-row ${s.index===selectedSession?'selected':''}" data-session="${s.index}" aria-pressed="${s.index===selectedSession}"><strong>${escape(s.game)}</strong><small>${escape(s.date)} · ${escape(s.time)}</small><span>${s.duration}<b>${s.fps} FPS</b></span></button>`).join('') || `<p class="history-list-empty">${sessions.length?'No matching sessions':'No sessions yet'}</p>`;
 }
 function refreshHistoryRail() {
@@ -1114,6 +1115,10 @@ function updatePlayerUi(){
 }
 
 function controlState(element,name,value){const next=Boolean(value);if(element[name]!==next)element[name]=next;}
+function updateHistoryRefreshButton() {
+ const button=$('[data-action="reload-history"]');
+ if(button)controlState(button,'disabled',!native||busy||Boolean(historyRead)||refreshFeedback.pending('history'));
+}
 
 function updateDirtyActionButtons() {
  const discard=$('[data-action="discard-global"]');
@@ -1182,7 +1187,7 @@ function updateObservedElements() {
  const outside=$('[data-replay-preference="outside"]');if(outside){controlState(outside,'checked',replayPreferences?.close_overlay_on_outside_click===true);controlState(outside,'disabled',!native||!replayPreferences||busy);}
  const refreshInputs=$('[data-action="reload-microphone-devices"]');
  if(refreshInputs)controlState(refreshInputs,'disabled',!native||!replayPreferences||busy||replayPreferences.microphone_mode==='off'||Boolean(activeSession?.launch_locked)||Boolean(active())||Boolean(microphoneInputsPending)||refreshFeedback.pending('inputs'));
- const refreshHistory=$('[data-action="reload-history"]');if(refreshHistory)controlState(refreshHistory,'disabled',!native||busy||refreshFeedback.pending('history'));
+ updateHistoryRefreshButton();
  refreshFeedback.sync(workspace);
  const logStatus=$('#diagnostic-log-status');
  if(logStatus){const text=diagnosticDisplayStatus();if(logStatus.textContent!==text)logStatus.textContent=text;if(logStatus.hidden!==!text)controlState(logStatus,'hidden',!text);}
@@ -1217,12 +1222,14 @@ function updateObservedElements() {
   'vram-used':hardware?.vram_used_bytes==null?'—':(hardware.vram_used_bytes/1073741824).toFixed(1)+' GiB',
   'session-note':activeSession?.message||'',
   'session-name':activeSession?.game||'No game running', 'session-phase':({Idle:'No session running',Launching:'Starting game',Running:'Running',Ending:'Ending session',Ended:'Session ended'})[activeSession?.phase]||activeSession?.phase||'Session status unavailable',
-  'replay-status-title':replayStatusCopy(runtime).title, 'replay-phase':runtime?.can_save?'':replayStatusCopy(runtime).detail, 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—',
+  'replay-status-title':replayCopy.title, 'replay-phase':runtime?.can_save?'':replayCopy.detail, 'replay-buffer':runtime?measurement(runtime.buffered_seconds)+' s buffered':'—', 'replay-frame-count':runtime?`${runtime.received_frame_count||0} received · ${runtime.encoded_packet_count||0} encoded · ${['Buffering','Saving'].includes(runtime.phase)?runtime.audio_active?'audio active':runtime.audio_packet_count>0?'audio stalled':'audio waiting':'audio inactive'}`:'—',
   'overview-replay-status':replayCopy.statusClass==='ready'?replayCopy.detail:replayCopy.title,
  };
  for(const [id,text] of Object.entries(values)){ const el=document.getElementById(id);if(el&&el.textContent!==text)el.textContent=text; }
- for(const name of ['GPU','CPU']) { const el=$(`#${name}-meter`);if(el)el.style.width=`${Math.max(0,Math.min(100,hardware?.[name.toLowerCase()+'_utilization_percent']||0))}%`; }
- for(const [id,value] of [['GPU-temperature',hardware?.gpu_temperature_celsius],['CPU-temperature',hardware?.cpu_temperature_celsius],['ram',hardware?.ram_total_bytes?hardware.ram_used_bytes/hardware.ram_total_bytes*100:0],['vram',hardware?.vram_total_bytes?hardware.vram_used_bytes/hardware.vram_total_bytes*100:0]]){const bar=document.getElementById(id+'-meter');if(bar)bar.style.width=`${clamp(value||0,0,100)}%`;}
+ for(const [id,value] of [['GPU',hardware?.gpu_utilization_percent],['CPU',hardware?.cpu_utilization_percent],['GPU-temperature',hardware?.gpu_temperature_celsius],['CPU-temperature',hardware?.cpu_temperature_celsius],['ram',hardware?.ram_total_bytes?hardware.ram_used_bytes/hardware.ram_total_bytes*100:0],['vram',hardware?.vram_total_bytes?hardware.vram_used_bytes/hardware.vram_total_bytes*100:0]]){
+  const bar=document.getElementById(id+'-meter'),width=`${clamp(value||0,0,100)}%`;
+  if(bar&&bar.style.width!==width)bar.style.width=width;
+ }
  const shortcut=$('#save-replay-shortcut');
  if(shortcut){
   const assignment=savedShortcutMap[$('#save-duration')?.value]||'';
@@ -1234,7 +1241,7 @@ function updateObservedElements() {
   const slot=shortcut.parentElement;
   const characters=Math.max(0,...durations.map(duration=>String(savedShortcutMap[duration]||'').length));
   controlState(slot,'hidden',characters===0);
-  slot.style.setProperty('--shortcut-characters',String(characters));
+  if(slot.style.getPropertyValue('--shortcut-characters')!==String(characters))slot.style.setProperty('--shortcut-characters',String(characters));
  }
  // Compare source markup with the last source markup, not serialized DOM:
  // WebKit normalizes SVG and would otherwise replace unchanged status nodes.
@@ -1243,7 +1250,7 @@ function updateObservedElements() {
  const save=$('[data-action="save-replay"]');if(save){
   controlState(save,'disabled',!native||busy||!runtime?.can_save);
   const saving=replaySavePending||runtime?.phase==='Saving',label=save.querySelector('[data-replay-save-label]');
-  save.setAttribute('aria-busy',String(saving));
+  if(save.getAttribute('aria-busy')!==String(saving))save.setAttribute('aria-busy',String(saving));
   const text=saving?'Saving…':Date.now()<replaySavedUntil?'Saved':'Save replay';
   if(label&&label.textContent!==text)label.textContent=text;
  }
@@ -1252,7 +1259,8 @@ function updateObservedElements() {
   const status=installation.status(game()?.id);
   controlState(launch,'disabled',!native||busy||Boolean(activeSession?.launch_locked)||active()||status!=='installed');
   const note=$('#game-installation-note');
-  note.textContent=status==='not_installed'?'Not installed':status==='unknown'?'Installation status unavailable':status==='checking'?'Checking installation…':'';
+  const text=status==='not_installed'?'Not installed':status==='unknown'?'Installation status unavailable':status==='checking'?'Checking installation…':'';
+  if(note.textContent!==text)note.textContent=text;
   controlState(note,'hidden',status==='installed');
  }
  const observed=activeSession?.measurements;
@@ -1285,7 +1293,10 @@ async function readRuntime() {
  preferences.diagnosticLogStatus=results[0].status==='fulfilled'?results[0].value.diagnostic_log_status:undefined;
  runtime=results[1].status==='fulfilled'?results[1].value:null;
  if(Number.isSafeInteger(runtime?.completed_save_revision))observedSaveRevision=runtime.completed_save_revision;
- activeSession=results[2].status==='fulfilled'?visibleSession(results[2].value):null;
+ const sessionStatus=results[2].status==='fulfilled'?results[2].value:null;
+ activeSession=visibleSession(sessionStatus);
+ // A completed session can disappear from Overview before History reloads.
+ if(Number.isSafeInteger(sessionStatus?.history_revision))observedHistoryRevision=sessionStatus.history_revision;
  modules=results[3].status==='fulfilled'?results[3].value:null;
  shortcutStatus=results[4].status==='fulfilled'?results[4].value:shortcutStatus;
  if(slowResults){
@@ -1297,14 +1308,13 @@ async function readRuntime() {
  if(connectionStatus){const text=results[0].value?.read_only?'Another Redunar app is open · read-only':results.slice(0,4).every(r=>r.status==='rejected')?'Backend unavailable':'Production backend';if(connectionStatus.textContent!==text)connectionStatus.textContent=text;}
  updateObservedElements();
  if(route()==='global'&&JSON.stringify(displayCapability)!==oldDisplay)render();
- // These revisions start at zero for this native process. A successful initial
- // read already includes that baseline; nonzero revisions and failed reads must
- // still refresh, including a save that committed while initialization ran.
- if(loaded.history&&!errors.history&&lastLoadedHistoryRevision===null&&activeSession?.history_revision===0)lastLoadedHistoryRevision=0;
- if(activeSession?.history_revision!==undefined&&activeSession.history_revision!==lastLoadedHistoryRevision){
+ // History includes full session timelines. Read them only on that page.
+ if(!document.hidden&&route()==='history'&&!historyRead&&(!loaded.history||(observedHistoryRevision!==null&&observedHistoryRevision!==lastLoadedHistoryRevision))){
+  const oldError=errors.history;
   const loadedHistory=await reloaders['reload-history']();
-  if(loadedHistory&&route()==='history')render();
+  if(route()==='history'&&(loadedHistory||errors.history!==oldError))render();
  }
+ // A successful initial clip inventory already includes revision zero.
  if(loaded.clips&&!errors.clips&&loadedClipRevision===null&&observedSaveRevision===0)loadedClipRevision=0;
  if(observedSaveRevision!==null&&loadedClipRevision!==observedSaveRevision){
   const completed=loadedClipRevision!==null&&observedSaveRevision>loadedClipRevision;
@@ -1330,14 +1340,8 @@ async function checkUpdatesOnStartup() {
   updateStatus={current_version:'',state:'error',message:message(error),latest_version:null,package_kind:null,asset_name:null};
  }
 }
-function pollDelay() {
- if(document.hidden)return 2000;
- return ['overview','replay'].includes(route())?1000:2500;
-}
-async function poll() {
- try { if(!document.hidden)await refreshRuntime(); } catch(error) { notify(message(error),{type:'error'}); }
- setTimeout(poll,pollDelay()); // Schedule after completion; slow reads never build a queue.
-}
+const pollDelay=()=>['overview','replay'].includes(route())?1000:2500;
+const reportRuntimeError=error=>notify(message(error),{type:'error'});
 function reportActionError(error) {
  const feedback=$('#dialog-error');
  if($('#dialog').open){feedback.textContent=message(error);feedback.hidden=false;feedback.focus();}
@@ -1447,16 +1451,21 @@ const reloaders={
   try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}
   return refreshed;
  },
- 'reload-history':async({preserveSelection=false}={})=>{
-  const loadedHistory=await readSection('history','session_history',data=>{
+ 'reload-history':({preserveSelection=false}={})=>{
+  if(historyRead)return historyRead;
+  // Acknowledge only the revision observed before requesting the inventory.
+  const revision=observedHistoryRevision;
+  historyRead=readSection('history','session_history',data=>{
    // Read the current selection at acceptance, including changes made while
    // the request was pending. Automatic revision reloads retain their policy.
    const selectedId=preserveSelection?sessions[selectedSession]?.id:null,cursor=historyCursor;
    sessions=mapSessions(data);
    const retained=preserveSelection?sessions.findIndex(session=>session.id===selectedId):-1;
    selectedSession=retained>=0?retained:0;historyCursor=retained>=0?cursor:null;loaded.history=true;
-  });
-  if(loadedHistory&&activeSession)lastLoadedHistoryRevision=activeSession.history_revision;return loadedHistory;
+  }).then(success=>{if(success)lastLoadedHistoryRevision=revision;return success;})
+    .finally(()=>{historyRead=null;updateHistoryRefreshButton();});
+  updateHistoryRefreshButton();
+  return historyRead;
  },
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
  'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;loaded.preferences=true;}),
@@ -1524,7 +1533,7 @@ document.addEventListener('click',event=>{
   void refreshFeedback.run('inputs',async()=>{await reloadMicrophoneInputs();return !errors.microphoneDevices;},{settled:()=>{if(focused&&route()==='global'&&document.activeElement===document.body)$('[data-refresh-key=inputs]:not(:disabled)')?.focus({preventScroll:true});}}).catch(reportActionError);return;
  }
  if(target.dataset.action==='reload-history'){
-  if(!native||busy)return;
+  if(!native||busy||historyRead)return;
   let focused=document.activeElement===target;
   void refreshFeedback.run('history',async()=>{
    const success=await reloaders['reload-history']({preserveSelection:true});
@@ -1780,13 +1789,16 @@ window.addEventListener('native-error',event=>{
  notify(event.detail);
 });
 window.addEventListener('focus',()=>{if(native&&route()==='library'&&loaded.catalog){installation.refresh();refreshSteamSetup($('.steam-setup-card'),game()?.id,call);}});
-window.addEventListener('hashchange',()=>{const focusUpdates=focusUpdatesOnRender;render();if(!focusUpdates){workspace.focus({preventScroll:true});scrollRoot.scrollTo(0,0);}});
+window.addEventListener('hashchange',()=>{
+ const focusUpdates=focusUpdatesOnRender;render();
+ if(!focusUpdates){workspace.focus({preventScroll:true});scrollRoot.scrollTo(0,0);}
+ if(native&&!document.hidden&&route()==='history')void refreshRuntime().catch(reportRuntimeError);
+});
 
 render();
-    if(native){
- // startRuntime has just completed a status read. Start the regular cadence
- // after its usual interval instead of duplicating that snapshot immediately.
- startRuntime({initialize:()=>Promise.all(Object.entries(reloaders).filter(([name])=>name!=='reload-diagnostics').map(([,reload])=>reload())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,updatePresentation:refreshUpdateCard,startPolling:()=>setTimeout(poll,pollDelay()),onError:error=>notify(message(error),{type:'error'})});
+if(native){
+ const initialSections=['reload-games','reload-clips','reload-global','reload-preferences','reload-replay-preferences'];
+ startRuntime({initialize:()=>Promise.all(initialSections.map(name=>reloaders[name]())),refresh:refreshRuntime,render,checkUpdates:checkUpdatesOnStartup,updatePresentation:refreshUpdateCard,startPolling:()=>pollVisibleRuntime(document,refreshRuntime,pollDelay,reportRuntimeError),onError:reportRuntimeError});
 }else{
  const connectionStatus=$('#connection-status');
  if(connectionStatus)connectionStatus.textContent='Browser inspection · backend disconnected';

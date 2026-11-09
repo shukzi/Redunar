@@ -372,10 +372,13 @@ pub fn delete_replay_clip(file_name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn session_history() -> Result<Vec<SessionHistoryItem>, String> {
-    let records = crate::backend::service()
-        .session_history()
-        .map_err(|error| error.to_string())?;
+pub async fn session_history() -> Result<Vec<SessionHistoryItem>, String> {
+    let service = crate::backend::service();
+    let records = tauri::async_runtime::spawn_blocking(move || {
+        service.session_history().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "History read stopped unexpectedly".to_owned())??;
     Ok(records
         .into_iter()
         .map(|item| SessionHistoryItem {
