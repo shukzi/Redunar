@@ -102,7 +102,7 @@ mod tests {
             OverlayConfig {
                 corner: OverlayCorner::BottomRight,
                 preset: OverlayPreset::Detailed,
-                layout: crate::overlay::OverlayLayout::Grid,
+                layout: crate::overlay::OverlayLayout::default(),
                 palette: crate::overlay::OverlayPalette::Redunar,
                 branding_visible: true,
                 metrics: 3,

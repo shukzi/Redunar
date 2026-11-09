@@ -1073,7 +1073,6 @@ fn parse_overlay_preset(value: &str) -> Result<OverlayPreset, GameCatalogError> 
 
 const fn overlay_layout_token(value: OverlayLayout) -> &'static str {
     match value {
-        OverlayLayout::Grid => "grid",
         OverlayLayout::Ribbon => "ribbon",
         OverlayLayout::Telemetry => "telemetry",
     }
@@ -1081,9 +1080,9 @@ const fn overlay_layout_token(value: OverlayLayout) -> &'static str {
 
 fn parse_overlay_layout(value: &str) -> Result<OverlayLayout, GameCatalogError> {
     match value {
-        "grid" => Ok(OverlayLayout::Grid),
         "ribbon" => Ok(OverlayLayout::Ribbon),
-        "telemetry" => Ok(OverlayLayout::Telemetry),
+        // Catalogs saved before Grid was retired keep the rest of the profile.
+        "grid" | "telemetry" => Ok(OverlayLayout::Telemetry),
         _ => Err(GameCatalogError::new("catalog overlay layout is invalid")),
     }
 }
@@ -2079,6 +2078,55 @@ mod tests {
         assert_eq!(
             effective_profile(&fixture.root, game.id).expect("effective profile"),
             loaded.games[0].profile.resolve(global)
+        );
+    }
+
+    #[test]
+    fn saved_grid_migrates_to_telemetry_without_changing_other_settings() {
+        let fixture = Fixture::new();
+        let game = add(&fixture.root, fixture.request("Grid profile")).expect("add game");
+        let override_profile = PerGameProfile {
+            overlay_visible: Inheritable::Custom(false),
+            ..PerGameProfile::default()
+        };
+        update_profile(&fixture.root, game.id, override_profile).expect("save game profile");
+        let expected = GlobalGameProfile {
+            overlay_visible: true,
+            overlay_preset: OverlayPreset::Custom,
+            overlay_metrics: OverlayMetricSet::from_bits(
+                OverlayMetricSet::FPS | OverlayMetricSet::GPU_TEMPERATURE,
+            )
+            .expect("custom metric selection"),
+            overlay_palette: OverlayPalette::Rose,
+            overlay_branding: false,
+            overlay_corner: OverlayCorner::BottomRight,
+            overlay_opacity: OverlayOpacity::new(75).expect("opacity"),
+            overlay_scale: OverlayScale::new(135).expect("scale"),
+            ..GlobalGameProfile::default()
+        };
+        assert_eq!(expected.overlay_layout, OverlayLayout::Telemetry);
+        update_global_profile(&fixture.root, expected).expect("save profile");
+        let path = fixture.root.join(CATALOG_FILE);
+        let catalog = fs::read_to_string(&path).expect("read catalog");
+        let old = catalog.replacen("\ttelemetry\t", "\tgrid\t", 1);
+        assert_ne!(old, catalog);
+        fs::write(&path, &old).expect("write legacy catalog fixture");
+
+        let loaded = load(&fixture.root).expect("read legacy catalog");
+        assert_eq!(loaded.global_profile, expected);
+        assert_eq!(loaded.games[0].profile, override_profile);
+        assert_eq!(
+            effective_profile(&fixture.root, game.id).expect("resolve legacy profile"),
+            override_profile.resolve(expected),
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read untouched catalog"),
+            old
+        );
+        update_global_profile(&fixture.root, loaded.global_profile).expect("save migrated catalog");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read migrated catalog"),
+            catalog
         );
     }
 

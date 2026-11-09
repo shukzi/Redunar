@@ -1972,7 +1972,6 @@ const fn overlay_preset_code(value: redunar_core::OverlayPreset) -> u8 {
 
 const fn overlay_layout_code(value: redunar_core::OverlayLayout) -> u8 {
     match value {
-        redunar_core::OverlayLayout::Grid => 0,
         redunar_core::OverlayLayout::Ribbon => 1,
         redunar_core::OverlayLayout::Telemetry => 2,
     }

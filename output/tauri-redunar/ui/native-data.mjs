@@ -39,7 +39,7 @@ export function mapSessions(records) {
 }
 export function mapDefaults(workspace) {
   const s=workspace.values;
-  return {overlay:s.overlay,preset:s.preset,layout:s.layout,palette:s.palette,branding:s.branding!==false,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:true,fps:s.fps,quality:s.quality,format:s.format};
+  return {overlay:s.overlay,preset:s.preset,layout:s.layout==='Grid'?'Telemetry':s.layout,palette:s.palette,branding:s.branding!==false,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:true,fps:s.fps,quality:s.quality,format:s.format};
 }
 export function profilePayload(draft, shortcuts) {
   return {...draft,shortcuts};

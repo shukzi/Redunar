@@ -252,11 +252,18 @@ Layout choices use a small content-sized rounded switcher matching Overview,
 with a moving graphite selection plate and no red underline. Arrow keys, Home,
 and End select a layout.
 
-The information presets use the shared small switcher: FPS only, Compact,
-Detailed, and Custom. Metric rows use the shared toggles, enabled for Custom. Grid,
-Ribbon, and Telemetry independently control layout. FPS only disables layout
-and branding controls while retaining their saved values. Custom metrics remain
-valid and non-empty.
+Telemetry is the default layout. Ribbon places the same metrics in a horizontal
+strip. FPS only shows the frame rate without a panel. It keeps the layout
+switcher available and disables the information presets, metric toggles and
+branding. Switching back to Ribbon or Telemetry restores the previous
+information preset during the current app session. A fresh app session uses
+Compact when leaving a saved FPS-only layout. The metric selection and branding
+remain saved. Existing Grid settings open in Telemetry with the same metric
+selection and appearance settings.
+
+Ribbon and Telemetry offer Compact, Detailed and Custom information presets.
+The metric toggles are enabled for Custom. A saved Custom selection must
+include at least one metric.
 
 Automatic replay has no global or per-game Off selector. Recording and quality
 settings are capability-gated and remain locked through launch, recording, and

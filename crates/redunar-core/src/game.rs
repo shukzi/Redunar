@@ -81,9 +81,8 @@ pub enum OverlayPreset {
 /// remains independent so every layout can honor the same Custom set.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OverlayLayout {
-    #[default]
-    Grid,
     Ribbon,
+    #[default]
     Telemetry,
 }
 
@@ -716,7 +715,7 @@ mod tests {
                 capture_metrics: true,
                 overlay_visible: true,
                 overlay_preset: OverlayPreset::Compact,
-                overlay_layout: OverlayLayout::Grid,
+                overlay_layout: OverlayLayout::Telemetry,
                 overlay_palette: OverlayPalette::Redunar,
                 overlay_branding: true,
                 overlay_metrics: OverlayMetricSet::COMPACT,
@@ -742,7 +741,7 @@ mod tests {
                 capture_metrics: false,
                 overlay_visible: false,
                 overlay_preset: OverlayPreset::Compact,
-                overlay_layout: OverlayLayout::Grid,
+                overlay_layout: OverlayLayout::Telemetry,
                 overlay_palette: OverlayPalette::Redunar,
                 overlay_branding: true,
                 overlay_metrics: OverlayMetricSet::COMPACT,

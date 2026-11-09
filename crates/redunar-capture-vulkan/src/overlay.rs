@@ -106,23 +106,14 @@ const RIBBON_HEIGHT: u32 = 44;
 const TELEMETRY_WIDTH: u32 = 300;
 const TELEMETRY_ROW_HEIGHT: u32 = 24;
 
-const MIN_OVERLAY_WIDTH: u32 = PANEL_WIDTH + 24;
-const MIN_OVERLAY_HEIGHT: u32 = DETAILED_PANEL_HEIGHT + 24;
-const PANEL_WIDTH: u32 = 294;
-const PANEL_BASE_HEIGHT: u32 = 25;
-// Keep six to seven logical pixels around each text canvas. The injected
-// overlay is read peripherally during play, so rows need breathing room even
-// at the smallest configured scale.
-const PRIMARY_ROW_HEIGHT: u32 = 38;
-const SECONDARY_ROW_HEIGHT: u32 = 26;
-const DETAILED_PANEL_HEIGHT: u32 =
-    PANEL_BASE_HEIGHT + PRIMARY_ROW_HEIGHT + 2 * SECONDARY_ROW_HEIGHT;
+// Keep the existing minimum swapchain dimensions. The overlay scales to fit.
+const MIN_OVERLAY_WIDTH: u32 = 318;
+const MIN_OVERLAY_HEIGHT: u32 = 139;
+const TELEMETRY_HEADER_HEIGHT: u32 = 25;
 const OVERLAY_MARGIN: i32 = 12;
 #[cfg(test)]
 const BITMAP_GLYPH_HEIGHT: u32 = overlay_font::GLYPH_HEIGHT;
 const FPS_ONLY_WIDTH: u32 = 116;
-const FIRST_METRIC_ROW_Y: i32 = 31;
-const ROW_DIVIDER_OFFSET: i32 = 7;
 const METRIC_FPS: u16 = 1 << 0;
 const METRIC_FRAME_TIME: u16 = 1 << 1;
 const METRIC_ONE_PERCENT_LOW: u16 = 1 << 2;
@@ -651,10 +642,6 @@ impl OverlayPlan {
             && self.highlight_glyphs.length == 0
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixed metric-plan construction keeps row geometry and its bounded glyph batches together"
-    )]
     fn new(snapshot: OverlaySnapshot, config: OverlayConfig) -> Self {
         if config.preset == OverlayPreset::FpsOnly {
             let accent = RectBatch::default();
@@ -714,83 +701,10 @@ impl OverlayPlan {
         if snapshot.gpu_temperature_c.is_none() {
             metrics &= !METRIC_GPU_TEMPERATURE;
         }
-        let frame_row = metrics & (METRIC_FPS | METRIC_FRAME_TIME) != 0;
-        let low_row = metrics & (METRIC_ONE_PERCENT_LOW | METRIC_POINT_ONE_PERCENT_LOW) != 0;
-        let hardware_row = metrics
-            & (METRIC_CPU_LOAD | METRIC_CPU_TEMPERATURE | METRIC_GPU_LOAD | METRIC_GPU_TEMPERATURE)
-            != 0;
         match config.layout {
-            OverlayLayout::Ribbon => return Self::ribbon(snapshot, metrics, config),
-            OverlayLayout::Telemetry => return Self::telemetry(snapshot, metrics, config),
-            OverlayLayout::Grid => {}
+            OverlayLayout::Ribbon => Self::ribbon(snapshot, metrics, config),
+            OverlayLayout::Telemetry => Self::telemetry(snapshot, metrics, config),
         }
-        let panel_height = PANEL_BASE_HEIGHT
-            .saturating_add(u32::from(frame_row).saturating_mul(PRIMARY_ROW_HEIGHT))
-            .saturating_add(
-                (u32::from(low_row) + u32::from(hardware_row)).saturating_mul(SECONDARY_ROW_HEIGHT),
-            );
-        let mut plan = Self {
-            panel: Some(clear_rect(0, 0, PANEL_WIDTH, panel_height)),
-            panel_radius: METRIC_PANEL_RADIUS,
-            panel_palette: config.palette.code(),
-            logo_base: RectBatch::default(),
-            logo_dark_red: RectBatch::default(),
-            accent: RectBatch::default(),
-            dividers: RectBatch::default(),
-            cursor_shadow: RectBatch::default(),
-            cursor: RectBatch::default(),
-            pointer_shadow: None,
-            pointer: None,
-            accent_glyphs: GlyphBatch::default(),
-            muted_glyphs: GlyphBatch::default(),
-            text_glyphs: GlyphBatch::default(),
-            highlight_glyphs: GlyphBatch::default(),
-            width: PANEL_WIDTH,
-            height: panel_height,
-            corner: config.corner,
-            opacity_percent: config.opacity_percent,
-            scale_percent: config.scale_percent,
-            placement: OverlayPlacement::Corner,
-            animation_progress: u16::MAX,
-            dim_percent: 0,
-            palette: config.palette,
-            colors: config.palette.colors(),
-        };
-        plan.accent.push(0, 0, 3, panel_height);
-        push_panel_grid(&mut plan.dividers, panel_height);
-        if config.branding_visible {
-            push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
-        }
-
-        let mut y = FIRST_METRIC_ROW_Y;
-        if frame_row {
-            push_frame_metrics(
-                &mut plan.text_glyphs,
-                &mut plan.muted_glyphs,
-                snapshot,
-                metrics,
-                y,
-            );
-            y = y.saturating_add(i32::try_from(PRIMARY_ROW_HEIGHT).unwrap_or(i32::MAX));
-            if low_row || hardware_row {
-                plan.dividers
-                    .push(12, y - ROW_DIVIDER_OFFSET, PANEL_WIDTH - 24, 1);
-            }
-        }
-
-        if low_row {
-            push_low_metrics(&mut plan.muted_glyphs, snapshot, metrics, y);
-            y = y.saturating_add(i32::try_from(SECONDARY_ROW_HEIGHT).unwrap_or(i32::MAX));
-            if hardware_row {
-                plan.dividers
-                    .push(12, y - ROW_DIVIDER_OFFSET, PANEL_WIDTH - 24, 1);
-            }
-        }
-
-        if hardware_row {
-            push_hardware_metrics(&mut plan.muted_glyphs, snapshot, metrics, y);
-        }
-        plan
     }
 
     fn metric_panel(width: u32, height: u32, config: OverlayConfig) -> Self {
@@ -868,7 +782,7 @@ impl OverlayPlan {
                 .count(),
         )
         .unwrap_or(0);
-        let height = PANEL_BASE_HEIGHT + count.saturating_mul(TELEMETRY_ROW_HEIGHT);
+        let height = TELEMETRY_HEADER_HEIGHT + count.saturating_mul(TELEMETRY_ROW_HEIGHT);
         let mut plan = Self::metric_panel(TELEMETRY_WIDTH, height, config);
         if config.branding_visible {
             push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
@@ -1228,55 +1142,6 @@ fn push_rounded_outline(
     batch.push(right - inset_i32 + 1, bottom - 1, shoulder, 1);
 }
 
-fn push_panel_grid(dividers: &mut RectBatch, panel_height: u32) {
-    // A complete one-pixel frame makes the injected renderer use the same
-    // connected-grid language as the desktop surfaces. These bounded clears
-    // avoid geometry buffers and add no per-frame allocations.
-    let panel_bottom = i32::try_from(panel_height).unwrap_or(i32::MAX) - 1;
-    let panel_right = i32::try_from(PANEL_WIDTH).unwrap_or(i32::MAX) - 1;
-    let header_bottom = i32::try_from(PANEL_BASE_HEIGHT).unwrap_or(i32::MAX) - 1;
-    dividers.push(0, 0, PANEL_WIDTH, 1);
-    dividers.push(0, panel_bottom, PANEL_WIDTH, 1);
-    dividers.push(0, 0, 1, panel_height);
-    dividers.push(panel_right, 0, 1, panel_height);
-    dividers.push(3, header_bottom, PANEL_WIDTH - 3, 1);
-}
-
-fn push_frame_metrics(
-    values: &mut GlyphBatch,
-    labels: &mut GlyphBatch,
-    snapshot: OverlaySnapshot,
-    metrics: u16,
-    y: i32,
-) {
-    if metrics & METRIC_FPS != 0 {
-        let mut value = FixedText::<6>::default();
-        value.push_metric_unpadded(snapshot.fps, 3);
-        push_text_scaled(values, value.as_bytes(), 12, y, 2);
-        let label_x = 12_i32.saturating_add(
-            i32::try_from(value.length)
-                .unwrap_or(4)
-                .saturating_mul(overlay_font::GLYPH_ADVANCE.saturating_mul(2)),
-        );
-        push_text(labels, b"FPS", label_x + 4, y + 9);
-    }
-    if metrics & METRIC_FRAME_TIME != 0 {
-        let mut value = FixedText::<8>::default();
-        value.push_tenths(snapshot.frame_time_tenths_ms);
-        let value_width = i32::try_from(value.length)
-            .unwrap_or(4)
-            .saturating_mul(overlay_font::GLYPH_ADVANCE.saturating_mul(2));
-        let start_x = 184_i32.min(
-            i32::try_from(PANEL_WIDTH)
-                .unwrap_or(i32::MAX)
-                .saturating_sub(12 + value_width + 4 + overlay_font::GLYPH_ADVANCE * 2),
-        );
-        push_text_scaled(values, value.as_bytes(), start_x, y, 2);
-        let label_x = start_x.saturating_add(value_width);
-        push_text(labels, b"MS", label_x + 4, y + 9);
-    }
-}
-
 fn metric_labels() -> [(u16, &'static [u8]); 8] {
     [
         (METRIC_FPS, b"FPS"),
@@ -1340,91 +1205,6 @@ fn metric_value(snapshot: OverlaySnapshot, metric: u16) -> FixedText<16> {
     value
 }
 
-fn push_low_metrics(glyphs: &mut GlyphBatch, snapshot: OverlaySnapshot, metrics: u16, y: i32) {
-    if metrics & METRIC_ONE_PERCENT_LOW != 0 {
-        let mut left = FixedText::<16>::default();
-        left.push_bytes(b"1% LOW ");
-        left.push_metric_unpadded(snapshot.one_percent_low_fps, 3);
-        push_text(glyphs, left.as_bytes(), 8, y);
-    }
-    if metrics & METRIC_POINT_ONE_PERCENT_LOW != 0 {
-        let mut right = FixedText::<16>::default();
-        right.push_bytes(b"0.1% LOW ");
-        right.push_metric_unpadded(snapshot.point_one_percent_low_fps, 3);
-        push_text(glyphs, right.as_bytes(), right_aligned_x(&right, 8), y);
-    }
-}
-
-fn push_hardware_metrics(glyphs: &mut GlyphBatch, snapshot: OverlaySnapshot, metrics: u16, y: i32) {
-    let mut cpu = FixedText::<16>::default();
-    push_device_metrics(
-        &mut cpu,
-        b"CPU",
-        metrics & METRIC_CPU_LOAD != 0,
-        metrics & METRIC_CPU_TEMPERATURE != 0,
-        snapshot.cpu_percent,
-        snapshot.cpu_temperature_c,
-    );
-    if !cpu.as_bytes().is_empty() {
-        push_text(glyphs, cpu.as_bytes(), 8, y);
-    }
-    let mut gpu = FixedText::<16>::default();
-    push_device_metrics(
-        &mut gpu,
-        b"GPU",
-        metrics & METRIC_GPU_LOAD != 0,
-        metrics & METRIC_GPU_TEMPERATURE != 0,
-        snapshot.gpu_percent,
-        snapshot.gpu_temperature_c,
-    );
-    if !gpu.as_bytes().is_empty() {
-        push_text(glyphs, gpu.as_bytes(), right_aligned_x(&gpu, 8), y);
-    }
-}
-
-fn right_aligned_x<const N: usize>(text: &FixedText<N>, margin: i32) -> i32 {
-    let width = i32::try_from(text.length)
-        .unwrap_or(i32::MAX)
-        .saturating_mul(overlay_font::GLYPH_ADVANCE);
-    i32::try_from(PANEL_WIDTH)
-        .unwrap_or(i32::MAX)
-        .saturating_sub(margin)
-        .saturating_sub(width)
-        .max(margin)
-}
-
-fn push_device_metrics<const N: usize>(
-    row: &mut FixedText<N>,
-    label: &[u8],
-    show_load: bool,
-    show_temperature: bool,
-    load: Option<u8>,
-    temperature: Option<i16>,
-) {
-    if !show_load && !show_temperature {
-        return;
-    }
-    separate_metric(row);
-    row.push_bytes(label);
-    if show_load {
-        row.push(b' ');
-        row.push_metric(load.map(u16::from), 2);
-        row.push(b'%');
-    }
-    if show_temperature {
-        row.push(if show_load { b'~' } else { b' ' });
-        row.push_metric(temperature.and_then(|value| u16::try_from(value).ok()), 2);
-        row.push(b'^');
-        row.push(b'C');
-    }
-}
-
-fn separate_metric<const N: usize>(row: &mut FixedText<N>) {
-    if row.length > 0 {
-        row.push_bytes(b"  ");
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum OverlayPreset {
     #[default]
@@ -1436,9 +1216,8 @@ enum OverlayPreset {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum OverlayLayout {
-    #[default]
-    Grid,
     Ribbon,
+    #[default]
     Telemetry,
 }
 
@@ -1647,8 +1426,8 @@ fn parse_overlay_preset(value: Option<&str>) -> OverlayPreset {
 fn parse_overlay_layout(value: Option<&str>) -> OverlayLayout {
     match value {
         Some("ribbon") => OverlayLayout::Ribbon,
-        Some("telemetry") => OverlayLayout::Telemetry,
-        _ => OverlayLayout::Grid,
+        // Missing settings and the old "grid" token use the default layout.
+        _ => OverlayLayout::Telemetry,
     }
 }
 
@@ -1670,6 +1449,14 @@ fn parse_overlay_metrics(value: Option<&str>) -> u16 {
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|bits| *bits != 0 && *bits & !METRICS_KNOWN == 0)
         .unwrap_or(METRICS_COMPACT)
+}
+
+const fn overlay_layout_from_index(index: u8) -> OverlayLayout {
+    match index {
+        1 => OverlayLayout::Ribbon,
+        // Map the old Grid code (0) to Telemetry. Code 2 still means Telemetry.
+        _ => OverlayLayout::Telemetry,
+    }
 }
 
 fn parse_overlay_corner(value: Option<&str>) -> OverlayCorner {
@@ -1708,16 +1495,6 @@ impl<const N: usize> FixedText<N> {
         for byte in bytes {
             self.push(*byte);
         }
-    }
-
-    fn push_metric(&mut self, value: Option<u16>, minimum_digits: usize) {
-        let Some(value) = value else {
-            for _ in 0..minimum_digits {
-                self.push(b'-');
-            }
-            return;
-        };
-        self.push_unsigned(value, minimum_digits);
     }
 
     fn push_metric_unpadded(&mut self, value: Option<u16>, missing_digits: usize) {
@@ -2602,11 +2379,7 @@ impl RendererState {
                     3 => OverlayPreset::Custom,
                     _ => OverlayPreset::Compact,
                 },
-                layout: match telemetry.layout {
-                    1 => OverlayLayout::Ribbon,
-                    2 => OverlayLayout::Telemetry,
-                    _ => OverlayLayout::Grid,
-                },
+                layout: overlay_layout_from_index(telemetry.layout),
                 palette: match telemetry.palette {
                     1 => OverlayPalette::Glacier,
                     2 => OverlayPalette::Ember,
@@ -4465,7 +4238,7 @@ mod tests {
         );
         assert_eq!(
             compact.height,
-            PANEL_BASE_HEIGHT + PRIMARY_ROW_HEIGHT + SECONDARY_ROW_HEIGHT
+            TELEMETRY_HEADER_HEIGHT + 5 * TELEMETRY_ROW_HEIGHT
         );
         assert!(fps_only.panel.is_none());
         assert_eq!(fps_only.text_glyphs.length, 0);
@@ -4473,7 +4246,10 @@ mod tests {
         assert_eq!(fps_only.height, overlay_font::GLYPH_HEIGHT * 2);
         assert!(fps_only.width < compact.width);
         assert!(detailed.muted_glyphs.length > compact.muted_glyphs.length);
-        assert_eq!(detailed.height, DETAILED_PANEL_HEIGHT);
+        assert_eq!(
+            detailed.height,
+            TELEMETRY_HEADER_HEIGHT + 7 * TELEMETRY_ROW_HEIGHT
+        );
     }
 
     #[test]
@@ -4488,7 +4264,6 @@ mod tests {
             gpu_percent: Some(87),
             gpu_temperature_c: Some(68),
         };
-        let grid = OverlayPlan::new(metrics, OverlayConfig::default());
         let ribbon = OverlayPlan::new(
             metrics,
             OverlayConfig {
@@ -4504,7 +4279,6 @@ mod tests {
             },
         );
 
-        assert_eq!(grid.width, PANEL_WIDTH);
         assert_eq!(ribbon.width, RIBBON_BRAND_WIDTH + 6 * RIBBON_METRIC_WIDTH);
         assert_eq!(ribbon.height, RIBBON_HEIGHT);
         assert_eq!(telemetry.width, TELEMETRY_WIDTH);
@@ -4526,7 +4300,7 @@ mod tests {
             .max()
             .expect("first telemetry value glyphs");
         assert_eq!(heading_right, first_value_right);
-        for plan in [&grid, &ribbon, &telemetry] {
+        for plan in [&ribbon, &telemetry] {
             assert!(plan.panel.is_some());
             assert_eq!(plan.panel_radius, METRIC_PANEL_RADIUS);
             assert!(plan.text_glyphs.length > 0);
@@ -4603,50 +4377,9 @@ mod tests {
         assert_eq!(glyph_right, 9);
         assert_eq!(glyph_bottom, 12);
         assert_eq!(glyph_bottom, i32::try_from(BITMAP_GLYPH_HEIGHT).unwrap());
-        assert_eq!(PRIMARY_ROW_HEIGHT - overlay_font::GLYPH_HEIGHT * 2, 14);
-        assert_eq!(SECONDARY_ROW_HEIGHT - overlay_font::GLYPH_HEIGHT, 14);
-        assert_eq!(
-            FIRST_METRIC_ROW_Y - i32::try_from(PANEL_BASE_HEIGHT).unwrap(),
-            6
-        );
-        assert_eq!(ROW_DIVIDER_OFFSET, 7);
-
-        let detailed = OverlayPlan::new(
-            OverlaySnapshot {
-                fps: Some(92),
-                frame_time_tenths_ms: Some(96),
-                one_percent_low_fps: Some(70),
-                point_one_percent_low_fps: Some(64),
-                cpu_percent: Some(47),
-                cpu_temperature_c: Some(68),
-                gpu_percent: Some(93),
-                gpu_temperature_c: Some(63),
-            },
-            OverlayConfig {
-                preset: OverlayPreset::Detailed,
-                ..OverlayConfig::default()
-            },
-        );
-        let divider_rows = detailed
-            .dividers
-            .as_slice()
-            .iter()
-            .filter(|divider| divider.rect.extent.height == 1)
-            .map(|divider| divider.rect.offset.y)
-            .collect::<Vec<_>>();
-        assert!(divider_rows.contains(&62));
-        assert!(divider_rows.contains(&88));
-        assert_eq!(detailed.height, 115);
-
         let mut text = GlyphBatch::default();
         push_text(&mut text, b"FPS 144", 0, 0);
         assert_eq!(text.length, 6);
-
-        let mut separated = FixedText::<8>::default();
-        separated.push(b'A');
-        separate_metric(&mut separated);
-        separated.push(b'C');
-        assert_eq!(separated.as_bytes(), b"A  C");
 
         let detailed = OverlayPlan::new(
             OverlaySnapshot {
@@ -4691,22 +4424,6 @@ mod tests {
     }
 
     #[test]
-    fn secondary_metrics_anchor_their_right_hand_values_to_the_panel_edge() {
-        let mut point_one = FixedText::<16>::default();
-        point_one.push_bytes(b"0.1% LOW ");
-        point_one.push_metric_unpadded(Some(87), 3);
-        let x = right_aligned_x(&point_one, 8);
-        let width = i32::try_from(point_one.length).unwrap() * overlay_font::GLYPH_ADVANCE;
-        assert_eq!(x + width, i32::try_from(PANEL_WIDTH).unwrap() - 8);
-
-        let mut gpu = FixedText::<16>::default();
-        push_device_metrics(&mut gpu, b"GPU", true, true, Some(99), Some(71));
-        let x = right_aligned_x(&gpu, 8);
-        let width = i32::try_from(gpu.length).unwrap() * overlay_font::GLYPH_ADVANCE;
-        assert_eq!(x + width, i32::try_from(PANEL_WIDTH).unwrap() - 8);
-    }
-
-    #[test]
     fn corner_origins_keep_the_overlay_inside_the_swapchain_margin() {
         let extent = VkExtent2d {
             width: 640,
@@ -4715,7 +4432,7 @@ mod tests {
         let mut plan = OverlayPlan::new(OverlaySnapshot::default(), OverlayConfig::default());
         assert_eq!(overlay_origin(extent, &plan, plan.scale_percent), (12, 12));
         plan.corner = OverlayCorner::TopRight;
-        assert_eq!(overlay_origin(extent, &plan, plan.scale_percent), (334, 12));
+        assert_eq!(overlay_origin(extent, &plan, plan.scale_percent), (328, 12));
         plan.corner = OverlayCorner::BottomLeft;
         let bottom = i32::try_from(extent.height - plan.height - 12).unwrap();
         assert_eq!(
@@ -4725,7 +4442,7 @@ mod tests {
         plan.corner = OverlayCorner::BottomRight;
         assert_eq!(
             overlay_origin(extent, &plan, plan.scale_percent),
-            (334, bottom)
+            (328, bottom)
         );
     }
 
@@ -4747,7 +4464,9 @@ mod tests {
             parse_overlay_corner(Some("bottom-right")),
             OverlayCorner::BottomRight
         );
-        assert_eq!(parse_overlay_layout(Some("unknown")), OverlayLayout::Grid);
+        for token in [None, Some("grid"), Some("unknown")] {
+            assert_eq!(parse_overlay_layout(token), OverlayLayout::Telemetry);
+        }
         assert_eq!(parse_overlay_layout(Some("ribbon")), OverlayLayout::Ribbon);
         assert_eq!(
             parse_overlay_layout(Some("telemetry")),
@@ -4784,6 +4503,13 @@ mod tests {
     }
 
     #[test]
+    fn live_overlay_layout_accepts_the_retired_grid_code() {
+        assert_eq!(overlay_layout_from_index(0), OverlayLayout::Telemetry);
+        assert_eq!(overlay_layout_from_index(1), OverlayLayout::Ribbon);
+        assert_eq!(overlay_layout_from_index(2), OverlayLayout::Telemetry);
+    }
+
+    #[test]
     fn custom_preset_uses_only_selected_metric_rows() {
         let metrics = OverlaySnapshot {
             fps: Some(120),
@@ -4807,7 +4533,7 @@ mod tests {
         );
         assert_eq!(
             fps_and_gpu.height,
-            PANEL_BASE_HEIGHT + PRIMARY_ROW_HEIGHT + SECONDARY_ROW_HEIGHT
+            TELEMETRY_HEADER_HEIGHT + 2 * TELEMETRY_ROW_HEIGHT
         );
         assert!(fps_and_gpu.text_glyphs.length < detailed.text_glyphs.length);
         assert!(fps_and_gpu.panel.is_some());
@@ -4846,10 +4572,13 @@ mod tests {
             OverlayConfig::default(),
         );
         let available_hardware = OverlayPlan::new(snapshot, OverlayConfig::default());
-        assert_eq!(no_hardware.height, PANEL_BASE_HEIGHT + PRIMARY_ROW_HEIGHT);
+        assert_eq!(
+            no_hardware.height,
+            TELEMETRY_HEADER_HEIGHT + 2 * TELEMETRY_ROW_HEIGHT
+        );
         assert_eq!(
             available_hardware.height,
-            PANEL_BASE_HEIGHT + PRIMARY_ROW_HEIGHT + SECONDARY_ROW_HEIGHT
+            TELEMETRY_HEADER_HEIGHT + 5 * TELEMETRY_ROW_HEIGHT
         );
         assert!(available_hardware.text_glyphs.length > 0);
     }
@@ -5013,11 +4742,7 @@ mod tests {
         };
         let config = OverlayConfig {
             preset: OverlayPreset::Detailed,
-            layout: match layout.as_str() {
-                "ribbon" => OverlayLayout::Ribbon,
-                "telemetry" => OverlayLayout::Telemetry,
-                _ => OverlayLayout::Grid,
-            },
+            layout: parse_overlay_layout(Some(&layout)),
             ..OverlayConfig::default()
         };
         let plan = OverlayPlan::new(snapshot, config);

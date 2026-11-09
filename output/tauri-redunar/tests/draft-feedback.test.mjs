@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {profileDraftScopes,globalDraftFeedback} from '../ui/draft-feedback.mjs';
 
-const saved={layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,
+const saved={layout:'Telemetry',palette:'Redunar',branding:true,position:'Top left',scale:100,
  opacity:90,preset:'Compact',metrics:['FPS','CPU load'],overlay:true,captureMetrics:true,
  replay:true,fps:60,quality:'Balanced',format:'MKV'};
 
@@ -45,4 +45,8 @@ test('Saving one owner leaves the other pending and does not claim everything sa
 test('Visibility and session recording drafts remain distinct from appearance',()=>{
  const scopes=profileDraftScopes({...saved,overlay:false,captureMetrics:false},saved);
  assert.deepEqual(new Set(scopes),new Set(['Overlay visibility','Session metrics']));
+});
+
+test('Switching to FPS only is reported as an appearance edit',()=>{
+ assert.deepEqual(profileDraftScopes({...saved,preset:'FPS only'},saved),['Overlay appearance']);
 });

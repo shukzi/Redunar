@@ -20,6 +20,7 @@ import { diagnosticStatus } from './diagnostic-status.mjs';
 import overlayPalettes from './overlay-palettes.json';
 import { mergeGameDrafts } from './game-drafts.mjs';
 import { globalDraftFeedback } from './draft-feedback.mjs';
+import { FPS_ONLY, panelPresets, panelPreset, selectedOverlayLayout, selectOverlayLayout } from './overlay-layout.mjs';
 import { overlaySettings, updateOverlayEditor, updateOverlaySessionState } from './overlay-settings.mjs';
 import { refreshWorkspacePresentation, retainControlGroups, setControlHint } from './workspace-presentation.mjs';
 import { startRuntime, latestRuntimeRefresh, pollVisibleRuntime } from './runtime-polling.mjs';
@@ -60,6 +61,7 @@ const durations = [15,30,60,120,180,300,600,900];
 let selectedSaveDuration = null;
 let defaults = structuredClone(initialDefaults);
 let draft = structuredClone(defaults);
+let savedPanelPreset = 'Compact', draftPanelPreset = savedPanelPreset;
 let shortcuts = Array(9).fill('');
 let draftShortcuts = [...shortcuts];
 let selectedGame = null, selectedClip = null, selectedSession = 0;
@@ -183,43 +185,26 @@ function selectControl(key,label,values,value,scope='global') {
 function field(label,description,control) {
  return `<div class="field"><div><label>${label}</label>${description?`<p>${description}</p>`:''}</div>${control}</div>`;
 }
-function overlayHeight(preset=draft.preset||'Compact',metrics=draft.metrics) {
- const shown=effectiveMetrics(preset,metrics);
- const has=name=>shown.includes(name);
- const frame=has('FPS')||has('Frame time');
- const lows=has('1% low')||has('0.1% low');
- const hardware=has('GPU')||has('CPU')||has('GPU temperature')||has('CPU temperature');
- return preset==='FPS only'?24:25+(frame?38:0)+(lows?26:0)+(hardware?26:0);
-}
 function ribbonWidth(preset=draft.preset||'Compact',metrics=draft.metrics) {
  return (draft.branding===false?0:94)+effectiveMetrics(preset,metrics).length*89;
 }
 function overlayPreview() {
  const preset=draft.preset||'Compact';
- const height=overlayHeight(preset,draft.metrics);
- const layout=preset==='FPS only'?'Grid':draft.layout||'Grid';
+ const layout=draft.layout||'Telemetry';
  const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
- return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:1;--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-native-height:${height}px;--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div>`;
+ return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:1;--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div>`;
 }
 function hudContent() {
  const preset=draft.preset||'Compact';
  if(preset==='FPS only')return `<div class="hud-fps-only"><span>FPS</span><b>144</b></div>`;
  const shown=effectiveMetrics(preset,draft.metrics);
  const has=name=>shown.includes(name);
- const frame=has('FPS')||has('Frame time');
- const lows=has('1% low')||has('0.1% low');
- const hardware=has('GPU')||has('CPU')||has('GPU temperature')||has('CPU temperature');
  const items=[
   has('FPS')&&['FPS','144 FPS'],has('Frame time')&&['FRAME TIME','6.9 MS'],has('1% low')&&['1% LOW','118 FPS'],has('0.1% low')&&['0.1% LOW','96 FPS'],
   has('GPU')&&['GPU LOAD','91%'],has('GPU temperature')&&['GPU TEMP','68°C'],has('CPU')&&['CPU LOAD','38%'],has('CPU temperature')&&['CPU TEMP','62°C']
  ].filter(Boolean);
  if(draft.layout==='Ribbon')return `${draft.branding===false?'':'<div class="hud-layout-brand"><span>REDUNAR</span></div>'}${items.map(([label,value])=>`<div class="hud-ribbon-metric"><small>${label}</small><b>${value}</b></div>`).join('')}`;
- if(draft.layout==='Telemetry')return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
- const sections=[];
- if(frame)sections.push(`<div class="hud-native-frame">${has('FPS')?'<b class="hud-native-value hud-native-fps-value">144</b><span class="hud-native-label hud-native-fps-label">FPS</span>':''}${has('Frame time')?'<b class="hud-native-value hud-native-frame-time-value">6.9</b><span class="hud-native-label hud-native-frame-time-label">MS</span>':''}</div>`);
- if(lows)sections.push(`<div class="hud-native-row hud-native-lows">${has('1% low')?'<span class="hud-native-left">1% LOW&nbsp;&nbsp;118</span>':''}${has('0.1% low')?'<span class="hud-native-right">0.1% LOW&nbsp;&nbsp;96</span>':''}</div>`);
- if(hardware)sections.push(`<div class="hud-native-row hud-native-hardware">${has('CPU')||has('CPU temperature')?`<span class="hud-native-left">CPU${has('CPU')?' 38%':''}${has('CPU temperature')?(has('CPU')?' · 62°C':' 62°C'):''}</span>`:''}${has('GPU')||has('GPU temperature')?`<span class="hud-native-right">GPU${has('GPU')?' 91%':''}${has('GPU temperature')?(has('GPU')?' · 68°C':' 68°C'):''}</span>`:''}</div>`);
- return `${draft.branding===false?'':'<div class="hud-native-header">REDUNAR</div>'}${sections.join('')}`;
+ return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
 }
 function replaySaveActions() {
  return `<div class="heading-actions replay-save-actions"><label class="replay-duration-label">Save last <select id="save-duration" aria-label="Replay duration">${durations.map(d=>`<option value="${d}" ${d===(selectedSaveDuration??Number(replayPreferences?.initial_save_duration_seconds||30))?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')}</select></label>${button(`${icon('plus')} <span class="replay-save-label"><span data-replay-save-label aria-live="polite">Save replay</span></span> <span class="replay-shortcut-slot" hidden><kbd id="save-replay-shortcut" aria-hidden="true" hidden></kbd></span>`,'save-replay',true,`aria-label="Save replay" ${!runtime?.can_save?'disabled':''}`)}</div>`;
@@ -454,7 +439,7 @@ function globalOverlay() {
  const swatches=Object.entries(overlayPalettes).map(([name,colors])=>`<button type="button" class="overlay-palette" data-palette="${name}" aria-label="${name} palette" aria-pressed="${draft.palette===name}" style="--swatch:${colors[0]}"></button>`).join('');
  const recording=switchControl('captureMetrics','Record session metrics',draft.captureMetrics);
  const visibility=switchControl('overlay','Show overlay',draft.overlay);
- const appearance=field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))+['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control" data-slider-control><input type="range" data-tactile-range data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}">${sliderValueMarkup({id:`${key}-value`,label:key==='scale'?'Scale':'Opacity',value:draft[key]})}</div>`)).join('')+field('Show Redunar branding','Shows the Redunar label in Compact, Detailed and Custom presets.',switchControl('branding','Show Redunar branding',draft.branding!==false,'global',draft.preset==='FPS only'));
+ const appearance=field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))+['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control" data-slider-control><input type="range" data-tactile-range data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}">${sliderValueMarkup({id:`${key}-value`,label:key==='scale'?'Scale':'Opacity',value:draft[key]})}</div>`)).join('')+field('Show Redunar branding','Shows the Redunar label in Ribbon and Telemetry.',switchControl('branding','Show Redunar branding',draft.branding!==false,'global',draft.preset===FPS_ONLY));
  return overlaySettings({preview:overlayPreview(),draft,shown:effectiveMetrics(draft.preset||'Compact',draft.metrics),metricNames,swatches,visibility,recording,appearance,live:active()});
 }
 function globalReplay() {
@@ -670,8 +655,10 @@ async function performUpdate(command,pending,args={}) {
 async function saveGlobalProfileDraft() {
  if(!globalProfileChanged())return;
  const pendingShortcuts=[...draftShortcuts],previousShortcuts=[...shortcuts],previousMap={...savedShortcutMap};
- const saved=await call('save_global_settings',{input:profilePayload(draft,savedShortcutMap),expectedRevision:globalRevision});
- acceptGlobal(saved);
+ // A non-Custom preset still needs a valid saved metric selection.
+ const profile=draft.preset!=='Custom'&&!draft.metrics.length?{...draft,metrics:defaults.metrics}:draft;
+ const saved=await call('save_global_settings',{input:profilePayload(profile,savedShortcutMap),expectedRevision:globalRevision});
+ acceptGlobal(saved,draftPanelPreset);
  // A profile save must not silently accept an independent shortcut draft.
  draftShortcuts=pendingShortcuts;shortcuts=previousShortcuts;savedShortcutMap=previousMap;
  try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}
@@ -715,7 +702,7 @@ async function finishDraftRestart(save) {
   // A session may have started while these asynchronous saves were pending.
   if(active()||activeSession?.launch_locked)throw new Error('End the session to restart.');
   if(!save){
-   draft=structuredClone(defaults);draftShortcuts=[...shortcuts];
+   discardGlobalDraft();
    for(const g of games){g.overrides={...savedGameOverrides.get(g.id)};g.revision=g.savedRevision??g.revision;}
   }
   $('#dialog').close();pendingUpdateAction='restarting';updateObservedElements();
@@ -866,15 +853,15 @@ function scheduleClipThumbnails(){
 function updateHud() {
  const validation=$('#metric-validation');if(validation)validation.textContent=draft.preset==='Custom'&&!draft.metrics.length?'Select at least one metric to save a Custom layout.':'';
  const branding=$('input[data-global="branding"]');
- if(branding)branding.disabled=draft.preset==='FPS only';
+ if(branding)branding.disabled=draft.preset===FPS_ONLY;
  const hud=$('#hud');
  if(hud){
   const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
-  hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.preset==='FPS only'?'Grid':draft.layout||'Grid';
-  hud.style.setProperty('--hud-native-height',`${overlayHeight()}px`);hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
+  hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.layout||'Telemetry';
+  hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
   [['--hud-accent',palette[0]],['--hud-panel',palette[1]],['--hud-text',palette[2]],['--hud-muted',palette[3]],['--hud-border',palette[4]]].forEach(([key,value])=>hud.style.setProperty(key,value));
-  // FPS only ignores layout without overwriting the retained draft.
-  document.querySelectorAll('.layout-grid button[data-layout]').forEach(button=>{button.disabled=draft.preset==='FPS only';button.setAttribute('aria-pressed',String(button.dataset.layout===draft.layout));});
+  const selectedLayout=selectedOverlayLayout(draft);
+  document.querySelectorAll('.layout-grid button[data-layout]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.layout===selectedLayout)));
   document.querySelectorAll('[data-palette]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.palette===draft.palette)));
   if($('#overlay-palette-name'))$('#overlay-palette-name').textContent=draft.palette||'Redunar';
   for(const key of ['scale','opacity'])updatePrecisionSlider($(`input[type="range"][data-global="${key}"]`));
@@ -883,14 +870,34 @@ function updateHud() {
  updateDirtyActionButtons();
 }
 function syncMetricToggles() {
- document.querySelectorAll('button[data-preset]').forEach(button=>{const selected=button.dataset.preset===draft.preset;button.setAttribute('aria-pressed',String(selected));button.tabIndex=selected?0:-1;});
+ const fpsOnly=draft.preset===FPS_ONLY;
+ document.querySelectorAll('button[data-preset]').forEach(button=>{
+  const selected=button.dataset.preset===draft.preset;
+  button.setAttribute('aria-pressed',String(selected));button.disabled=fpsOnly;button.tabIndex=selected?0:-1;
+ });
  const custom=draft.preset==='Custom';
  const shown=new Set(effectiveMetrics(draft.preset||'Compact',draft.metrics));
  document.querySelectorAll('[data-metric]').forEach(input=>{input.checked=shown.has(input.dataset.metric);input.disabled=!custom;});
 }
 
-function acceptGlobal(result) {
- defaults=mapDefaults(result); draft=structuredClone(defaults); globalRevision=result.revision;
+function selectInformationPreset(next) {
+ if(draft.preset===FPS_ONLY||!panelPresets.includes(next))return;
+ if(next==='Custom' && draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);
+ draft.preset=next;
+ syncMetricToggles();updateHud();
+}
+
+function discardGlobalDraft() {
+ draft=structuredClone(defaults);
+ draftPanelPreset=savedPanelPreset;
+ draftShortcuts=[...shortcuts];
+}
+
+function acceptGlobal(result, rememberedPanelPreset=savedPanelPreset) {
+ defaults=mapDefaults(result); globalRevision=result.revision;
+ savedPanelPreset=panelPreset(defaults,rememberedPanelPreset);
+ draft=structuredClone(defaults);
+ draftPanelPreset=savedPanelPreset;
  savedShortcutMap={...result.values.shortcuts};
  shortcuts=[savedShortcutMap.overlay||'',...durations.map(d=>savedShortcutMap[d]||'')];
  draftShortcuts=[...shortcuts]; loaded.global=true;
@@ -1557,8 +1564,12 @@ document.addEventListener('click',event=>{
  if(target.dataset.overviewView){overviewMetric=target.dataset.overviewView;document.querySelectorAll('[data-overview-view]').forEach(el=>{const selected=el.dataset.overviewView===overviewMetric;el.classList.toggle('active',selected);el.setAttribute('aria-pressed',String(selected));});updateObservedElements();refreshWorkspacePresentation();return;}
  if(target.dataset.historyView){showHistoryMetric(target.dataset.historyView);return;}
  if(target.dataset.action==='history-compare'){historyCompare=!historyCompare;render();return;}
- if(target.dataset.preset){if(busy||!loaded.global)return;const next=target.dataset.preset;if(next==='Custom'&&draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);draft.preset=next;syncMetricToggles();updateHud();return;}
- if(target.dataset.layout){if(busy||!loaded.global||draft.preset==='FPS only')return;draft.layout=target.dataset.layout;updateHud();return;}
+ if(target.dataset.preset){if(!busy&&loaded.global)selectInformationPreset(target.dataset.preset);return;}
+ if(target.matches('button[data-layout]')){
+  if(busy||!loaded.global)return;
+  draftPanelPreset=selectOverlayLayout(draft,target.dataset.layout,draftPanelPreset);
+  syncMetricToggles();updateHud();return;
+ }
  if(target.dataset.palette){if(busy||!loaded.global)return;draft.palette=target.dataset.palette;updateHud();return;}
  if(target.dataset.globalTab){globalTab=target.dataset.globalTab;if(route()==='global')render();return;}
  if(target.dataset.libraryTab){showLibraryTab(target.dataset.libraryTab);return;}
@@ -1585,7 +1596,7 @@ document.addEventListener('click',event=>{
  if(action==='install-update'){
   performUpdate('install_update','installing');return;
  }
- if(action==='discard-global'){if(!globalProfileChanged()&&!globalShortcutsChanged())return;draft=structuredClone(defaults);draftShortcuts=[...shortcuts];render();return;}
+ if(action==='discard-global'){if(!globalProfileChanged()&&!globalShortcutsChanged())return;discardGlobalDraft();render();return;}
  if(action==='discard-game'){game().overrides={...savedGameOverrides.get(game().id)};game().revision=game().savedRevision??game().revision;refreshLibraryDetail();return;}
  if(action==='reset-game'){
   delete game().overrides.overlay;delete game().overrides.replay;delete game().overrides.captureMetrics;
@@ -1666,7 +1677,7 @@ document.addEventListener('input',event=>{
  if(t.id==='history-search'){historyFilters.search=t.value;refreshHistoryRail();}
  if(t.dataset.historyCursor!==undefined)updateHistoryCursor(t.value);
  if(t.dataset.global){draft[t.dataset.global]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(t.dataset.global)?Number(t.value):t.value;updateHud();}
- if(t.dataset.metric){draft.metrics=t.checked?[...new Set([...draft.metrics,t.dataset.metric])]:draft.metrics.filter(m=>m!==t.dataset.metric);draft.preset='Custom';const preset=$('[data-global="preset"]');if(preset){preset.value='Custom';enhancePrecisionSelects(workspace);}syncMetricToggles();updateHud();}
+ if(t.dataset.metric){if(busy||!loaded.global||draft.preset!=='Custom')return;draft.metrics=t.checked?[...new Set([...draft.metrics,t.dataset.metric])]:draft.metrics.filter(m=>m!==t.dataset.metric);draft.preset='Custom';const preset=$('[data-global="preset"]');if(preset){preset.value='Custom';enhancePrecisionSelects(workspace);}syncMetricToggles();updateHud();}
  if(t.dataset.shortcut!==undefined){draftShortcuts[Number(t.dataset.shortcut)]=t.value;updateDirtyActionButtons();}
 
 });
@@ -1685,12 +1696,8 @@ document.addEventListener('change',event=>{
  if(t.id==='save-duration'){selectedSaveDuration=Number(t.value);updateObservedElements();return;}
  if(t.dataset.global){
   const key=t.dataset.global;
-  if(key==='preset'){
-   const next=t.value;
-   if(next==='Custom' && draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);
-   draft.preset=next;
-   syncMetricToggles();
-  }else draft[key]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(key)?Number(t.value):t.value;
+  if(key==='preset'){selectInformationPreset(t.value);return;}
+  draft[key]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(key)?Number(t.value):t.value;
   updateHud();
   return;
  }
