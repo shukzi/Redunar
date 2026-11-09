@@ -27,6 +27,15 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.3" date="2026-11-09">
+      <description>
+        <ul>
+          <li>Adjust the distance from the selected corner and apply it during a game by saving.</li>
+          <li>Show defaults on the Edge spacing, Scale, and Opacity sliders.</li>
+          <li>Move FPS only to Layout and open saved Grid layouts in Telemetry.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-11-09">
       <description>
         <ul>
