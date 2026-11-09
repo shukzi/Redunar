@@ -27,6 +27,16 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.2" date="2026-11-09">
+      <description>
+        <ul>
+          <li>Redesigned the desktop app and combined clip playback and trimming.</li>
+          <li>Improved tray icon support on desktops that use lowercase icon names.</li>
+          <li>Moved routine capture counts to Diagnostics.</li>
+          <li>Reduced idle work by loading saved sessions on demand and pausing hidden UI updates.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-10-31">
       <description>
         <ul>
