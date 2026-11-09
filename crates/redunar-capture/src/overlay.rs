@@ -9,6 +9,7 @@ pub const REPLAY_MENU_VARIABLE_FPS: u8 = 240;
 
 const MAGIC: [u8; 8] = *b"RDOVL001";
 const VERSION: u16 = 4;
+const EDGE_SPACING_VERSION: u16 = 5;
 const CPU_UTILIZATION_PRESENT: u16 = 1 << 0;
 const CPU_TEMPERATURE_PRESENT: u16 = 1 << 1;
 const GPU_UTILIZATION_PRESENT: u16 = 1 << 2;
@@ -278,6 +279,7 @@ pub struct OverlayHardwareTelemetry {
     pub metrics: u16,
     pub opacity_percent: u8,
     pub scale_percent: u8,
+    pub edge_spacing_px: Option<u8>,
     /// Monotonic daemon event edge for a durably committed Replay clip.
     /// Zero means no clip has completed in this capture session.
     pub replay_saved_revision: u16,
@@ -301,16 +303,13 @@ pub fn encode_overlay_hardware_telemetry(
     output: &mut [u8],
 ) -> Result<usize, OverlayTelemetryError> {
     validate(&telemetry)?;
-    if output.len() < OVERLAY_HARDWARE_TELEMETRY_BYTES {
-        return Err(OverlayTelemetryError::new(
-            "overlay telemetry output buffer is too small",
-        ));
-    }
-
-    let output = &mut output[..OVERLAY_HARDWARE_TELEMETRY_BYTES];
+    let output = output
+        .first_chunk_mut::<OVERLAY_HARDWARE_TELEMETRY_BYTES>()
+        .ok_or_else(|| {
+            OverlayTelemetryError::new("overlay telemetry output buffer is too small")
+        })?;
     output.fill(0);
     output[..8].copy_from_slice(&MAGIC);
-    write_u16(output, 8, VERSION);
     let mut flags = 0_u16;
     write_optional(
         output,
@@ -341,6 +340,7 @@ pub fn encode_overlay_hardware_telemetry(
         &mut flags,
     );
     write_u16(output, 10, flags);
+    set_overlay_hardware_edge_spacing(output, telemetry.edge_spacing_px);
     output[12] = telemetry.corner;
     output[13] = telemetry.preset;
     write_u16(output, 14, telemetry.metrics);
@@ -358,6 +358,21 @@ pub fn encode_overlay_hardware_telemetry(
     write_u64(output, 16, telemetry.revision);
     write_u64(output, 40, telemetry.revision);
     Ok(OVERLAY_HARDWARE_TELEMETRY_BYTES)
+}
+
+/// Set the version and optional edge spacing in an existing overlay snapshot.
+/// Keep legacy snapshots readable when using the default spacing.
+pub fn set_overlay_hardware_edge_spacing(
+    output: &mut [u8; OVERLAY_HARDWARE_TELEMETRY_BYTES],
+    spacing_px: Option<u8>,
+) {
+    let version = if spacing_px.is_some() {
+        EDGE_SPACING_VERSION
+    } else {
+        VERSION
+    };
+    write_u16(output, 8, version);
+    output[11] = spacing_px.unwrap_or(0);
 }
 
 /// Decode one exact fixed-size snapshot and reject torn or non-canonical data.
@@ -379,12 +394,15 @@ pub fn decode_overlay_hardware_telemetry(
             "overlay telemetry has invalid magic",
         ));
     }
-    if read_u16(input, 8) != VERSION {
-        return Err(OverlayTelemetryError::new(
-            "overlay telemetry version is unsupported",
-        ));
-    }
-    let flags = read_u16(input, 10);
+    let (flags, edge_spacing_px) = match read_u16(input, 8) {
+        VERSION => (read_u16(input, 10), None),
+        EDGE_SPACING_VERSION => (u16::from(input[10]), Some(input[11])),
+        _ => {
+            return Err(OverlayTelemetryError::new(
+                "overlay telemetry version is unsupported",
+            ));
+        }
+    };
     if flags & !KNOWN_FLAGS != 0 {
         return Err(OverlayTelemetryError::new(
             "overlay telemetry flags are unsupported",
@@ -405,6 +423,7 @@ pub fn decode_overlay_hardware_telemetry(
         metrics: read_u16(input, 14),
         opacity_percent: input[32],
         scale_percent: input[33],
+        edge_spacing_px,
         replay_saved_revision: read_u16(input, 34),
         metrics_visible: match input[36] {
             0 => None,
@@ -540,6 +559,7 @@ mod tests {
             metrics: 1,
             opacity_percent: 50,
             scale_percent: 100,
+            edge_spacing_px: None,
             replay_saved_revision: 7,
             metrics_visible: None,
             branding_visible: true,
@@ -584,6 +604,7 @@ mod tests {
             metrics: 3,
             opacity_percent: 75,
             scale_percent: 125,
+            edge_spacing_px: Some(72),
             replay_saved_revision: 0,
             metrics_visible: None,
             branding_visible: false,

@@ -15,6 +15,7 @@ pub use overlay::{
     REPLAY_MENU_TELEMETRY_BYTES, REPLAY_MENU_VARIABLE_FPS, REPLAY_SHORTCUT_LABEL_BYTES,
     ReplayMenuStatus, ReplayMenuTelemetry, ReplayShortcutLabel, decode_overlay_hardware_telemetry,
     decode_replay_menu_telemetry, encode_overlay_hardware_telemetry, encode_replay_menu_telemetry,
+    set_overlay_hardware_edge_spacing,
 };
 
 use std::error::Error;

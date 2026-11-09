@@ -2284,6 +2284,21 @@ html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .range-c
   height: 44px;
   min-height: 44px;
 }
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .range-default-tick {
+  grid-area: 1 / 1;
+  justify-self: start;
+  align-self: center;
+  width: 2px;
+  height: 6px;
+  margin-inline-start: calc(9px + (100% - 18px) * var(--range-default-position));
+  transform: translate(-50%, 13px);
+  border-radius: 1px;
+  background: #777;
+  pointer-events: none;
+}
+html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .range-default-label {
+  white-space: nowrap;
+}
 html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .overlay-preset-row {
   grid-template-columns: minmax(140px, 1fr) minmax(0, 2.3fr);
   padding-top: 8px;

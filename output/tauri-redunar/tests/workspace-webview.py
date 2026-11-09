@@ -140,6 +140,27 @@ try:
     test('Clean global settings hide draft actions',"check(q('.settings-save-bar').hidden,'clean bar hidden')")
     test('Exact percentage entry keeps supported steps and cancels unfinished edits',"const input=q('[data-global=scale]'),field=q('#scale-value');field.value='137';field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));check(input.value==='135'&&field.value==='135','supported five-percent step');field.value='-';field.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));check(field.value==='135'&&input.value==='135','unfinished edit cancelled');click('[data-action=discard-global]');check(q('.settings-save-bar').hidden,'discard restores saved values');")
     test('Position retains all corners while the sample stays centered',"const input=q('[data-global=position]'),initial=input.value;for(const option of input.options){input.value=option.value;input.dispatchEvent(new Event('change',{bubbles:true}));const hud=q('#hud'),h=hud.getBoundingClientRect(),scene=q('.overlay-scene').getBoundingClientRect();check(hud.dataset.position===option.value,'corner retained');check(Math.abs(h.left+h.right-scene.left-scene.right)<1,'sample centered horizontally');check(Math.abs(h.top+h.bottom-scene.top-scene.bottom)<1,'sample centered vertically');}input.value=initial;input.dispatchEvent(new Event('change',{bubbles:true}));")
+    test('Edge spacing uses pixels and stays a draft until Save', r"""
+        const slider=q('[data-global=edgeSpacing]'), field=q('#edgeSpacing-value');
+        check(slider.value==='12'&&field.getAttribute('aria-label')==='Edge spacing, pixels','legacy defaults use 12 px');
+        for(const [key,label] of [['edgeSpacing','12 px'],['scale','100%'],['opacity','50%']]){
+            const range=q(`[data-global=${key}]`), description=document.getElementById(range.getAttribute('aria-describedby'));
+            const mark=range.parentElement.querySelector('.range-default-tick'), bounds=range.getBoundingClientRect(), tick=mark.getBoundingClientRect();
+            const factory=Number.parseInt(label,10), fraction=(factory-Number(range.min))/(Number(range.max)-Number(range.min));
+            check(description.textContent===`Default: ${label}`,`${key} announces its factory default`);
+            check(Math.abs(tick.x+tick.width/2-(bounds.x+9+(bounds.width-18)*fraction))<1,`${key} tick lines up with the default`);
+            check(getComputedStyle(mark).pointerEvents==='none',`${key} tick cannot intercept slider input`);
+        }
+        const marker=slider.parentElement.querySelector('.range-default-tick'), markerLeft=marker.getBoundingClientRect().left;
+        window.spacingWrites=bridge.calls.filter(call=>call.command==='save_global_settings').length;
+        field.value='49';field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+        check(slider.value==='48'&&slider.getAttribute('aria-valuetext')==='48 pixels','pixel entry snaps to supported step');
+        check(marker.getBoundingClientRect().left===markerLeft,'marker stays put when the value changes');
+        check(q('#global-save-feedback').textContent.includes('Overlay appearance'),'draft feedback');
+        check(bridge.calls.filter(call=>call.command==='save_global_settings').length===spacingWrites,'no write before Save');
+        click('[data-action=discard-global]');
+        check(q('[data-global=edgeSpacing]').value==='12'&&q('.settings-save-bar').hidden,'discard restores saved spacing');
+    """)
     snap('global-overlay')
     test('Layout and palette change structure and color without changing selected metrics',"const metrics=[...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|');click('[data-layout=Ribbon]');click('[data-palette=Glacier]');const hud=q('#hud'),brand=q('.hud-layout-brand'),brandText=q('.hud-layout-brand span'),hudBounds=hud.getBoundingClientRect(),textBounds=brandText.getBoundingClientRect();check(hud.dataset.layout==='Ribbon','ribbon preview');check(getComputedStyle(hud).width==='628px','ribbon fits six visible metrics');check(getComputedStyle(brand).flexDirection==='row','generic HUD rule does not top-align brand');check(Math.abs((textBounds.top+textBounds.bottom-hudBounds.top-hudBounds.bottom)/2)<1,'brand text vertically centered');check(hud.style.getPropertyValue('--hud-accent')===window.fixturePalettes.Glacier[0],'glacier accent');check([...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|')===metrics,'metrics unchanged');check(q('.layout-grid [data-layout=Ribbon]').getAttribute('aria-pressed')==='true','layout card selected');check(q('[data-palette=Glacier]').getAttribute('aria-pressed')==='true','palette swatch selected');")
     test('Every overlay palette controls both preview borders',"const expected=Object.fromEntries(Object.entries(window.fixturePalettes).map(([name,colors])=>[name,[colors[0],colors[4]].map(hex=>'rgb('+[1,3,5].map(offset=>parseInt(hex.slice(offset,offset+2),16)).join(', ')+')')]));const hud=q('#hud');for(const [name,[accent,border]] of Object.entries(expected)){click('[data-palette='+name+']');const style=getComputedStyle(hud);check(style.borderLeftColor===accent,name+' accent border');check(style.borderTopColor===border,name+' panel border');}click('[data-palette=Glacier]');")
@@ -373,6 +394,21 @@ try:
     test('Failed running overlay save keeps the draft available for retry',"check(q('[data-global=overlay]').checked,'unsaved show choice retained');check(q('[data-global=scale]').value==='105','appearance draft retained');check(!q('[data-action=save-global]').disabled,'retry enabled');check(q('#toast').textContent.includes('changed elsewhere'),'error visible');bridge.conflict=false;click('[data-action=discard-global]');check(!q('[data-global=overlay]').checked&&q('[data-global=scale]').value==='100','discard restores last saved profile');check(q('.settings-save-bar').hidden,'draft bar cleared');")
     js("q('[data-global=overlay]').click();click('[data-action=save-global]')");pump(400)
     test('Running overlay visibility can be saved again',"check(bridge.calls.findLast(c=>c.command==='save_global_settings').args.input.overlay===true,'shown persisted');check(q('[data-global=overlay]').checked&&q('.settings-save-bar').hidden,'saved shown and clean');check(bridge.errors.length===0,bridge.errors.join('; '));")
+    test('Saving edge spacing uses the normal profile command during a game', r"""
+        const slider=q('[data-global=edgeSpacing]');
+        check(!slider.disabled,'spacing editable during session');
+        slider.value='48';slider.dispatchEvent(new Event('input',{bubbles:true}));
+        click('[data-action=save-global]');
+    """)
+    wait_for("values.edgeSpacing===48&&q('.settings-save-bar').hidden")
+    test('Saved spacing remains visible and can return to the default', r"""
+        check(q('[data-global=edgeSpacing]').value==='48','saved pixel spacing displayed');
+        const save=bridge.calls.findLast(call=>call.command==='save_global_settings');
+        check(save.args.input.edgeSpacing===48&&save.args.input.fps===60,'only the overlay setting changes');
+        const slider=q('[data-global=edgeSpacing]');slider.value='12';slider.dispatchEvent(new Event('input',{bubbles:true}));
+        click('[data-action=save-global]');
+    """)
+    wait_for("values.edgeSpacing===12&&q('.settings-save-bar').hidden")
     test('FPS only is selected from Layout and preserves an unsaved Custom draft', r"""
         click('[data-overlay-editor-tab=metrics]');click('[data-preset=Custom]');
         const before=qa('[data-metric]:checked').map(input=>input.dataset.metric).join('|');

@@ -1,3 +1,4 @@
+import { overlayEdgeSpacing } from './overlay-layout.mjs';
 import { validHistoryValue } from './history-timeline.mjs';
 
 // Runtime data crosses one explicit boundary. Never reuse the sandbox fixtures
@@ -9,7 +10,7 @@ export function visibleSession(status) {
   return status && status.phase === 'Ended' && !status.can_end && !status.launch_locked ? null : status ?? null;
 }
 
-const profileDraftKeys = ['overlay','preset','layout','palette','branding','position','scale','opacity','metrics','captureMetrics','replay','fps','quality','format'];
+const profileDraftKeys = ['overlay','preset','layout','palette','branding','position','edgeSpacing','scale','opacity','metrics','captureMetrics','replay','fps','quality','format'];
 const normalizedMetrics = value => [...(Array.isArray(value)?value:[])].sort();
 export function profileDraftChanged(current,saved) {
   return profileDraftKeys.some(key=>key==='metrics'
@@ -39,7 +40,7 @@ export function mapSessions(records) {
 }
 export function mapDefaults(workspace) {
   const s=workspace.values;
-  return {overlay:s.overlay,preset:s.preset,layout:s.layout==='Grid'?'Telemetry':s.layout,palette:s.palette,branding:s.branding!==false,position:s.position,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:true,fps:s.fps,quality:s.quality,format:s.format};
+  return {overlay:s.overlay,preset:s.preset,layout:s.layout==='Grid'?'Telemetry':s.layout,palette:s.palette,branding:s.branding!==false,position:s.position,edgeSpacing:s.edgeSpacing??overlayEdgeSpacing.defaultPixels,scale:s.scale,opacity:s.opacity,metrics:[...s.metrics],captureMetrics:s.captureMetrics,replay:true,fps:s.fps,quality:s.quality,format:s.format};
 }
 export function profilePayload(draft, shortcuts) {
   return {...draft,shortcuts};

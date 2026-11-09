@@ -231,12 +231,16 @@ Global settings own frame metrics, overlay visibility and appearance, recording
 configuration, replay folder and menu preferences, and optional shortcuts.
 Per-game settings override the supported subset with explicit inheritance.
 Show overlay uses the settings draft and Save/Discard both when idle and
-during a session. Changing the toggle updates the preview; saving applies the
-visibility to a supported running overlay while respecting per-game overrides.
+during a session. Changing a setting updates the draft. Save applies visibility,
+appearance, and displayed metrics to a supported running overlay. Per-game
+visibility overrides still apply.
 
 The overlay preview uses the same geometry, metric order, palette roles, and
 dimensions as the in-game renderer. The sample stays centered and scales down
 to fit the preview when needed. Position controls the saved in-game corner.
+Edge spacing sets the distance from both edges of that corner in game pixels.
+It defaults to 12 px and can be reduced automatically in small game windows.
+Edge spacing, scale, and opacity sliders mark their default values.
 Palette colors remain visible inside the sample while the surrounding controls
 retain graphite surfaces. Overlay & metrics follows the shared settings surfaces
 used by the other global tabs. The preview and runtime

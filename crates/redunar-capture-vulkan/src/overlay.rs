@@ -24,7 +24,7 @@ use redunar_capture::{
     REPLAY_MENU_TELEMETRY_BYTES, REPLAY_MENU_VARIABLE_FPS, ReplayMenuStatus, ReplayMenuTelemetry,
     ReplayShortcutLabel, decode_overlay_hardware_telemetry, decode_replay_menu_telemetry,
 };
-use redunar_core::overlay_font;
+use redunar_core::{OverlayEdgeSpacing, overlay_font};
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::c_char;
@@ -110,7 +110,7 @@ const TELEMETRY_ROW_HEIGHT: u32 = 24;
 const MIN_OVERLAY_WIDTH: u32 = 318;
 const MIN_OVERLAY_HEIGHT: u32 = 139;
 const TELEMETRY_HEADER_HEIGHT: u32 = 25;
-const OVERLAY_MARGIN: i32 = 12;
+const OVERLAY_MARGIN: i32 = OverlayEdgeSpacing::DEFAULT_PIXELS as i32;
 #[cfg(test)]
 const BITMAP_GLYPH_HEIGHT: u32 = overlay_font::GLYPH_HEIGHT;
 const FPS_ONLY_WIDTH: u32 = 116;
@@ -535,6 +535,7 @@ struct OverlayPlan {
     corner: OverlayCorner,
     opacity_percent: u8,
     scale_percent: u8,
+    edge_spacing: OverlayEdgeSpacing,
     placement: OverlayPlacement,
     animation_progress: u16,
     dim_percent: u8,
@@ -618,6 +619,7 @@ impl OverlayPlan {
             corner: OverlayCorner::TopLeft,
             opacity_percent: 0,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
             placement: OverlayPlacement::Corner,
             animation_progress: 0,
             dim_percent: 0,
@@ -672,6 +674,7 @@ impl OverlayPlan {
                 corner: config.corner,
                 opacity_percent: config.opacity_percent,
                 scale_percent: config.scale_percent,
+                edge_spacing: config.edge_spacing,
                 placement: OverlayPlacement::Corner,
                 animation_progress: u16::MAX,
                 dim_percent: 0,
@@ -729,6 +732,7 @@ impl OverlayPlan {
             corner: config.corner,
             opacity_percent: config.opacity_percent,
             scale_percent: config.scale_percent,
+            edge_spacing: config.edge_spacing,
             placement: OverlayPlacement::Corner,
             animation_progress: u16::MAX,
             dim_percent: 0,
@@ -844,6 +848,7 @@ impl OverlayPlan {
             // 1440p game resolutions. `effective_scale_percent` still fits
             // this down on smaller swapchains.
             scale_percent: 160,
+            edge_spacing: OverlayEdgeSpacing::default(),
             placement: OverlayPlacement::ReplayMenu,
             animation_progress: menu.animation_progress,
             dim_percent: u8::try_from(
@@ -1369,6 +1374,7 @@ struct OverlayConfig {
     metrics: u16,
     opacity_percent: u8,
     scale_percent: u8,
+    edge_spacing: OverlayEdgeSpacing,
 }
 
 impl Default for OverlayConfig {
@@ -1382,6 +1388,7 @@ impl Default for OverlayConfig {
             metrics: METRICS_COMPACT,
             opacity_percent: 50,
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
         }
     }
 }
@@ -1403,6 +1410,7 @@ impl OverlayConfig {
             metrics: parse_overlay_metrics(env::var(OVERLAY_METRICS_ENV).ok().as_deref()),
             opacity_percent: parse_overlay_opacity(env::var(OVERLAY_OPACITY_ENV).ok().as_deref()),
             scale_percent: 100,
+            edge_spacing: OverlayEdgeSpacing::default(),
         }
     }
 }
@@ -2394,6 +2402,10 @@ impl RendererState {
                 metrics: telemetry.metrics,
                 opacity_percent: telemetry.opacity_percent,
                 scale_percent: telemetry.scale_percent,
+                edge_spacing: telemetry
+                    .edge_spacing_px
+                    .and_then(OverlayEdgeSpacing::new)
+                    .unwrap_or_default(),
             };
             self.config = config;
             if let Some(visible) = telemetry.metrics_visible {
@@ -3709,13 +3721,18 @@ fn draw_glyph_instances(
     }
 }
 
+fn overlay_margin(extent: VkExtent2d, plan: &OverlayPlan) -> u32 {
+    if plan.placement == OverlayPlacement::Corner {
+        u32::from(plan.edge_spacing.fit(extent.width, extent.height))
+    } else {
+        u32::from(OverlayEdgeSpacing::DEFAULT_PIXELS)
+    }
+}
+
 fn effective_scale_percent(extent: VkExtent2d, plan: &OverlayPlan) -> u8 {
-    let available_width = extent
-        .width
-        .saturating_sub(u32::try_from(OVERLAY_MARGIN * 2).unwrap_or(0));
-    let available_height = extent
-        .height
-        .saturating_sub(u32::try_from(OVERLAY_MARGIN * 2).unwrap_or(0));
+    let margin = overlay_margin(extent, plan);
+    let available_width = extent.width.saturating_sub(margin * 2);
+    let available_height = extent.height.saturating_sub(margin * 2);
     let width_limit = available_width.saturating_mul(100) / plan.width.max(1);
     let height_limit = available_height.saturating_mul(100) / plan.height.max(1);
     // The approved 520×286 menu occupies about 89% of its reference scene.
@@ -3745,12 +3762,9 @@ fn overlay_origin(extent: VkExtent2d, plan: &OverlayPlan, scale_percent: u8) -> 
         .unwrap_or(i32::MAX);
     let plan_height = i32::try_from(plan.height.saturating_mul(u32::from(scale_percent)) / 100)
         .unwrap_or(i32::MAX);
-    let right = width
-        .saturating_sub(plan_width)
-        .saturating_sub(OVERLAY_MARGIN);
-    let bottom = height
-        .saturating_sub(plan_height)
-        .saturating_sub(OVERLAY_MARGIN);
+    let margin = i32::try_from(overlay_margin(extent, plan)).unwrap_or(OVERLAY_MARGIN);
+    let right = width.saturating_sub(plan_width).saturating_sub(margin);
+    let bottom = height.saturating_sub(plan_height).saturating_sub(margin);
     if plan.placement == OverlayPlacement::ReplayMenu {
         let center_x = width.saturating_sub(plan_width) / 2;
         let center_y = height.saturating_sub(plan_height) / 2;
@@ -3770,9 +3784,9 @@ fn overlay_origin(extent: VkExtent2d, plan: &OverlayPlan, scale_percent: u8) -> 
         );
     }
     match plan.corner {
-        OverlayCorner::TopLeft => (OVERLAY_MARGIN, OVERLAY_MARGIN),
-        OverlayCorner::TopRight => (right, OVERLAY_MARGIN),
-        OverlayCorner::BottomLeft => (OVERLAY_MARGIN, bottom),
+        OverlayCorner::TopLeft => (margin, margin),
+        OverlayCorner::TopRight => (right, margin),
+        OverlayCorner::BottomLeft => (margin, bottom),
         OverlayCorner::BottomRight => (right, bottom),
     }
 }
@@ -4540,6 +4554,62 @@ mod tests {
     }
 
     #[test]
+    fn custom_metric_edge_spacing_fits_all_corners_on_small_surfaces() {
+        for extent in [
+            VkExtent2d {
+                width: 1920,
+                height: 1080,
+            },
+            VkExtent2d {
+                width: 318,
+                height: 139,
+            },
+        ] {
+            let margin = if extent.height == 139 { 34 } else { 96 };
+            for (layout, preset) in [
+                (OverlayLayout::Ribbon, OverlayPreset::Detailed),
+                (OverlayLayout::Telemetry, OverlayPreset::Detailed),
+                (OverlayLayout::Telemetry, OverlayPreset::FpsOnly),
+            ] {
+                for (corner, right, bottom) in [
+                    (OverlayCorner::TopLeft, false, false),
+                    (OverlayCorner::TopRight, true, false),
+                    (OverlayCorner::BottomLeft, false, true),
+                    (OverlayCorner::BottomRight, true, true),
+                ] {
+                    let plan = OverlayPlan::new(
+                        OverlaySnapshot::default(),
+                        OverlayConfig {
+                            layout,
+                            preset,
+                            corner,
+                            scale_percent: 200,
+                            edge_spacing: OverlayEdgeSpacing::new(96).unwrap(),
+                            ..OverlayConfig::default()
+                        },
+                    );
+                    let scale = effective_scale_percent(extent, &plan);
+                    let (x, y) = overlay_origin(extent, &plan, scale);
+                    let width = i32::try_from(plan.width * u32::from(scale) / 100).unwrap();
+                    let height = i32::try_from(plan.height * u32::from(scale) / 100).unwrap();
+                    let right_edge = i32::try_from(extent.width).unwrap() - margin;
+                    let bottom_edge = i32::try_from(extent.height).unwrap() - margin;
+                    assert!(x >= margin && x + width <= right_edge);
+                    assert!(y >= margin && y + height <= bottom_edge);
+                    assert_eq!(
+                        if right { x + width } else { x },
+                        if right { right_edge } else { margin }
+                    );
+                    assert_eq!(
+                        if bottom { y + height } else { y },
+                        if bottom { bottom_edge } else { margin }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn hardware_values_round_from_tenths_and_keep_missing_values_distinct() {
         let snapshot = hardware_snapshot(OverlayHardwareTelemetry {
             revision: 2,
@@ -4550,6 +4620,7 @@ mod tests {
             metrics: METRICS_COMPACT,
             opacity_percent: 50,
             scale_percent: 100,
+            edge_spacing_px: None,
             replay_saved_revision: 0,
             metrics_visible: None,
             branding_visible: true,

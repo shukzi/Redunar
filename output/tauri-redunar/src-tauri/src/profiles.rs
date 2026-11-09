@@ -11,6 +11,8 @@ pub struct GlobalSettingsInput {
     #[serde(default = "default_branding_input")]
     branding: bool,
     position: String,
+    #[serde(rename = "edgeSpacing", default = "default_edge_spacing_input")]
+    edge_spacing: u8,
     scale: u8,
     opacity: u8,
     metrics: Vec<String>,
@@ -20,6 +22,10 @@ pub struct GlobalSettingsInput {
     quality: String,
     format: String,
     shortcuts: std::collections::HashMap<String, String>,
+}
+
+fn default_edge_spacing_input() -> u8 {
+    redunar_core::OverlayEdgeSpacing::DEFAULT_PIXELS
 }
 
 fn default_branding_input() -> bool {
@@ -45,8 +51,8 @@ fn global_profile_from_input(
     current: redunar_core::GlobalGameProfile,
 ) -> Result<redunar_core::GlobalGameProfile, String> {
     use redunar_core::{
-        OverlayCorner, OverlayLayout, OverlayMetricSet, OverlayOpacity, OverlayPalette,
-        OverlayPreset, OverlayScale, ReplayFrameRate, ReplayQuality,
+        OverlayCorner, OverlayEdgeSpacing, OverlayLayout, OverlayMetricSet, OverlayOpacity,
+        OverlayPalette, OverlayPreset, OverlayScale, ReplayFrameRate, ReplayQuality,
     };
     let preset = match input.preset.as_str() {
         "Compact" => OverlayPreset::Compact,
@@ -93,6 +99,8 @@ fn global_profile_from_input(
         };
     }
     let metrics = OverlayMetricSet::from_bits(bits).map_err(|error| error.to_string())?;
+    let edge_spacing = OverlayEdgeSpacing::new(input.edge_spacing)
+        .ok_or_else(|| "Overlay edge spacing is outside the supported range".to_owned())?;
     let opacity = OverlayOpacity::new(input.opacity).map_err(|error| error.to_string())?;
     let scale = OverlayScale::new(input.scale)
         .ok_or_else(|| "Overlay scale is outside the supported range".to_owned())?;
@@ -120,6 +128,7 @@ fn global_profile_from_input(
         overlay_branding: input.branding,
         overlay_metrics: metrics,
         overlay_corner: corner,
+        overlay_edge_spacing: edge_spacing,
         overlay_opacity: opacity,
         overlay_scale: scale,
         gamescope_enabled: current.gamescope_enabled,
@@ -196,6 +205,7 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
                 C::BottomRight => "Bottom right",
             }
             .into(),
+            edge_spacing: profile.overlay_edge_spacing.pixels(),
             scale: profile.overlay_scale.percent(),
             opacity: profile.overlay_opacity.percent(),
             metrics: [
@@ -324,6 +334,7 @@ mod tests {
             palette: "Glacier".into(),
             branding: true,
             position: "Top right".into(),
+            edge_spacing: 32,
             scale: 100,
             opacity: 50,
             metrics: vec!["CPU temperature".into(), "GPU".into()],

@@ -593,6 +593,7 @@ impl Engine {
         profile.overlay_branding = global.overlay_branding;
         profile.overlay_metrics = global.overlay_metrics;
         profile.overlay_corner = global.overlay_corner;
+        profile.overlay_edge_spacing = global.overlay_edge_spacing;
         profile.overlay_opacity = global.overlay_opacity;
         profile.overlay_scale = global.overlay_scale;
         self.service

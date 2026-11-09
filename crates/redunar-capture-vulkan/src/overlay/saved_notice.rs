@@ -77,6 +77,7 @@ mod tests {
             metrics: 3,
             opacity_percent: 70,
             scale_percent: 125,
+            edge_spacing_px: Some(96),
             replay_saved_revision: 1,
             metrics_visible: Some(false),
             branding_visible: true,
@@ -108,6 +109,7 @@ mod tests {
                 metrics: 3,
                 opacity_percent: 70,
                 scale_percent: 125,
+                edge_spacing: redunar_core::OverlayEdgeSpacing::new(96).unwrap(),
             }
         );
         telemetry.metrics_visible = Some(false);
