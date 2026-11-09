@@ -20,3 +20,22 @@ export function latestRuntimeRefresh(read) {
     return inFlight;
   };
 }
+
+// Hidden windows need no periodic UI wakeups. Native supervision is independent.
+export function pollVisibleRuntime(page,refresh,delay,onError) {
+ let timer=null, reading=false;
+ function schedule(wait=delay()) {
+  clearTimeout(timer);timer=null;
+  if(!page.hidden&&!reading)timer=setTimeout(read,wait);
+ }
+ async function read() {
+  timer=null;
+  if(page.hidden)return;
+  reading=true;
+  try { await refresh(); } catch(error) { onError(error); }
+  finally { reading=false;schedule(); }
+ }
+ page.addEventListener('visibilitychange',()=>schedule(0));
+ // The startup read just completed. Wait the normal interval.
+ schedule();
+}

@@ -320,10 +320,7 @@ test('Runtime polling keeps expensive diagnostics and display probing off the on
  assert.match(source,/const slowRefresh=Date\.now\(\)-lastSlowRuntimeRefresh>=10000/);
  assert.match(source,/Promise\.allSettled\(\[call\('diagnostics_snapshot'\),call\('replay_display_capability'\)\]\)/);
  assert.match(source,/reload-diagnostics.*diagnostics_snapshot.*refreshCapabilities:true/);
- assert.match(source,/filter\(\(\[name\]\)=>name!==['"]reload-diagnostics['"]\)/);
- assert.match(source,/function pollDelay\(\)/);
  assert.match(source,/1000:2500/);
- assert.match(source,/if\(document\.hidden\)return 2000/);
 });
 
 test('clip metadata preserves observations and never invents game identity',()=>{
