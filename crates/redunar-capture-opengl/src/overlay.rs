@@ -1671,7 +1671,7 @@ fn parse_overlay_layout(token: Option<&str>) -> Layout {
 const fn layout_from_index(index: u8) -> Layout {
     match index {
         1 => Layout::Ribbon,
-        // Code 0 was Grid; 2 remains the Telemetry code.
+        // Map the old Grid code (0) to Telemetry. Code 2 still means Telemetry.
         _ => Layout::Telemetry,
     }
 }

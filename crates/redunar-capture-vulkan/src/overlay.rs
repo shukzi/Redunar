@@ -106,7 +106,7 @@ const RIBBON_HEIGHT: u32 = 44;
 const TELEMETRY_WIDTH: u32 = 300;
 const TELEMETRY_ROW_HEIGHT: u32 = 24;
 
-// Keep the existing swapchain admission limits; the chosen plan scales to fit.
+// Keep the existing minimum swapchain dimensions. The overlay scales to fit.
 const MIN_OVERLAY_WIDTH: u32 = 318;
 const MIN_OVERLAY_HEIGHT: u32 = 139;
 const TELEMETRY_HEADER_HEIGHT: u32 = 25;
@@ -1454,7 +1454,7 @@ fn parse_overlay_metrics(value: Option<&str>) -> u16 {
 const fn overlay_layout_from_index(index: u8) -> OverlayLayout {
     match index {
         1 => OverlayLayout::Ribbon,
-        // Code 0 was Grid; 2 remains the Telemetry code.
+        // Map the old Grid code (0) to Telemetry. Code 2 still means Telemetry.
         _ => OverlayLayout::Telemetry,
     }
 }
