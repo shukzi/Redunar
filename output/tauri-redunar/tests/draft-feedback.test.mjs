@@ -46,3 +46,7 @@ test('Visibility and session recording drafts remain distinct from appearance',(
  const scopes=profileDraftScopes({...saved,overlay:false,captureMetrics:false},saved);
  assert.deepEqual(new Set(scopes),new Set(['Overlay visibility','Session metrics']));
 });
+
+test('Switching to FPS only is reported as an appearance edit',()=>{
+ assert.deepEqual(profileDraftScopes({...saved,preset:'FPS only'},saved),['Overlay appearance']);
+});

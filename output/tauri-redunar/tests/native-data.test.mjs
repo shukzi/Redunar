@@ -191,7 +191,7 @@ test('saving Global settings reports whether the live overlay was updated',()=>{
 });
 test('Global numeric controls keep u8 and FPS values numeric on change',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
- assert.match(source,/else draft\[key\]=t\.type==='checkbox'\?t\.checked:\['fps','scale','opacity'\]\.includes\(key\)\?Number\(t\.value\):t\.value;/);
+ assert.match(source,/draft\[key\]=t\.type==='checkbox'\?t\.checked:\['fps','scale','opacity'\]\.includes\(key\)\?Number\(t\.value\):t\.value;/);
 });
 test('core navigation remains available and retired module writes are not exposed',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');

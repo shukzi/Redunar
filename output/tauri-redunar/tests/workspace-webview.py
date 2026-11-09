@@ -136,7 +136,7 @@ try:
     test('Reinstall restores launch without changing saved or draft settings',"check(!q('[data-action=launch-game]').disabled,'reinstalled launch enabled');check(q('#game-installation-note').hidden,'warning removed');check(q('[data-override=overlay]').value==='Off','draft still intact');click('[data-action=discard-game]');bridge.idle=false;")
     js('bridge.idle=true');pump(2800)
     route('global')
-    test('Default Telemetry shows the Compact metrics with two layout choices',"check(qa('button[data-layout]').map(button=>button.dataset.layout).join(',')==='Ribbon,Telemetry','only supported layouts offered');check(q('#hud').dataset.layout==='Telemetry','default layout');check(qa('.hud-telemetry-row').length===6,'all Compact metrics visible');")
+    test('Default Telemetry shows the Compact metrics with three layout choices',"check(qa('button[data-layout]').map(button=>button.dataset.layout).join(',')==='Ribbon,Telemetry,FPS only','only supported layouts offered');check(q('#hud').dataset.layout==='Telemetry','default layout');check(qa('.hud-telemetry-row').length===6,'all Compact metrics visible');")
     test('Clean global settings hide draft actions',"check(q('.settings-save-bar').hidden,'clean bar hidden')")
     test('Exact percentage entry keeps supported steps and cancels unfinished edits',"const input=q('[data-global=scale]'),field=q('#scale-value');field.value='137';field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));check(input.value==='135'&&field.value==='135','supported five-percent step');field.value='-';field.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));check(field.value==='135'&&input.value==='135','unfinished edit cancelled');click('[data-action=discard-global]');check(q('.settings-save-bar').hidden,'discard restores saved values');")
     test('Position retains all corners while the sample stays centered',"const input=q('[data-global=position]'),initial=input.value;for(const option of input.options){input.value=option.value;input.dispatchEvent(new Event('change',{bubbles:true}));const hud=q('#hud'),h=hud.getBoundingClientRect(),scene=q('.overlay-scene').getBoundingClientRect();check(hud.dataset.position===option.value,'corner retained');check(Math.abs(h.left+h.right-scene.left-scene.right)<1,'sample centered horizontally');check(Math.abs(h.top+h.bottom-scene.top-scene.bottom)<1,'sample centered vertically');}input.value=initial;input.dispatchEvent(new Event('change',{bubbles:true}));")
@@ -373,6 +373,76 @@ try:
     test('Failed running overlay save keeps the draft available for retry',"check(q('[data-global=overlay]').checked,'unsaved show choice retained');check(q('[data-global=scale]').value==='105','appearance draft retained');check(!q('[data-action=save-global]').disabled,'retry enabled');check(q('#toast').textContent.includes('changed elsewhere'),'error visible');bridge.conflict=false;click('[data-action=discard-global]');check(!q('[data-global=overlay]').checked&&q('[data-global=scale]').value==='100','discard restores last saved profile');check(q('.settings-save-bar').hidden,'draft bar cleared');")
     js("q('[data-global=overlay]').click();click('[data-action=save-global]')");pump(400)
     test('Running overlay visibility can be saved again',"check(bridge.calls.findLast(c=>c.command==='save_global_settings').args.input.overlay===true,'shown persisted');check(q('[data-global=overlay]').checked&&q('.settings-save-bar').hidden,'saved shown and clean');check(bridge.errors.length===0,bridge.errors.join('; '));")
+    test('FPS only is selected from Layout and preserves an unsaved Custom draft', r"""
+        click('[data-overlay-editor-tab=metrics]');click('[data-preset=Custom]');
+        const before=qa('[data-metric]:checked').map(input=>input.dataset.metric).join('|');
+        click('[data-overlay-editor-tab=appearance]');
+        const telemetry=q('button[data-layout=Telemetry]');
+        telemetry.focus();telemetry.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}));
+        check(document.activeElement===q('button[data-layout="FPS only"]'),'keyboard reaches FPS only');
+        check(document.activeElement.getAttribute('aria-pressed')==='true','FPS only selected');
+        check(q('.hud-fps-only')&&!q('.hud-telemetry-row'),'panel-free preview');
+        check(qa('button[data-layout]').every(button=>!button.disabled),'panel layouts remain available');
+        check(q('[data-global=branding]').disabled,'branding cannot affect FPS only');
+        click('[data-overlay-editor-tab=metrics]');
+        check(qa('button[data-preset]').map(button=>button.dataset.preset).join(',')==='Compact,Detailed,Custom','only panel presets');
+        check(qa('button[data-preset]').every(button=>button.disabled),'panel presets unavailable');
+        check(qa('[data-metric]:checked').length===1&&q('[data-metric=FPS]').checked,'one shown metric');
+        check(qa('[data-metric]').every(input=>input.disabled),'metric toggles unavailable');
+        click('[data-overlay-editor-tab=appearance]');click('button[data-layout=Ribbon]');
+        check(!q('[data-global=branding]').disabled,'panel restores branding control');
+        click('[data-overlay-editor-tab=metrics]');
+        check(q('button[data-preset=Custom]').getAttribute('aria-pressed')==='true','Custom preset restored');
+        check(qa('[data-metric]:checked').map(input=>input.dataset.metric).join('|')===before,'same Custom selections');
+        click('[data-action=discard-global]');click('[data-overlay-editor-tab=appearance]');
+        check(q('button[data-layout=Telemetry]').getAttribute('aria-pressed')==='true','discard restores saved layout');
+        check(q('.settings-save-bar').hidden,'discard is clean');
+    """)
+    test('FPS only can save without discarding a valid saved selection', r"""
+        window.savedPanelMetrics=values.metrics.join('|');
+        click('[data-overlay-editor-tab=metrics]');click('[data-preset=Custom]');
+        for(const input of qa('[data-metric]:checked'))input.click();
+        check(q('[data-action=save-global]').disabled,'empty Custom cannot save');
+        click('[data-overlay-editor-tab=appearance]');click('button[data-layout="FPS only"]');
+        check(!q('[data-action=save-global]').disabled,'FPS only can save');
+        click('[data-action=save-global]');
+    """)
+    wait_for("values.preset==='FPS only'&&q('.settings-save-bar').hidden&&!document.body.classList.contains('native-busy')")
+    test('FPS-only save uses the existing native preset and panel layout', r"""
+        const input=bridge.calls.findLast(call=>call.command==='save_global_settings').args.input;
+        check(input.preset==='FPS only'&&input.layout==='Telemetry','unchanged native profile fields');
+        check(input.metrics.join('|')===savedPanelMetrics,'last valid saved metric selection');
+        check(!('panelPreset' in input)&&!('draftPanelPreset' in input),'no new native fields');
+        check(q('button[data-layout="FPS only"]').getAttribute('aria-pressed')==='true','saved FPS only selected');
+        click('button[data-layout=Telemetry]');click('[data-overlay-editor-tab=metrics]');
+        check(q('button[data-preset=Custom]').getAttribute('aria-pressed')==='true','remember Custom across save');
+        check(qa('[data-metric]:checked').map(input=>input.dataset.metric).join('|')===savedPanelMetrics,'valid retained selections restored');
+        click('[data-action=discard-global]');click('[data-overlay-editor-tab=appearance]');
+        check(q('button[data-layout="FPS only"]').getAttribute('aria-pressed')==='true','discard returns to saved FPS only');
+        check(q('.settings-save-bar').hidden,'saved FPS only is clean');
+    """)
+    js("qa('#toast .toast-dismiss').forEach(button=>button.click())");pump(450)
+    snap('overlay-fps-only-layout')
+    window.resize(640,720);pump()
+    test('FPS-only layout and preview fit the narrow settings page', r"""
+        const group=q('.layout-switcher').getBoundingClientRect();
+        check(group.right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth+1,'layout fits');
+        check(q('.hud-fps-only').getBoundingClientRect().width>0,'preview visible');
+    """)
+    js("q('.layout-switcher').scrollIntoView({block:'center'})");pump()
+    snap('overlay-fps-only-layout-narrow')
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/?overlay=fps-only#global')
+    wait_for("""location.search==='?overlay=fps-only'&&window.bridge&&
+        values.metrics.join('|')==='GPU temperature'&&
+        q('button[data-layout="FPS only"]')?.getAttribute('aria-pressed')==='true'""")
+    test('Opening an existing FPS-only profile uses Compact when returning to a panel', r"""
+        check(q('.settings-save-bar').hidden,'saved FPS only opens cleanly');
+        check(q('.hud-fps-only'),'existing profile still shows FPS');
+        click('button[data-layout=Ribbon]');
+        check(q('#hud').dataset.preset==='Compact'&&qa('.hud-ribbon-metric').length===6,'fresh session uses Compact');
+        click('button[data-layout="FPS only"]');
+        check(q('.settings-save-bar').hidden,'switching back restores the saved profile');
+    """)
     (ARTIFACTS/'workspace-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
     print(f'PASS: {len(checks)} workspace checks. Screenshots: {ARTIFACTS}')
 finally:

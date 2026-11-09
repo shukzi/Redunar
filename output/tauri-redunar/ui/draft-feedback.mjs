@@ -1,16 +1,20 @@
+import {FPS_ONLY, selectedOverlayLayout} from './overlay-layout.mjs';
+
 // Describe the existing save owner's drafts without changing
 // which values Save/Discard commits or how drafts survive navigation.
 export function profileDraftScopes(current,saved) {
  const changed=key=>key==='metrics'
   ? JSON.stringify([...(current[key]||[])].sort())!==JSON.stringify([...(saved[key]||[])].sort())
   : current[key]!==saved[key];
+ const layoutChanged=selectedOverlayLayout(current)!==selectedOverlayLayout(saved);
+ const panelPresetChanged=current.preset!==FPS_ONLY&&saved.preset!==FPS_ONLY&&changed('preset');
  return [
-  ['Overlay appearance',['layout','palette','branding','position','scale','opacity']],
-  ['Displayed metrics',['preset','metrics']],
-  ['Overlay visibility',['overlay']],
-  ['Session metrics',['captureMetrics']],
-  ['Replay settings',['replay','fps','quality','format']],
- ].filter(([,keys])=>keys.some(changed)).map(([label])=>label);
+  ['Overlay appearance',layoutChanged||['layout','palette','branding','position','scale','opacity'].some(changed)],
+  ['Displayed metrics',panelPresetChanged||changed('metrics')],
+  ['Overlay visibility',changed('overlay')],
+  ['Session metrics',changed('captureMetrics')],
+  ['Replay settings',['replay','fps','quality','format'].some(changed)],
+ ].filter(([,dirty])=>dirty).map(([label])=>label);
 }
 export function globalDraftFeedback(current,saved,shortcutDirty,tab) {
  const profileScopes=profileDraftScopes(current,saved);

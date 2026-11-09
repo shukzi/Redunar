@@ -342,20 +342,19 @@ try:
         q('[data-metric=FPS]').click();polish.counts();
         check(!q('[data-action=save-global]').disabled,'valid selection can save');
     """)
-    test('FPS only disables layout and branding without overwriting their draft values', r"""
-        click('[data-preset="FPS only"]');polish.counts();
-        check(qa('[data-metric]:checked').length===1&&q('[data-metric=FPS]').checked,'only FPS shown');
+    test('FPS only keeps layout choices enabled and retains panel drafts', r"""
         click('[data-overlay-editor-tab=appearance]');
-        check(qa('button[data-layout]').every(b=>b.disabled),'all layouts disabled');
+        click('button[data-layout="FPS only"]');
+        check(qa('button[data-layout]').every(b=>!b.disabled),'all layout choices available');
         const branding=q('[data-global=branding]');check(branding.disabled&&!branding.checked,'branding retained but unavailable');
-        check(q('button[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','retained layout selected');
-        q('button[data-layout=Telemetry]').click();branding.click();
-        check(q('button[data-layout=Ribbon]').getAttribute('aria-pressed')==='true'&&!branding.checked,'disabled clicks change nothing');
-        click('[data-overlay-editor-tab=metrics]');click('[data-preset=Detailed]');
-        click('[data-overlay-editor-tab=appearance]');
-        check(qa('button[data-layout]').every(b=>!b.disabled),'layouts restored');
+        check(q('button[data-layout="FPS only"]').getAttribute('aria-pressed')==='true','FPS layout selected');
+        branding.click();check(!branding.checked,'disabled branding click changes nothing');
+        click('[data-overlay-editor-tab=metrics]');polish.counts();
+        check(qa('[data-metric]:checked').length===1&&q('[data-metric=FPS]').checked,'only FPS shown');
+        check(qa('button[data-preset]').every(b=>b.disabled),'panel presets unavailable');
+        click('[data-overlay-editor-tab=appearance]');click('button[data-layout=Ribbon]');
         check(!q('[data-global=branding]').disabled&&!q('[data-global=branding]').checked,'branding restored without resetting value');
-        check(q('#hud').dataset.layout==='Ribbon','preview restores retained layout');
+        check(q('#hud').dataset.layout==='Ribbon'&&q('#hud').dataset.preset==='Custom','previous panel and preset restored');
         click('[data-action=discard-global]');
         check(q('[data-global=scale]').value===String(polishBaseline.scale),'Discard restores scale');
         check(q('[data-global=branding]').checked===polishBaseline.branding,'Discard restores branding');
@@ -364,18 +363,16 @@ try:
     """)
     test('FPS-only Save keeps the previous layout and branding in the native payload', r"""
         click('button[data-layout=Ribbon]');q('[data-global=branding]').click();
-        click('[data-overlay-editor-tab=metrics]');click('[data-preset="FPS only"]');
-        click('[data-action=save-global]');
+        click('button[data-layout="FPS only"]');click('[data-action=save-global]');
     """)
     wait_for("q('.settings-save-bar').hidden&&values.preset==='FPS only'")
     route('overview');route('global')
     test('Remounting saved FPS-only settings restores controls without resetting their values', r"""
         click('[data-overlay-editor-tab=appearance]');
         check(values.layout==='Ribbon'&&values.branding===false,'saved values retained by native response');
-        check(qa('button[data-layout]').every(b=>b.disabled),'saved FPS-only layouts remain disabled');
+        check(q('button[data-layout="FPS only"]').getAttribute('aria-pressed')==='true','saved FPS-only layout selected');
         check(q('[data-global=branding]').disabled&&!q('[data-global=branding]').checked,'saved branding retained');
-        click('[data-overlay-editor-tab=metrics]');click('[data-preset=Detailed]');
-        click('[data-overlay-editor-tab=appearance]');
+        click('button[data-layout=Ribbon]');
         check(q('button[data-layout=Ribbon]').getAttribute('aria-pressed')==='true'&&!q('button[data-layout=Ribbon]').disabled,'previous layout restored');
         check(!q('[data-global=branding]').disabled&&!q('[data-global=branding]').checked,'previous branding restored');
         click('button[data-layout="'+polishBaseline.layout+'"]');

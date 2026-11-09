@@ -20,6 +20,7 @@ import { diagnosticStatus } from './diagnostic-status.mjs';
 import overlayPalettes from './overlay-palettes.json';
 import { mergeGameDrafts } from './game-drafts.mjs';
 import { globalDraftFeedback } from './draft-feedback.mjs';
+import { FPS_ONLY, panelPresets, panelPreset, selectedOverlayLayout, selectOverlayLayout } from './overlay-layout.mjs';
 import { overlaySettings, updateOverlayEditor, updateOverlaySessionState } from './overlay-settings.mjs';
 import { refreshWorkspacePresentation, retainControlGroups, setControlHint } from './workspace-presentation.mjs';
 import { startRuntime, latestRuntimeRefresh, pollVisibleRuntime } from './runtime-polling.mjs';
@@ -60,6 +61,7 @@ const durations = [15,30,60,120,180,300,600,900];
 let selectedSaveDuration = null;
 let defaults = structuredClone(initialDefaults);
 let draft = structuredClone(defaults);
+let savedPanelPreset = 'Compact', draftPanelPreset = savedPanelPreset;
 let shortcuts = Array(9).fill('');
 let draftShortcuts = [...shortcuts];
 let selectedGame = null, selectedClip = null, selectedSession = 0;
@@ -437,7 +439,7 @@ function globalOverlay() {
  const swatches=Object.entries(overlayPalettes).map(([name,colors])=>`<button type="button" class="overlay-palette" data-palette="${name}" aria-label="${name} palette" aria-pressed="${draft.palette===name}" style="--swatch:${colors[0]}"></button>`).join('');
  const recording=switchControl('captureMetrics','Record session metrics',draft.captureMetrics);
  const visibility=switchControl('overlay','Show overlay',draft.overlay);
- const appearance=field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))+['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control" data-slider-control><input type="range" data-tactile-range data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}">${sliderValueMarkup({id:`${key}-value`,label:key==='scale'?'Scale':'Opacity',value:draft[key]})}</div>`)).join('')+field('Show Redunar branding','Shows the Redunar label in Compact, Detailed and Custom presets.',switchControl('branding','Show Redunar branding',draft.branding!==false,'global',draft.preset==='FPS only'));
+ const appearance=field('Position','',selectControl('position','Position',['Top left','Top right','Bottom left','Bottom right'],draft.position))+['scale','opacity'].map(key=>field(key==='scale'?'Scale':'Opacity','',`<div class="range-control" data-slider-control><input type="range" data-tactile-range data-global="${key}" aria-label="${key==='scale'?'Scale':'Opacity'}" min="${key==='scale'?50:0}" max="${key==='scale'?200:100}" step="${key==='scale'?5:1}" value="${draft[key]}">${sliderValueMarkup({id:`${key}-value`,label:key==='scale'?'Scale':'Opacity',value:draft[key]})}</div>`)).join('')+field('Show Redunar branding','Shows the Redunar label in Ribbon and Telemetry.',switchControl('branding','Show Redunar branding',draft.branding!==false,'global',draft.preset===FPS_ONLY));
  return overlaySettings({preview:overlayPreview(),draft,shown:effectiveMetrics(draft.preset||'Compact',draft.metrics),metricNames,swatches,visibility,recording,appearance,live:active()});
 }
 function globalReplay() {
@@ -653,8 +655,10 @@ async function performUpdate(command,pending,args={}) {
 async function saveGlobalProfileDraft() {
  if(!globalProfileChanged())return;
  const pendingShortcuts=[...draftShortcuts],previousShortcuts=[...shortcuts],previousMap={...savedShortcutMap};
- const saved=await call('save_global_settings',{input:profilePayload(draft,savedShortcutMap),expectedRevision:globalRevision});
- acceptGlobal(saved);
+ // A non-Custom preset still needs a valid saved metric selection.
+ const profile=draft.preset!=='Custom'&&!draft.metrics.length?{...draft,metrics:defaults.metrics}:draft;
+ const saved=await call('save_global_settings',{input:profilePayload(profile,savedShortcutMap),expectedRevision:globalRevision});
+ acceptGlobal(saved,draftPanelPreset);
  // A profile save must not silently accept an independent shortcut draft.
  draftShortcuts=pendingShortcuts;shortcuts=previousShortcuts;savedShortcutMap=previousMap;
  try{storageStatus=await call('replay_storage_status');delete errors.storage;}catch(error){storageStatus=null;errors.storage=message(error);}
@@ -698,7 +702,7 @@ async function finishDraftRestart(save) {
   // A session may have started while these asynchronous saves were pending.
   if(active()||activeSession?.launch_locked)throw new Error('End the session to restart.');
   if(!save){
-   draft=structuredClone(defaults);draftShortcuts=[...shortcuts];
+   discardGlobalDraft();
    for(const g of games){g.overrides={...savedGameOverrides.get(g.id)};g.revision=g.savedRevision??g.revision;}
   }
   $('#dialog').close();pendingUpdateAction='restarting';updateObservedElements();
@@ -849,15 +853,15 @@ function scheduleClipThumbnails(){
 function updateHud() {
  const validation=$('#metric-validation');if(validation)validation.textContent=draft.preset==='Custom'&&!draft.metrics.length?'Select at least one metric to save a Custom layout.':'';
  const branding=$('input[data-global="branding"]');
- if(branding)branding.disabled=draft.preset==='FPS only';
+ if(branding)branding.disabled=draft.preset===FPS_ONLY;
  const hud=$('#hud');
  if(hud){
   const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
   hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.layout||'Telemetry';
   hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
   [['--hud-accent',palette[0]],['--hud-panel',palette[1]],['--hud-text',palette[2]],['--hud-muted',palette[3]],['--hud-border',palette[4]]].forEach(([key,value])=>hud.style.setProperty(key,value));
-  // FPS only ignores layout without overwriting the retained draft.
-  document.querySelectorAll('.layout-grid button[data-layout]').forEach(button=>{button.disabled=draft.preset==='FPS only';button.setAttribute('aria-pressed',String(button.dataset.layout===draft.layout));});
+  const selectedLayout=selectedOverlayLayout(draft);
+  document.querySelectorAll('.layout-grid button[data-layout]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.layout===selectedLayout)));
   document.querySelectorAll('[data-palette]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.palette===draft.palette)));
   if($('#overlay-palette-name'))$('#overlay-palette-name').textContent=draft.palette||'Redunar';
   for(const key of ['scale','opacity'])updatePrecisionSlider($(`input[type="range"][data-global="${key}"]`));
@@ -866,14 +870,34 @@ function updateHud() {
  updateDirtyActionButtons();
 }
 function syncMetricToggles() {
- document.querySelectorAll('button[data-preset]').forEach(button=>{const selected=button.dataset.preset===draft.preset;button.setAttribute('aria-pressed',String(selected));button.tabIndex=selected?0:-1;});
+ const fpsOnly=draft.preset===FPS_ONLY;
+ document.querySelectorAll('button[data-preset]').forEach(button=>{
+  const selected=button.dataset.preset===draft.preset;
+  button.setAttribute('aria-pressed',String(selected));button.disabled=fpsOnly;button.tabIndex=selected?0:-1;
+ });
  const custom=draft.preset==='Custom';
  const shown=new Set(effectiveMetrics(draft.preset||'Compact',draft.metrics));
  document.querySelectorAll('[data-metric]').forEach(input=>{input.checked=shown.has(input.dataset.metric);input.disabled=!custom;});
 }
 
-function acceptGlobal(result) {
- defaults=mapDefaults(result); draft=structuredClone(defaults); globalRevision=result.revision;
+function selectInformationPreset(next) {
+ if(draft.preset===FPS_ONLY||!panelPresets.includes(next))return;
+ if(next==='Custom' && draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);
+ draft.preset=next;
+ syncMetricToggles();updateHud();
+}
+
+function discardGlobalDraft() {
+ draft=structuredClone(defaults);
+ draftPanelPreset=savedPanelPreset;
+ draftShortcuts=[...shortcuts];
+}
+
+function acceptGlobal(result, rememberedPanelPreset=savedPanelPreset) {
+ defaults=mapDefaults(result); globalRevision=result.revision;
+ savedPanelPreset=panelPreset(defaults,rememberedPanelPreset);
+ draft=structuredClone(defaults);
+ draftPanelPreset=savedPanelPreset;
  savedShortcutMap={...result.values.shortcuts};
  shortcuts=[savedShortcutMap.overlay||'',...durations.map(d=>savedShortcutMap[d]||'')];
  draftShortcuts=[...shortcuts]; loaded.global=true;
@@ -1540,8 +1564,12 @@ document.addEventListener('click',event=>{
  if(target.dataset.overviewView){overviewMetric=target.dataset.overviewView;document.querySelectorAll('[data-overview-view]').forEach(el=>{const selected=el.dataset.overviewView===overviewMetric;el.classList.toggle('active',selected);el.setAttribute('aria-pressed',String(selected));});updateObservedElements();refreshWorkspacePresentation();return;}
  if(target.dataset.historyView){showHistoryMetric(target.dataset.historyView);return;}
  if(target.dataset.action==='history-compare'){historyCompare=!historyCompare;render();return;}
- if(target.dataset.preset){if(busy||!loaded.global)return;const next=target.dataset.preset;if(next==='Custom'&&draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);draft.preset=next;syncMetricToggles();updateHud();return;}
- if(target.dataset.layout){if(busy||!loaded.global||draft.preset==='FPS only')return;draft.layout=target.dataset.layout;updateHud();return;}
+ if(target.dataset.preset){if(!busy&&loaded.global)selectInformationPreset(target.dataset.preset);return;}
+ if(target.matches('button[data-layout]')){
+  if(busy||!loaded.global)return;
+  draftPanelPreset=selectOverlayLayout(draft,target.dataset.layout,draftPanelPreset);
+  syncMetricToggles();updateHud();return;
+ }
  if(target.dataset.palette){if(busy||!loaded.global)return;draft.palette=target.dataset.palette;updateHud();return;}
  if(target.dataset.globalTab){globalTab=target.dataset.globalTab;if(route()==='global')render();return;}
  if(target.dataset.libraryTab){showLibraryTab(target.dataset.libraryTab);return;}
@@ -1568,7 +1596,7 @@ document.addEventListener('click',event=>{
  if(action==='install-update'){
   performUpdate('install_update','installing');return;
  }
- if(action==='discard-global'){if(!globalProfileChanged()&&!globalShortcutsChanged())return;draft=structuredClone(defaults);draftShortcuts=[...shortcuts];render();return;}
+ if(action==='discard-global'){if(!globalProfileChanged()&&!globalShortcutsChanged())return;discardGlobalDraft();render();return;}
  if(action==='discard-game'){game().overrides={...savedGameOverrides.get(game().id)};game().revision=game().savedRevision??game().revision;refreshLibraryDetail();return;}
  if(action==='reset-game'){
   delete game().overrides.overlay;delete game().overrides.replay;delete game().overrides.captureMetrics;
@@ -1649,7 +1677,7 @@ document.addEventListener('input',event=>{
  if(t.id==='history-search'){historyFilters.search=t.value;refreshHistoryRail();}
  if(t.dataset.historyCursor!==undefined)updateHistoryCursor(t.value);
  if(t.dataset.global){draft[t.dataset.global]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(t.dataset.global)?Number(t.value):t.value;updateHud();}
- if(t.dataset.metric){draft.metrics=t.checked?[...new Set([...draft.metrics,t.dataset.metric])]:draft.metrics.filter(m=>m!==t.dataset.metric);draft.preset='Custom';const preset=$('[data-global="preset"]');if(preset){preset.value='Custom';enhancePrecisionSelects(workspace);}syncMetricToggles();updateHud();}
+ if(t.dataset.metric){if(busy||!loaded.global||draft.preset!=='Custom')return;draft.metrics=t.checked?[...new Set([...draft.metrics,t.dataset.metric])]:draft.metrics.filter(m=>m!==t.dataset.metric);draft.preset='Custom';const preset=$('[data-global="preset"]');if(preset){preset.value='Custom';enhancePrecisionSelects(workspace);}syncMetricToggles();updateHud();}
  if(t.dataset.shortcut!==undefined){draftShortcuts[Number(t.dataset.shortcut)]=t.value;updateDirtyActionButtons();}
 
 });
@@ -1668,12 +1696,8 @@ document.addEventListener('change',event=>{
  if(t.id==='save-duration'){selectedSaveDuration=Number(t.value);updateObservedElements();return;}
  if(t.dataset.global){
   const key=t.dataset.global;
-  if(key==='preset'){
-   const next=t.value;
-   if(next==='Custom' && draft.preset!=='Custom')draft.metrics=effectiveMetrics(draft.preset||'Compact',draft.metrics);
-   draft.preset=next;
-   syncMetricToggles();
-  }else draft[key]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(key)?Number(t.value):t.value;
+  if(key==='preset'){selectInformationPreset(t.value);return;}
+  draft[key]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(key)?Number(t.value):t.value;
   updateHud();
   return;
  }
