@@ -63,9 +63,8 @@ fn global_profile_from_input(
         value => return Err(format!("Unsupported overlay position: {value}")),
     };
     let layout = match input.layout.as_str() {
-        "Grid" => OverlayLayout::Grid,
         "Ribbon" => OverlayLayout::Ribbon,
-        "Telemetry" => OverlayLayout::Telemetry,
+        "Grid" | "Telemetry" => OverlayLayout::Telemetry,
         value => return Err(format!("Unsupported overlay layout: {value}")),
     };
     let palette = match input.palette.as_str() {
@@ -174,7 +173,6 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
             }
             .into(),
             layout: match profile.overlay_layout {
-                L::Grid => "Grid",
                 L::Ribbon => "Ribbon",
                 L::Telemetry => "Telemetry",
             }
@@ -360,6 +358,15 @@ mod tests {
         assert!(!result
             .overlay_metrics
             .contains(redunar_core::OverlayMetricSet::CPU_LOAD));
+    }
+    #[test]
+    fn legacy_grid_settings_input_preserves_the_rest_of_the_profile() {
+        let mut legacy = input();
+        legacy.layout = "Grid".into();
+        assert_eq!(
+            global_profile_from_input(&legacy, Default::default()).unwrap(),
+            global_profile_from_input(&input(), Default::default()).unwrap(),
+        );
     }
     #[test]
     fn overlay_save_during_a_game_preserves_unedited_recording_settings() {

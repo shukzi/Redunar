@@ -459,7 +459,6 @@ impl CaptureLaunchPlan {
         self.environment.insert(
             OsString::from(REDUNAR_OVERLAY_LAYOUT_ENV),
             OsString::from(match config.layout {
-                OverlayLayout::Grid => "grid",
                 OverlayLayout::Ribbon => "ribbon",
                 OverlayLayout::Telemetry => "telemetry",
             }),

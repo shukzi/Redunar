@@ -44,9 +44,9 @@ run_probe() {
 
 run_probe glx-ribbon-direct glx_probe ribbon compact 0
 run_probe egl-telemetry-direct egl_probe telemetry custom 0 255
-run_probe sdl-gl-grid-direct sdl_gl_probe grid detailed 0
+run_probe sdl-gl-ribbon-direct sdl_gl_probe ribbon detailed 0
 run_probe sdl-renderer-fps-direct sdl_renderer_probe ribbon fps-only 0
 run_probe sdl-gl-telemetry-steam sdl_gl_probe telemetry compact 1
-run_probe sdl-renderer-grid-steam sdl_renderer_probe grid custom 1 255
+run_probe sdl-renderer-telemetry-steam sdl_renderer_probe telemetry custom 1 255
 
 printf '%s\n' 'OpenGL overlay acceptance passed.'

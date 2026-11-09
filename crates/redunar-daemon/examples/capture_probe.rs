@@ -821,8 +821,7 @@ fn configure_overlay(
         },
         overlay_layout: match env::var("REDUNAR_CAPTURE_PROBE_LAYOUT").ok().as_deref() {
             Some("ribbon") => OverlayLayout::Ribbon,
-            Some("telemetry") => OverlayLayout::Telemetry,
-            _ => OverlayLayout::Grid,
+            _ => OverlayLayout::Telemetry,
         },
         overlay_palette: match env::var("REDUNAR_CAPTURE_PROBE_PALETTE").ok().as_deref() {
             Some("glacier") => OverlayPalette::Glacier,

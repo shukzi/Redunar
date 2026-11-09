@@ -183,43 +183,26 @@ function selectControl(key,label,values,value,scope='global') {
 function field(label,description,control) {
  return `<div class="field"><div><label>${label}</label>${description?`<p>${description}</p>`:''}</div>${control}</div>`;
 }
-function overlayHeight(preset=draft.preset||'Compact',metrics=draft.metrics) {
- const shown=effectiveMetrics(preset,metrics);
- const has=name=>shown.includes(name);
- const frame=has('FPS')||has('Frame time');
- const lows=has('1% low')||has('0.1% low');
- const hardware=has('GPU')||has('CPU')||has('GPU temperature')||has('CPU temperature');
- return preset==='FPS only'?24:25+(frame?38:0)+(lows?26:0)+(hardware?26:0);
-}
 function ribbonWidth(preset=draft.preset||'Compact',metrics=draft.metrics) {
  return (draft.branding===false?0:94)+effectiveMetrics(preset,metrics).length*89;
 }
 function overlayPreview() {
  const preset=draft.preset||'Compact';
- const height=overlayHeight(preset,draft.metrics);
- const layout=preset==='FPS only'?'Grid':draft.layout||'Grid';
+ const layout=draft.layout||'Telemetry';
  const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
- return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:1;--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-native-height:${height}px;--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div>`;
+ return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:1;--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div>`;
 }
 function hudContent() {
  const preset=draft.preset||'Compact';
  if(preset==='FPS only')return `<div class="hud-fps-only"><span>FPS</span><b>144</b></div>`;
  const shown=effectiveMetrics(preset,draft.metrics);
  const has=name=>shown.includes(name);
- const frame=has('FPS')||has('Frame time');
- const lows=has('1% low')||has('0.1% low');
- const hardware=has('GPU')||has('CPU')||has('GPU temperature')||has('CPU temperature');
  const items=[
   has('FPS')&&['FPS','144 FPS'],has('Frame time')&&['FRAME TIME','6.9 MS'],has('1% low')&&['1% LOW','118 FPS'],has('0.1% low')&&['0.1% LOW','96 FPS'],
   has('GPU')&&['GPU LOAD','91%'],has('GPU temperature')&&['GPU TEMP','68°C'],has('CPU')&&['CPU LOAD','38%'],has('CPU temperature')&&['CPU TEMP','62°C']
  ].filter(Boolean);
  if(draft.layout==='Ribbon')return `${draft.branding===false?'':'<div class="hud-layout-brand"><span>REDUNAR</span></div>'}${items.map(([label,value])=>`<div class="hud-ribbon-metric"><small>${label}</small><b>${value}</b></div>`).join('')}`;
- if(draft.layout==='Telemetry')return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
- const sections=[];
- if(frame)sections.push(`<div class="hud-native-frame">${has('FPS')?'<b class="hud-native-value hud-native-fps-value">144</b><span class="hud-native-label hud-native-fps-label">FPS</span>':''}${has('Frame time')?'<b class="hud-native-value hud-native-frame-time-value">6.9</b><span class="hud-native-label hud-native-frame-time-label">MS</span>':''}</div>`);
- if(lows)sections.push(`<div class="hud-native-row hud-native-lows">${has('1% low')?'<span class="hud-native-left">1% LOW&nbsp;&nbsp;118</span>':''}${has('0.1% low')?'<span class="hud-native-right">0.1% LOW&nbsp;&nbsp;96</span>':''}</div>`);
- if(hardware)sections.push(`<div class="hud-native-row hud-native-hardware">${has('CPU')||has('CPU temperature')?`<span class="hud-native-left">CPU${has('CPU')?' 38%':''}${has('CPU temperature')?(has('CPU')?' · 62°C':' 62°C'):''}</span>`:''}${has('GPU')||has('GPU temperature')?`<span class="hud-native-right">GPU${has('GPU')?' 91%':''}${has('GPU temperature')?(has('GPU')?' · 68°C':' 68°C'):''}</span>`:''}</div>`);
- return `${draft.branding===false?'':'<div class="hud-native-header">REDUNAR</div>'}${sections.join('')}`;
+ return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
 }
 function replaySaveActions() {
  return `<div class="heading-actions replay-save-actions"><label class="replay-duration-label">Save last <select id="save-duration" aria-label="Replay duration">${durations.map(d=>`<option value="${d}" ${d===(selectedSaveDuration??Number(replayPreferences?.initial_save_duration_seconds||30))?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')}</select></label>${button(`${icon('plus')} <span class="replay-save-label"><span data-replay-save-label aria-live="polite">Save replay</span></span> <span class="replay-shortcut-slot" hidden><kbd id="save-replay-shortcut" aria-hidden="true" hidden></kbd></span>`,'save-replay',true,`aria-label="Save replay" ${!runtime?.can_save?'disabled':''}`)}</div>`;
@@ -870,8 +853,8 @@ function updateHud() {
  const hud=$('#hud');
  if(hud){
   const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
-  hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.preset==='FPS only'?'Grid':draft.layout||'Grid';
-  hud.style.setProperty('--hud-native-height',`${overlayHeight()}px`);hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
+  hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.layout||'Telemetry';
+  hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
   [['--hud-accent',palette[0]],['--hud-panel',palette[1]],['--hud-text',palette[2]],['--hud-muted',palette[3]],['--hud-border',palette[4]]].forEach(([key,value])=>hud.style.setProperty(key,value));
   // FPS only ignores layout without overwriting the retained draft.
   document.querySelectorAll('.layout-grid button[data-layout]').forEach(button=>{button.disabled=draft.preset==='FPS only';button.setAttribute('aria-pressed',String(button.dataset.layout===draft.layout));});

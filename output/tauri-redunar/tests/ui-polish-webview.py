@@ -349,7 +349,7 @@ try:
         check(qa('button[data-layout]').every(b=>b.disabled),'all layouts disabled');
         const branding=q('[data-global=branding]');check(branding.disabled&&!branding.checked,'branding retained but unavailable');
         check(q('button[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','retained layout selected');
-        q('button[data-layout=Grid]').click();branding.click();
+        q('button[data-layout=Telemetry]').click();branding.click();
         check(q('button[data-layout=Ribbon]').getAttribute('aria-pressed')==='true'&&!branding.checked,'disabled clicks change nothing');
         click('[data-overlay-editor-tab=metrics]');click('[data-preset=Detailed]');
         click('[data-overlay-editor-tab=appearance]');

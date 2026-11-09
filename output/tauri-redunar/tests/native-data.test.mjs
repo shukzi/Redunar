@@ -155,18 +155,16 @@ test('desktop replay menu host remains retired',()=>{
  const hotkeys=readFileSync(new URL('../src-tauri/src/hotkeys.rs',import.meta.url),'utf8');
  assert.doesNotMatch(hotkeys,/WebviewWindowBuilder|replay_menu_window/);
 });
-test('global overlay preview includes the native metric hierarchy',()=>{
+test('global overlay preview includes both native metric layouts',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const start=source.indexOf('function overlayPreview()');
  const end=source.indexOf('function replay()',start);
  assert.ok(start>=0&&end>start,'overlay preview renderer should remain explicit');
  const previewSource=source.slice(start,end);
  assert.match(previewSource,/data-preset/);
- assert.match(previewSource,/hud-native-header/);
- assert.match(previewSource,/hud-native-frame/);
- assert.match(previewSource,/hud-native-lows/);
- assert.match(previewSource,/hud-native-hardware/);
- assert.match(previewSource,/--hud-native-height/);
+ assert.match(previewSource,/hud-ribbon-metric/);
+ assert.match(previewSource,/hud-telemetry-head/);
+ assert.match(previewSource,/hud-telemetry-row/);
  assert.doesNotMatch(previewSource,/In-game overlay layout/);
  assert.match(previewSource,/preset==='FPS only'/);
  assert.match(previewSource,/144/);
@@ -183,12 +181,6 @@ test('global preview applies select changes and keeps FPS only on one row',()=>{
  assert.match(source,/const emptyCustom=globalTab==='overlay'&&draft\.preset==='Custom'&&!draft\.metrics\.length/);
  assert.match(source,/Select at least one metric to save a Custom layout/);
  assert.match(readFileSync(new URL('../ui/overlay-settings.mjs',import.meta.url),'utf8'),/Use Custom to choose individual metrics/);
- assert.match(source,/25\+\(frame\?38:0\)\+\(lows\?26:0\)\+\(hardware\?26:0\)/);
- assert.match(css,/.hud-native-frame\{position:relative;height:38px/);
- assert.match(css,/.hud-native-value\{position:absolute;top:6px/);
- assert.match(css,/.hud-native-fps-label\{left:70px\}/);
- assert.match(css,/.hud-native-frame-time-label\{left:242px\}/);
- assert.match(css,/.hud-native-left,.hud-native-right\{position:absolute;top:6px/);
  assert.match(css,/\.hud\[data-preset='FPS only'\] \.hud-fps-only\{display:flex;flex-direction:row/);
 });
 
@@ -201,12 +193,6 @@ test('Global numeric controls keep u8 and FPS values numeric on change',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  assert.match(source,/else draft\[key\]=t\.type==='checkbox'\?t\.checked:\['fps','scale','opacity'\]\.includes\(key\)\?Number\(t\.value\):t\.value;/);
 });
-test('global preview recalculates its HUD height when the preset or metrics change',()=>{
- const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
- assert.match(source,/function overlayHeight\(/);
- assert.match(source,/const height=overlayHeight\(preset,draft\.metrics\)/);
- assert.match(source,/hud\.style\.setProperty\('--hud-native-height',`\$\{overlayHeight\(\)\}px`\)/);
-});
 test('core navigation remains available and retired module writes are not exposed',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const commands=readFileSync(new URL('../src-tauri/src/main.rs',import.meta.url),'utf8');
@@ -215,8 +201,15 @@ test('core navigation remains available and retired module writes are not expose
  assert.doesNotMatch(commands,/runtime::set_module_enabled/);
 });
 
+test('legacy Grid state opens as Telemetry without changing selected metrics',()=>{
+ const values={layout:'Grid',preset:'Custom',metrics:['FPS','GPU temperature'],palette:'Rose',branding:false,position:'Bottom right',scale:135,opacity:75};
+ const old=mapDefaults({values}),current=mapDefaults({values:{...values,layout:'Telemetry'}});
+ assert.deepEqual(old,current);
+ assert.equal(profilePayload(old,{}).layout,'Telemetry');
+});
+
 test('dirty-state helpers distinguish saved settings from meaningful edits',()=>{
- const saved={overlay:true,preset:'Custom',layout:'Grid',palette:'Redunar',position:'Top left',scale:100,opacity:80,metrics:['FPS','GPU'],captureMetrics:true,replay:true,fps:60,quality:'Balanced',format:'MKV',storage:'10 GiB'};
+ const saved={overlay:true,preset:'Custom',layout:'Telemetry',palette:'Redunar',position:'Top left',scale:100,opacity:80,metrics:['FPS','GPU'],captureMetrics:true,replay:true,fps:60,quality:'Balanced',format:'MKV',storage:'10 GiB'};
  assert.equal(profileDraftChanged(structuredClone(saved),saved),false);
  assert.equal(profileDraftChanged({...saved,metrics:['GPU','FPS']},saved),false,'metric order is not a setting change');
  assert.equal(profileDraftChanged({...saved,opacity:70},saved),true);

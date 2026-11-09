@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {profileDraftScopes,globalDraftFeedback} from '../ui/draft-feedback.mjs';
 
-const saved={layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,
+const saved={layout:'Telemetry',palette:'Redunar',branding:true,position:'Top left',scale:100,
  opacity:90,preset:'Compact',metrics:['FPS','CPU load'],overlay:true,captureMetrics:true,
  replay:true,fps:60,quality:'Balanced',format:'MKV'};
 

@@ -32,10 +32,6 @@ const TELEMETRY_INTERVAL_NS: u64 = 50_000_000;
 const MENU_TELEMETRY_INTERVAL_NS: u64 = 8_000_000;
 const REPLAY_SAVED_NOTICE_NS: u64 = 3_000_000_000;
 const FRAME_HISTORY_CAPACITY: usize = 240;
-const GRID_WIDTH: i32 = 294;
-const GRID_HEADER_HEIGHT: i32 = 25;
-const GRID_PRIMARY_ROW_HEIGHT: i32 = 38;
-const GRID_SECONDARY_ROW_HEIGHT: i32 = 26;
 const TELEMETRY_WIDTH: i32 = 300;
 const TELEMETRY_HEADER_HEIGHT: i32 = 25;
 const TELEMETRY_ROW_HEIGHT: i32 = 24;
@@ -77,7 +73,6 @@ enum Preset {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Layout {
-    Grid,
     Ribbon,
     Telemetry,
 }
@@ -1170,219 +1165,12 @@ fn render_plan(
             config.palette.accent,
         );
         match config.layout {
-            Layout::Grid => {
-                render_grid(canvas, snapshot, config, metrics, origin, scale_percent);
-            }
             Layout::Ribbon => {
                 render_ribbon(canvas, snapshot, config, metrics, origin, scale_percent);
             }
             Layout::Telemetry => {
                 render_telemetry(canvas, snapshot, config, metrics, origin, scale_percent);
             }
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "the Grid layout mirrors the Vulkan renderer's row structure in one auditable function"
-)]
-fn render_grid(
-    canvas: &mut Canvas,
-    snapshot: MetricSnapshot,
-    config: RenderConfig,
-    metrics: u16,
-    origin: (i32, i32),
-    scale: u32,
-) {
-    if config.branding_visible {
-        draw_text_scaled(
-            canvas,
-            origin,
-            8,
-            4,
-            b"REDUNAR",
-            1,
-            scale,
-            config.palette.accent,
-        );
-    }
-    let frame = metrics & (OverlayMetricSet::FPS | OverlayMetricSet::FRAME_TIME) != 0;
-    let low = metrics
-        & (OverlayMetricSet::ONE_PERCENT_LOW | OverlayMetricSet::POINT_ONE_PERCENT_LOW)
-        != 0;
-    let hardware = metrics
-        & (OverlayMetricSet::CPU_LOAD
-            | OverlayMetricSet::CPU_TEMPERATURE
-            | OverlayMetricSet::GPU_LOAD
-            | OverlayMetricSet::GPU_TEMPERATURE)
-        != 0;
-    let mut y = GRID_HEADER_HEIGHT + 6;
-    if frame {
-        if metrics & OverlayMetricSet::FPS != 0 {
-            let mut value = FixedText::<6>::default();
-            value.push_number(snapshot.fps);
-            draw_text_scaled(
-                canvas,
-                origin,
-                12,
-                y,
-                value.as_bytes(),
-                2,
-                scale,
-                config.palette.text,
-            );
-            let label_x = 12
-                + i32::try_from(value.as_bytes().len()).unwrap_or(0)
-                    * overlay_font::GLYPH_ADVANCE
-                    * 2;
-            draw_text_scaled(
-                canvas,
-                origin,
-                label_x + 4,
-                y + 9,
-                b"FPS",
-                1,
-                scale,
-                config.palette.muted,
-            );
-        }
-        if metrics & OverlayMetricSet::FRAME_TIME != 0 {
-            let mut value = FixedText::<8>::default();
-            value.push_tenths(snapshot.frame_time_tenths_ms);
-            let value_width = i32::try_from(value.as_bytes().len()).unwrap_or(0)
-                * overlay_font::GLYPH_ADVANCE
-                * 2;
-            let start_x = (GRID_WIDTH - 12 - value_width - 4 - overlay_font::GLYPH_ADVANCE * 2)
-                .clamp(12, 184);
-            draw_text_scaled(
-                canvas,
-                origin,
-                start_x,
-                y,
-                value.as_bytes(),
-                2,
-                scale,
-                config.palette.text,
-            );
-            draw_text_scaled(
-                canvas,
-                origin,
-                start_x + value_width + 4,
-                y + 9,
-                b"MS",
-                1,
-                scale,
-                config.palette.muted,
-            );
-        }
-        y += GRID_PRIMARY_ROW_HEIGHT;
-        if low || hardware {
-            clear_scaled_rect(
-                canvas,
-                origin,
-                12,
-                y - 7,
-                GRID_WIDTH - 24,
-                1,
-                scale,
-                config.palette.divider,
-            );
-        }
-    }
-    if low {
-        if metrics & OverlayMetricSet::ONE_PERCENT_LOW != 0 {
-            let mut left = FixedText::<16>::default();
-            left.push_bytes(b"1% LOW ");
-            left.push_number(snapshot.one_percent_low_fps);
-            draw_text_scaled(
-                canvas,
-                origin,
-                8,
-                y,
-                left.as_bytes(),
-                1,
-                scale,
-                config.palette.muted,
-            );
-        }
-        if metrics & OverlayMetricSet::POINT_ONE_PERCENT_LOW != 0 {
-            let mut right = FixedText::<16>::default();
-            right.push_bytes(b"0.1% LOW ");
-            right.push_number(snapshot.point_one_percent_low_fps);
-            let x = GRID_WIDTH
-                - 8
-                - i32::try_from(right.as_bytes().len()).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
-            draw_text_scaled(
-                canvas,
-                origin,
-                x,
-                y,
-                right.as_bytes(),
-                1,
-                scale,
-                config.palette.muted,
-            );
-        }
-        y += GRID_SECONDARY_ROW_HEIGHT;
-        if hardware {
-            clear_scaled_rect(
-                canvas,
-                origin,
-                12,
-                y - 7,
-                GRID_WIDTH - 24,
-                1,
-                scale,
-                config.palette.divider,
-            );
-        }
-    }
-    if hardware {
-        let mut cpu = FixedText::<16>::default();
-        push_device_metrics(
-            &mut cpu,
-            b"CPU",
-            metrics & OverlayMetricSet::CPU_LOAD != 0,
-            metrics & OverlayMetricSet::CPU_TEMPERATURE != 0,
-            snapshot.cpu_percent,
-            snapshot.cpu_temperature_c,
-        );
-        if !cpu.as_bytes().is_empty() {
-            draw_text_scaled(
-                canvas,
-                origin,
-                8,
-                y,
-                cpu.as_bytes(),
-                1,
-                scale,
-                config.palette.muted,
-            );
-        }
-        let mut gpu = FixedText::<16>::default();
-        push_device_metrics(
-            &mut gpu,
-            b"GPU",
-            metrics & OverlayMetricSet::GPU_LOAD != 0,
-            metrics & OverlayMetricSet::GPU_TEMPERATURE != 0,
-            snapshot.gpu_percent,
-            snapshot.gpu_temperature_c,
-        );
-        if !gpu.as_bytes().is_empty() {
-            let x = GRID_WIDTH
-                - 8
-                - i32::try_from(gpu.as_bytes().len()).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
-            draw_text_scaled(
-                canvas,
-                origin,
-                x,
-                y,
-                gpu.as_bytes(),
-                1,
-                scale,
-                config.palette.muted,
-            );
         }
     }
 }
@@ -1758,7 +1546,6 @@ fn layout_extent(config: RenderConfig, metrics: u16) -> (i32, i32) {
     }
     let count = i32::try_from(metric_count(metrics)).unwrap_or(0);
     match config.layout {
-        Layout::Grid => (GRID_WIDTH, grid_height(metrics)),
         Layout::Ribbon => (
             if config.branding_visible {
                 RIBBON_BRAND_WIDTH
@@ -1779,52 +1566,6 @@ fn metric_count(metrics: u16) -> usize {
         .into_iter()
         .filter(|(bit, _)| metrics & *bit != 0)
         .count()
-}
-
-/// The Grid panel height follows the Vulkan renderer's row structure: a 25 px
-/// header, one 38 px frame row, and 26 px low/hardware rows.
-fn grid_height(metrics: u16) -> i32 {
-    let frame = metrics & (OverlayMetricSet::FPS | OverlayMetricSet::FRAME_TIME) != 0;
-    let low = metrics
-        & (OverlayMetricSet::ONE_PERCENT_LOW | OverlayMetricSet::POINT_ONE_PERCENT_LOW)
-        != 0;
-    let hardware = metrics
-        & (OverlayMetricSet::CPU_LOAD
-            | OverlayMetricSet::CPU_TEMPERATURE
-            | OverlayMetricSet::GPU_LOAD
-            | OverlayMetricSet::GPU_TEMPERATURE)
-        != 0;
-    GRID_HEADER_HEIGHT
-        + i32::from(frame) * GRID_PRIMARY_ROW_HEIGHT
-        + (i32::from(low) + i32::from(hardware)) * GRID_SECONDARY_ROW_HEIGHT
-}
-
-fn push_device_metrics(
-    row: &mut FixedText<16>,
-    label: &[u8],
-    show_load: bool,
-    show_temperature: bool,
-    load: Option<u8>,
-    temperature: Option<i16>,
-) {
-    if !show_load && !show_temperature {
-        return;
-    }
-    if row.length > 0 {
-        row.push_bytes(b"  ");
-    }
-    row.push_bytes(label);
-    if show_load {
-        row.push(b' ');
-        row.push_number(load.map(u16::from));
-        row.push(b'%');
-    }
-    if show_temperature {
-        row.push(if show_load { b'~' } else { b' ' });
-        row.push_number(temperature.and_then(|value| u16::try_from(value).ok()));
-        row.push(b'^');
-        row.push(b'C');
-    }
 }
 
 fn metric_labels() -> [(u16, &'static [u8]); 8] {
@@ -1916,18 +1657,22 @@ const fn preset_from_index(index: u8) -> Preset {
 }
 
 fn layout_from_environment() -> Layout {
-    match env::var(OVERLAY_LAYOUT_ENV).ok().as_deref() {
+    parse_overlay_layout(env::var(OVERLAY_LAYOUT_ENV).ok().as_deref())
+}
+
+fn parse_overlay_layout(token: Option<&str>) -> Layout {
+    match token {
         Some("ribbon") => Layout::Ribbon,
-        Some("telemetry") => Layout::Telemetry,
-        _ => Layout::Grid,
+        // Missing settings and the old "grid" token use the default layout.
+        _ => Layout::Telemetry,
     }
 }
 
 const fn layout_from_index(index: u8) -> Layout {
     match index {
         1 => Layout::Ribbon,
-        2 => Layout::Telemetry,
-        _ => Layout::Grid,
+        // Code 0 was Grid; 2 remains the Telemetry code.
+        _ => Layout::Telemetry,
     }
 }
 
@@ -2326,12 +2071,20 @@ mod tests {
     }
 
     #[test]
+    fn absent_and_legacy_launch_layouts_use_telemetry() {
+        for token in [None, Some("grid"), Some("telemetry")] {
+            assert_eq!(super::parse_overlay_layout(token), Layout::Telemetry);
+        }
+        assert_eq!(super::parse_overlay_layout(Some("ribbon")), Layout::Ribbon);
+    }
+
+    #[test]
     fn fps_only_has_no_panel_sized_background() {
         let config = RenderConfig {
             corner: Corner::TopLeft,
             palette: palette_from_index(0),
             preset: Preset::FpsOnly,
-            layout: Layout::Grid,
+            layout: Layout::Telemetry,
             metrics: 1,
             scale_percent: 100,
             opacity_percent: 50,
@@ -2366,7 +2119,7 @@ mod tests {
                 revision: 2,
                 corner: 3,
                 preset: 2,
-                layout: 0,
+                layout: 0, // Retired Grid code from an older writer.
                 palette: 7,
                 metrics: 1,
                 opacity_percent: 50,
@@ -2393,7 +2146,7 @@ mod tests {
             corner: Corner::TopLeft,
             palette: palette_from_index(0),
             preset: Preset::Compact,
-            layout: Layout::Grid,
+            layout: Layout::Ribbon,
             metrics: 1,
             scale_percent: 100,
             opacity_percent: 50,
@@ -2408,6 +2161,7 @@ mod tests {
         state.refresh(1);
 
         assert!(state.visible);
+        assert_eq!(state.layout, Layout::Telemetry);
         assert_eq!(state.corner, Corner::BottomRight);
         assert_eq!(state.palette, palette_from_index(7));
         assert_eq!(state.preset, Preset::FpsOnly);
@@ -2485,33 +2239,12 @@ mod tests {
                     }),
                 )
             }
-            "telemetry" => {
-                let config = RenderConfig {
-                    corner: Corner::TopLeft,
-                    palette,
-                    preset: Preset::Detailed,
-                    layout: Layout::Telemetry,
-                    metrics: 0,
-                    scale_percent: 100,
-                    opacity_percent: 60,
-                    branding_visible: true,
-                };
-                let metrics = redunar_core::OverlayMetricSet::KNOWN;
-                let (width, height) = layout_extent(config, metrics);
-                (
-                    width,
-                    height,
-                    Box::new(move |canvas| {
-                        render_plan(canvas, reference_snapshot(), config, metrics, (0, 0), 100);
-                    }),
-                )
-            }
             _ => {
                 let config = RenderConfig {
                     corner: Corner::TopLeft,
                     palette,
                     preset: Preset::Detailed,
-                    layout: Layout::Grid,
+                    layout: Layout::Telemetry,
                     metrics: 0,
                     scale_percent: 100,
                     opacity_percent: 60,
@@ -2630,7 +2363,7 @@ mod tests {
             corner: Corner::TopLeft,
             palette: palette_from_index(0),
             preset: Preset::Compact,
-            layout: Layout::Grid,
+            layout: Layout::Telemetry,
             metrics: 1,
             scale_percent: 100,
             opacity_percent: 50,

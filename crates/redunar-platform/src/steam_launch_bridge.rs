@@ -1210,7 +1210,6 @@ const fn overlay_preset_name(preset: OverlayPreset) -> &'static str {
 
 const fn overlay_layout_wire(layout: OverlayLayout) -> u8 {
     match layout {
-        OverlayLayout::Grid => 1,
         OverlayLayout::Ribbon => 2,
         OverlayLayout::Telemetry => 3,
     }
@@ -1218,16 +1217,15 @@ const fn overlay_layout_wire(layout: OverlayLayout) -> u8 {
 
 fn decode_overlay_layout(value: u8) -> Result<OverlayLayout, SteamActivationError> {
     match value {
-        1 => Ok(OverlayLayout::Grid),
         2 => Ok(OverlayLayout::Ribbon),
-        3 => Ok(OverlayLayout::Telemetry),
+        // Keep accepting layout 1 from Steam bridges that still send Grid.
+        1 | 3 => Ok(OverlayLayout::Telemetry),
         _ => Err(SteamActivationError::new("invalid overlay layout")),
     }
 }
 
 const fn overlay_layout_name(layout: OverlayLayout) -> &'static str {
     match layout {
-        OverlayLayout::Grid => "grid",
         OverlayLayout::Ribbon => "ribbon",
         OverlayLayout::Telemetry => "telemetry",
     }
@@ -1487,6 +1485,16 @@ mod tests {
             updates.get(OsStr::new(REDUNAR_OVERLAY_BRANDING_ENV)),
             Some(&OsString::from("0"))
         );
+    }
+
+    #[test]
+    fn legacy_grid_steam_message_decodes_to_the_existing_telemetry_code() {
+        let layout = decode_overlay_layout(1).expect("legacy Grid code remains valid");
+        assert_eq!(layout, OverlayLayout::Telemetry);
+        assert_eq!(overlay_layout_wire(layout), 3);
+        assert_eq!(overlay_layout_name(layout), "telemetry");
+        assert_eq!(decode_overlay_layout(2).unwrap(), OverlayLayout::Ribbon);
+        assert!(decode_overlay_layout(0).is_err());
     }
 
     #[test]
