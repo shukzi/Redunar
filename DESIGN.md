@@ -116,13 +116,16 @@ validation, cancellation, and retry context.
 
 Notifications use a bottom-right stack of at most three rounded graphite
 toasts. Each rises from the edge on a damped spring and leaves over 200 ms.
+Cards move and fade without blur so WebKit keeps the countdown bar inside them.
 When another toast remains, a departing card fades in place behind the stack;
 only the last card slides toward the bottom edge. Hidden backing surfaces must
-not cross below the active notification.
+not paint below the active notification, including when a new toast arrives
+during a dismissal.
 Older cards peek behind the latest; hover or keyboard focus unfolds the stack
 and pauses its reading timers. Timers also pause while the window is in the
 background. Repeated messages refresh one toast. Every toast has a dismiss
-button and a remaining-time bar; errors use an alert announcement. Toasts
+button and a remaining-time bar that keeps its width while the card leaves.
+Errors use an alert announcement. Toasts
 remain above draft actions and inside an open dialog's top layer. Reduced
 motion settles the stack immediately.
 
@@ -130,6 +133,10 @@ Settings places Software updates first, followed by a Preferences card with
 the same plain rows, short descriptions, right-aligned toggles, and quiet
 separators as Session behavior. Debug logging omits the off status and its
 empty space; restart instructions, active status, and failures remain visible.
+Diagnostics starts collapsed. Its header stays in place as the panel opens or
+closes. Refresh updates the panel in place. If a refresh fails, keep the last
+available snapshot and leave Refresh available for retry. Clear the error
+when either a manual refresh or a background poll returns a new snapshot.
 
 ## Shared controls and layout
 

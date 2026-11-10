@@ -1,5 +1,7 @@
 /* Settings keeps the desktop choices together and uses one visual rhythm for
    every preference. This file follows the shared control styles in index.html. */
+/* Keep the gutter when WebKit adds a scrollbar as Diagnostics opens. */
+html[data-page="settings"] .window-content { overflow-y: scroll; }
 .settings-page{grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
 .settings-page .panel{padding:24px}
 .settings-card-heading h2,.settings-page .updates-heading h2{font-size:16px;line-height:1.4}
@@ -32,10 +34,18 @@
 @media(max-width:1200px){.settings-page{grid-template-columns:1fr}}
 @media(max-width:700px){.settings-page .panel{padding:21px}.settings-option-note{margin-right:0}.settings-page .update-check-row{grid-template-columns:auto minmax(0,1fr)}.settings-page .update-check-actions{grid-column:1/-1}.settings-page .update-check-actions .button{width:100%}.settings-page .updates-heading{align-items:start;flex-wrap:wrap}}
 
-.settings-diagnostics { min-width:0; grid-column:1/-1; }
-.settings-diagnostics-summary { display:flex; justify-content:space-between; width:100%; box-sizing:border-box; list-style:none; }
+.settings-diagnostics { min-width:0; grid-column:1/-1; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); overflow:clip; overflow-anchor:none; }
+html[data-page="settings"] .settings-diagnostics-summary.button { display:flex; justify-content:space-between; gap:12px; width:100%; min-height:44px; box-sizing:border-box; padding:10px 16px; list-style:none; border:0; border-radius:inherit; background:transparent; font-weight:500; }
+html[data-page="settings"] .settings-diagnostics > .settings-diagnostics-summary.button:hover { background:#ffffff07; transform:none; box-shadow:none; }
+html[data-page="settings"] .settings-diagnostics > .settings-diagnostics-summary.button:active { background:#ffffff0c; transform:none; }
+html[data-page="settings"] .settings-diagnostics-summary.button:focus-visible { outline-offset:-3px; }
 .settings-diagnostics-summary::-webkit-details-marker { display:none; }
-.settings-diagnostics > .diagnostics-panel { margin-top:12px; }
+.diagnostics-chevron { display:grid; place-items:center; flex:none; color:var(--muted); transition:transform 220ms cubic-bezier(.2,0,0,1); }
+.settings-diagnostics[open]:not([data-expanded="false"]) .diagnostics-chevron { transform:rotate(180deg); }
+html[data-page="settings"] #workspace .settings-diagnostics > .diagnostics-panel { margin:0; border:0; border-top:1px solid var(--border); border-radius:0; background:transparent; }
+.diagnostics-feedback { margin:0 0 14px; color:var(--muted); font-size:11px; line-height:1.5; }
+.diagnostics-feedback:empty { margin:0; }
+.diagnostics-feedback.diagnostics-error { color:#f2a5aa; }
 .settings-diagnostics :is(.diagnostics-grid>div,.diagnostics-readiness,.diagnostics-readiness-row) { border-color:var(--border); }
 .settings-diagnostics :is(.diagnostics-grid>div,.diagnostics-subheading span,.diagnostics-readiness-row) { color:var(--muted); }
 .settings-diagnostics .diagnostics-grid b { color:var(--text); }

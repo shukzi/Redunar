@@ -9,29 +9,44 @@ export function toastContent(type='info'){
 export function installToasts(viewport){
   if(viewport[owner])return viewport[owner];
   const doc=viewport.ownerDocument,view=doc.defaultView,preference=view.matchMedia('(prefers-reduced-motion: reduce)');
+  // WebKit can keep a retained query stale after the system setting changes.
+  const reducedMotion=()=>view.matchMedia(preference.media).matches;
   const mounted=new Map(),exiting=new Map(),controller=new AbortController(),events={signal:controller.signal};
   let hovered=false,focused=false,expanded=false,disposed=false;
+  let front=null;
   const transform=value=>`translate3d(${value.x}px,${value.y}px,0) scale(${value.scale})`;
   const store=toastStore({changed:render});
+  function syncFrontClip(){
+    const overlap=Boolean(front&&mounted.size+exiting.size>1);
+    viewport.toggleAttribute('data-clip-to-front',overlap);
+    if(overlap)viewport.style.setProperty('--toast-bottom-clip',`${-front.offsetY}px`);
+  }
   function removeElement(id,state){
     clearTimeout(state.delay);state.motion.stop();state.progress?.cancel();state.exit?.cancel();state.card.remove();exiting.delete(id);
+    syncFrontClip();
     if(!mounted.size&&!exiting.size){
       viewport.hidden=true;hovered=false;focused=false;expanded=false;viewport.dataset.expanded='false';
       store.resume('hover');store.resume('focus');
     }
   }
   function dismiss(id,state){
-    clearTimeout(state.delay);state.progress?.cancel();
+    clearTimeout(state.delay);
+    if(state.progress){
+      // Keep the painted countdown width when the card starts to leave.
+      state.bar.style.transform=view.getComputedStyle(state.bar).transform;
+      state.progress.cancel();state.progress=null;
+    }
     const value=state.motion.snapshot().value;state.motion.stop();
     state.card.inert=true;state.card.setAttribute('aria-hidden','true');exiting.set(id,state);
-    if(preference.matches){removeElement(id,state);return;}
+    if(reducedMotion()){removeElement(id,state);return;}
     // A departing backing card must not travel below a remaining toast and
     // expose its empty surface. Keep it behind the live stack while it fades.
     const stacked=store.snapshot().length>0;
     if(stacked)state.card.style.zIndex='0';
+    const start=stacked?{...value,y:Math.min(0,value.y)}:value;
     state.exit=state.card.animate([
-      {transform:transform(value),opacity:value.opacity,filter:`blur(${Math.max(0,value.blur)}px)`},
-      {transform:transform(stacked?value:{...value,y:value.y+value.h+24,scale:.96}),opacity:0,filter:stacked?'none':'blur(4px)'},
+      {transform:transform(start),opacity:value.opacity},
+      {transform:transform(stacked?start:{...value,y:value.y+value.h+24,scale:.96}),opacity:0},
     ],{duration:200,easing:'cubic-bezier(.33,.17,.67,.5)',fill:'both'});
     state.exit.onfinish=()=>{if(exiting.get(id)===state)removeElement(id,state);};
     // Bursts remain bounded even when several notifications replace old ones.
@@ -49,24 +64,34 @@ export function installToasts(viewport){
     });
     viewport.append(card);
     const content=card.querySelector('.toast-content'),height=content.offsetHeight+2;
-    const state={card,content,height,delay:null,progress:null,exit:null,motion:null};
-    state.motion=springMotion({x:0,y:height+24,scale:.96,opacity:0,blur:4,h:height},value=>{
+    const state={card,content,height,offsetY:0,bar:card.querySelector('.toast-progress'),delay:null,progress:null,progressGeneration:null,exit:null,motion:null};
+    // Filtering the moving card can leave a stale copy of its countdown bar in WebKit.
+    state.motion=springMotion({x:0,y:height+24,scale:.96,opacity:0,h:height},value=>{
+      // Scaling is anchored at the bottom. Only translation moves that edge.
+      state.offsetY=value.y;
+      if(front===state&&viewport.hasAttribute('data-clip-to-front')){
+        viewport.style.setProperty('--toast-bottom-clip',`${-value.y}px`);
+      }
       card.style.transform=transform(value);card.style.opacity=String(Math.max(0,Math.min(1,value.opacity)));
-      card.style.filter=value.blur>.02?`blur(${Math.max(0,value.blur)}px)`:'none';card.style.height=`${Math.max(0,value.h)}px`;
+      card.style.height=`${Math.max(0,value.h)}px`;
     },{stiffness:280,damping:24,maxDuration:900});
     return state;
   }
   function layout(cascade=false){
-    const entries=store.snapshot().reverse(),front=mounted.get(entries[0]?.id);if(!front)return;
+    const entries=store.snapshot().reverse();
+    front=mounted.get(entries[0]?.id)??null;
+    syncFrontClip();
+    if(!front)return;
+    const reduced=reducedMotion();
     let offset=0;
     entries.forEach((entry,index)=>{
       const state=mounted.get(entry.id);clearTimeout(state.delay);
       state.height=state.content.offsetHeight+2;
       state.card.style.zIndex=String(10-index);state.card.dataset.behind=String(index>0&&!expanded);
       state.card.inert=index>0&&!expanded;
-      const target={x:0,y:expanded?-offset:-index*12,scale:expanded?1:1-index*.05,opacity:1,blur:0,h:expanded?state.height:front.height};
-      const move=()=>{state.delay=null;state.motion.to(target,{immediate:preference.matches});};
-      if(cascade&&index&&!preference.matches)state.delay=setTimeout(move,index*30);else move();
+      const target={x:0,y:expanded?-offset:-index*12,scale:expanded?1:1-index*.05,opacity:1,h:expanded?state.height:front.height};
+      const move=()=>{state.delay=null;state.motion.to(target,{immediate:reduced});};
+      if(cascade&&index&&!reduced)state.delay=setTimeout(move,index*30);else move();
       offset+=state.height+12;
     });
     viewport.style.height=`${expanded?offset-12:front.height+(entries.length-1)*12}px`;
@@ -75,12 +100,16 @@ export function installToasts(viewport){
     const entries=store.snapshot(),ids=new Set(entries.map(entry=>entry.id));
     let focusEvicted=false;
     for(const [id,state] of mounted)if(!ids.has(id)){focusEvicted ||= state.card.contains(doc.activeElement);mounted.delete(id);dismiss(id,state);}
-    if(!entries.length)return;
+    if(!entries.length){front=null;syncFrontClip();return;}
     const parent=doc.querySelector('#dialog[open]')||doc.body;if(viewport.parentElement!==parent)parent.append(viewport);
     viewport.hidden=false;
     for(const entry of entries){
       let state=mounted.get(entry.id);if(!state){state=create(entry);mounted.set(entry.id,state);}
-      state.progress?.cancel();const bar=state.card.querySelector('.toast-progress'),fraction=entry.remaining/entry.duration;
+      // Changes elsewhere in the stack do not change this card's deadline.
+      if(state.progressGeneration===entry.generation)continue;
+      state.progressGeneration=entry.generation;
+      state.progress?.cancel();state.progress=null;
+      const bar=state.bar,fraction=entry.remaining/entry.duration;
       bar.style.transform=`scaleX(${fraction})`;
       if(!entry.paused)state.progress=bar.animate([{transform:`scaleX(${fraction})`},{transform:'scaleX(0)'}],{duration:entry.remaining,easing:'linear',fill:'forwards'});
     }
@@ -102,7 +131,7 @@ export function installToasts(viewport){
     if(dialog===event.target&&!dialog.open){doc.body.append(viewport);layout();}
   },{...events,capture:true});
   preference.addEventListener('change',()=>{
-    if(preference.matches){for(const [id,state] of exiting)removeElement(id,state);for(const state of mounted.values())state.motion.finish();}
+    if(reducedMotion()){for(const [id,state] of exiting)removeElement(id,state);for(const state of mounted.values())state.motion.finish();}
     layout();
   },events);
   view.addEventListener('pagehide',event=>{

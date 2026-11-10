@@ -7,6 +7,8 @@ html:not([data-page="replay-menu"]) #toast.toast-viewport {
   transform: none; pointer-events: none; text-align: left;
 }
 #toast.toast-viewport[hidden] { display: none; }
+/* Allow the stack to extend up, but never paint below its front card. */
+#toast.toast-viewport[data-clip-to-front] { clip-path: inset(-100vh -100vw var(--toast-bottom-clip,0px) -100vw); }
 html:not([data-page="replay-menu"]) body[data-unsaved=true] #toast.toast-viewport { bottom: 112px; }
 .toast-card {
   position: absolute; right: 0; bottom: 0; box-sizing: border-box;

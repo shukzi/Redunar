@@ -17,6 +17,7 @@ import { dialogHeader, restartConfirmationContent, exportCompleteContent } from 
 import { dirtyGlobalTabs, historyFiltersMarkup, filterSessions, clipSortingToolbar } from './workspace-state.mjs';
 import { canRetryShortcuts } from './shortcut-state.mjs';
 import { diagnosticStatus } from './diagnostic-status.mjs';
+import { diagnosticsSnapshotView } from './settings-diagnostics.mjs';
 import overlayPalettes from './overlay-palettes.json';
 import { mergeGameDrafts } from './game-drafts.mjs';
 import { globalDraftFeedback } from './draft-feedback.mjs';
@@ -95,6 +96,8 @@ const refreshFeedback=createRefreshFeedback({changed:()=>updateObservedElements(
 window.addEventListener('pagehide',()=>refreshFeedback.clear());
 let observedSaveRevision = null, loadedClipRevision = null;
 let lastSlowRuntimeRefresh = 0;
+let diagnosticsGeneration = 0, diagnosticsFailed = false;
+const paintedDiagnostics = new WeakMap(), diagnosticsTransitions = new WeakSet();
 let shortcutStatus = {state:'Inactive',message:null,last_action:null};
 let playerDuration = 0, playerPosition = 0, pendingSeek = null, trimStart = 0, trimEnd = 0;
 let stopFilmstrip = null;
@@ -722,7 +725,8 @@ async function finishDraftRestart(save) {
 }
 function settings() {
  const logStatus=diagnosticDisplayStatus();
- const diagnosticsOpen=$('.settings-diagnostics')?.open===true;
+ const disclosure=$('.settings-diagnostics');
+ const diagnosticsOpen=disclosure?.dataset.expanded==='true'||(disclosure?.dataset.expanded===undefined&&disclosure?.open);
  const preferenceRow=(title,description,key,checked,extra='')=>`<div class="settings-option"><div class="settings-option-main"><div class="settings-option-copy"><h3>${title}</h3><p>${description}</p></div>${switchControl(key,title,checked,'preference',!native||!loaded.preferences||busy)}</div>${extra}</div>`;
  return heading('Settings')+
 `<div class="settings-grid settings-page">
@@ -731,7 +735,7 @@ function settings() {
   ${preferenceRow('Close to tray','Keep Redunar running when you close the window.','tray',preferences.tray===true)}
   ${preferenceRow('Debug log','Record diagnostic logs for troubleshooting. Logs may include game names and session details.','diagnostic-log',preferences.diagnosticLog===true,`<p id="diagnostic-log-status" class="settings-option-note" ${logStatus?'':'hidden'}>${escape(logStatus)}</p>${preferences.diagnosticLogPath?`<button class="button settings-log-action" type="button" data-action="open-diagnostic-log-folder">Open log folder</button>`:''}`)}
  </section>
- <details class="settings-diagnostics" ${diagnosticsOpen?'open':''}><summary class="button settings-diagnostics-summary"><span>Diagnostics</span>${icon('chevron-down')}</summary>${diagnosticsCard()}</details>
+ <details class="settings-diagnostics" ${diagnosticsOpen?'open':''}><summary class="button settings-diagnostics-summary"><span>Diagnostics</span><span class="diagnostics-chevron" aria-hidden="true">${icon('chevron-down')}</span></summary>${diagnosticsCard()}</details>
 </div>`;
 }
 
@@ -745,16 +749,51 @@ function captureDiagnosticRows() {
 }
 function diagnosticsCard() {
  if(!native) return `<section class="panel diagnostics-panel"><h2>Diagnostics</h2><p>Open the native app to inspect monitor, capture, and encoder readiness.</p></section>`;
- if(!diagnostics) return `<section class="panel diagnostics-panel"><h2>Diagnostics</h2><p>Collecting read-only runtime counters…</p><div class="diagnostics-grid">${captureDiagnosticRows()}</div></section>`;
- const readiness=diagnostics.replay_readiness||{};
- const readyCount=Object.values(readiness).filter(Boolean).length;
- const candidateText=diagnostics.encoder_candidates?.length?diagnostics.encoder_candidates.map(c=>`${escape(c.driver)}${c.accessible?' · accessible':' · unavailable'}`).join(', '):'No eligible render node candidates found';
- const issue=diagnostics.telemetry_error||diagnostics.game_detection_error;
- const readinessRows=[['encoded_packet_ring','Encoded packet ring'],['atomic_clip_store','Atomic clip store'],['live_frame_transfer','Live frame transfer'],['hardware_encoder','Hardware encoder'],['playable_container','Playable container'],['performance_budget','Performance budget']];
- const captured=diagnostics.captured_at_unix_ms==null?'—':new Date(diagnostics.captured_at_unix_ms).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
- const status=value=>pill(value?'Ready':'Not verified',value?'green':'red');
- const shortcutNote=diagnostics.shortcut_message||'Monitored by Redunar while the app is running; no desktop shortcut registry is used.';
- return `<section class="panel diagnostics-panel"><div class="section-heading"><div><h2>Diagnostics</h2><p>Read-only counters from the native workers.</p></div>${button('Refresh','reload-diagnostics')}</div><div class="diagnostics-grid">${captureDiagnosticRows()}<div><span>Monitor samples</span><b>${diagnostics.hardware_samples}</b></div><div><span>Game scans</span><b>${diagnostics.game_scans}</b></div><div><span>Replay readiness</span><b>${readyCount}/6 ready</b></div><div><span>Capture runtime</span><b>${escape(diagnostics.capture_runtime)}</b></div><div><span>Shortcut monitor</span><b>${escape(diagnostics.shortcut_state||'Unknown')}</b></div><div><span>Replay frames received</span><b>${diagnostics.received_frame_count}</b></div><div><span>Encoded packets</span><b>${diagnostics.encoded_packet_count}</b></div><div><span>Audio packets</span><b>${diagnostics.audio_packet_count}</b></div><div><span>Audio bytes</span><b>${diagnostics.audio_byte_count}</b></div></div><div class="diagnostics-readiness"><div class="diagnostics-subheading"><h3>Replay readiness checks</h3><span>Backend verification</span></div>${readinessRows.map(([key,label])=>`<div class="diagnostics-readiness-row"><span>${label}</span>${status(Boolean(readiness[key]))}</div>`).join('')}</div><p class="small-note">Last snapshot ${captured} · sample ${diagnostics.last_hardware_sample_ms==null?'—':diagnostics.last_hardware_sample_ms+' ms'} · scan ${diagnostics.last_game_scan_ms==null?'—':diagnostics.last_game_scan_ms+' ms'} · overruns ${diagnostics.hardware_overruns+diagnostics.game_scan_overruns}</p><p class="small-note">Shortcut monitor: ${escape(shortcutNote)}</p><p class="small-note">Encoder candidates: ${candidateText}</p>${issue?`<p class="diagnostics-error">${escape(issue)}</p>`:''}</section>`;
+ return `<section class="panel diagnostics-panel" data-diagnostics-panel><div class="section-heading"><div><h2>Diagnostics</h2><p>Read-only counters from the native workers.</p></div>${button(refreshButtonContent('diagnostics'),'reload-diagnostics',false,'type="button" data-refresh-key="diagnostics"')}</div><p class="diagnostics-feedback" role="status" aria-atomic="true"></p><div class="diagnostics-grid">${captureDiagnosticRows()}</div><div data-diagnostics-details></div></section>`;
+}
+
+function updateDiagnosticsPanel() {
+ const panel=$('[data-diagnostics-panel]');if(!panel)return;
+ const details=panel.parentElement;
+ const refresh=$('[data-refresh-key="diagnostics"]',panel);
+ const pending=refreshFeedback.pending('diagnostics');
+ if(pending)refresh.setAttribute('aria-disabled','true');else refresh.removeAttribute('aria-disabled');
+ // A snapshot can change the panel height. Let the current disclosure motion
+ // settle before painting it so the panel does not snap to a new end height.
+ const transition=details.dataset.expanded===undefined?null:details.getAnimations().find(animation=>animation.playState==='running');
+ if(transition){
+  if(!diagnosticsTransitions.has(transition)){
+   diagnosticsTransitions.add(transition);
+   void transition.finished.then(updateDiagnosticsPanel,updateDiagnosticsPanel);
+  }
+  return;
+ }
+ const feedback=$('.diagnostics-feedback',panel);
+ const text=diagnosticsFailed?(diagnostics?'Diagnostics refresh failed. Showing the last available results. Select Refresh to try again.':'Diagnostics could not load. Select Refresh to try again.'):(diagnostics?'':'Loading diagnostics…');
+ if(feedback.textContent!==text)feedback.textContent=text;
+ feedback.classList.toggle('diagnostics-error',diagnosticsFailed);
+ if(paintedDiagnostics.get(panel)===diagnostics)return;
+ const {rows,details:body}=diagnosticsSnapshotView(diagnostics);
+ const grid=$('.diagnostics-grid',panel);
+ grid.querySelectorAll('[data-diagnostics-snapshot-row]').forEach(row=>row.remove());
+ grid.insertAdjacentHTML('beforeend',rows);
+ $('[data-diagnostics-details]',panel).innerHTML=body;
+ paintedDiagnostics.set(panel,diagnostics);
+}
+
+async function refreshDiagnostics() {
+ if(!native||refreshFeedback.pending('diagnostics'))return;
+ diagnosticsGeneration++;
+ await refreshFeedback.run('diagnostics',async()=>{
+  try {
+   diagnostics=await call('diagnostics_snapshot',{refreshCapabilities:true});
+   diagnosticsFailed=false;
+   return true;
+  } catch {
+   diagnosticsFailed=true;
+   return false;
+  }
+ });
 }
 
 function render() {
@@ -1207,6 +1246,7 @@ function updateObservedElements() {
  if(refreshInputs)controlState(refreshInputs,'disabled',!native||!replayPreferences||busy||replayPreferences.microphone_mode==='off'||Boolean(activeSession?.launch_locked)||Boolean(active())||Boolean(microphoneInputsPending)||refreshFeedback.pending('inputs'));
  updateHistoryRefreshButton();
  refreshFeedback.sync(workspace);
+ updateDiagnosticsPanel();
  const logStatus=$('#diagnostic-log-status');
  if(logStatus){const text=diagnosticDisplayStatus();if(logStatus.textContent!==text)logStatus.textContent=text;if(logStatus.hidden!==!text)controlState(logStatus,'hidden',!text);}
  const tray=$('[data-preference="tray"]');
@@ -1304,7 +1344,9 @@ async function readRuntime() {
  if(!native)return;
  const slowRefresh=Date.now()-lastSlowRuntimeRefresh>=10000;
  if(slowRefresh)lastSlowRuntimeRefresh=Date.now();
- const slowResults=slowRefresh?Promise.allSettled([call('diagnostics_snapshot'),call('replay_display_capability')]):null;
+ const readDiagnostics=slowRefresh&&!refreshFeedback.pending('diagnostics');
+ const diagnosticsReadGeneration=diagnosticsGeneration;
+ const slowResults=slowRefresh?Promise.allSettled([readDiagnostics?call('diagnostics_snapshot'):null,call('replay_display_capability')]):null;
  const results=await Promise.allSettled([call('daemon_status'),call('replay_runtime_status'),call('session_status'),call('module_statuses'),call('shortcut_status')]);
  const oldDisplay=JSON.stringify(displayCapability);
  hardware=results[0].status==='fulfilled'&&results[0].value.available?results[0].value:null;
@@ -1319,7 +1361,10 @@ async function readRuntime() {
  shortcutStatus=results[4].status==='fulfilled'?results[4].value:shortcutStatus;
  if(slowResults){
   const [diagnosticsResult,displayResult]=await slowResults;
-  diagnostics=diagnosticsResult.status==='fulfilled'?diagnosticsResult.value:diagnostics;
+  if(readDiagnostics&&diagnosticsReadGeneration===diagnosticsGeneration){
+   diagnosticsFailed=diagnosticsResult.status==='rejected';
+   if(!diagnosticsFailed)diagnostics=diagnosticsResult.value;
+  }
   displayCapability=displayResult.status==='fulfilled'?displayResult.value:displayCapability;
  }
  const connectionStatus=$('#connection-status');
@@ -1488,7 +1533,6 @@ const reloaders={
  'reload-global':()=>readSection('global','global_settings',acceptGlobal),
  'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
- 'reload-diagnostics':async()=>{try{diagnostics=await call('diagnostics_snapshot',{refreshCapabilities:true});delete errors.diagnostics;}catch(error){diagnostics=null;errors.diagnostics=message(error);}},
 };
 document.addEventListener('pointerup',event=>{
  const toggle=event.target.closest?.('[data-player="toggle"]');
@@ -1601,6 +1645,7 @@ document.addEventListener('click',event=>{
  if(action==='retry-shortcuts'){
   perform(async()=>{try{shortcutStatus=await call('activate_shortcuts');notify('Shortcut activation requested.');}finally{shortcutStatus=await call('shortcut_status').catch(()=>shortcutStatus);updateObservedElements();}});return;
  }
+ if(action==='reload-diagnostics'){void refreshDiagnostics();return;}
  if(action==='check-for-updates'){
   performUpdate('check_for_updates','checking',{refreshPending:true});return;
  }
