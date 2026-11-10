@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 const FILE: &str = "replay-clip-games-v1.tsv";
+const PENDING_FILE: &str = ".replay-clip-games-v1.tsv.pending";
 const HEADER: &str = "redunar-replay-clip-games-v1";
 const MAX_ENTRIES: usize = 512;
 const MAX_FILE_NAME_BYTES: usize = 128;
@@ -105,6 +106,32 @@ pub(crate) fn games(state: &Path) -> Vec<(String, String)> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     load_unlocked(state).unwrap_or_default()
+}
+
+/// Recover an interrupted write before the state owner starts accepting work.
+pub(crate) fn recover_interrupted_write(state: &Path) -> io::Result<()> {
+    let _guard = OPERATIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let directory = fs::symlink_metadata(state)?;
+    // Only trust a directory other users cannot change.
+    if !directory.is_dir() || directory.mode() & 0o022 != 0 {
+        return Ok(());
+    }
+    let pending = state.join(PENDING_FILE);
+    match fs::symlink_metadata(&pending) {
+        Ok(file)
+            if file.is_file()
+                && file.nlink() == 1
+                && file.uid() == directory.uid()
+                && matches!(file.mode() & 0o777, 0o600 | 0o400 | 0o200 | 0) =>
+        {
+            fs::remove_file(pending)
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Resolve one clip's game: an exact ledger line wins, otherwise the clip's
@@ -232,8 +259,13 @@ fn save_unlocked(state: &Path, entries: &[(String, String)]) -> io::Result<()> {
         return Err(io::Error::other("replay state is not a directory"));
     }
     let path = state.join(FILE);
-    let (temporary, mut file) =
-        super::replay_store::create_temporary(state).map_err(io::Error::other)?;
+    // One exclusive pending slot bounds what an interrupted write can leave.
+    let temporary = state.join(PENDING_FILE);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
     let result = (|| {
         writeln!(file, "{HEADER}")?;
         for (name, game) in entries {
@@ -400,6 +432,29 @@ extra\tcolumns\there\n\
             );
             assert_eq!(games(&root), vec![("new.mkv".into(), "Game".into())]);
             assert!(std::fs::symlink_metadata(&temporary).is_ok());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_attribution_links_are_never_removed_or_truncated() {
+        use std::os::unix::fs::PermissionsExt;
+        for hardlink in [false, true] {
+            let root = temp_state("pending-link");
+            std::fs::create_dir_all(&root).unwrap();
+            let target = root.join("unrelated");
+            std::fs::write(&target, b"preserve this file").unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let pending = root.join(super::PENDING_FILE);
+            if hardlink {
+                std::fs::hard_link(&target, &pending).unwrap();
+            } else {
+                std::os::unix::fs::symlink(&target, &pending).unwrap();
+            }
+            super::recover_interrupted_write(&root).unwrap();
+            assert!(record(&root, "new.mkv", "Game").is_err());
+            assert_eq!(std::fs::read(&pending).unwrap(), b"preserve this file");
+            assert_eq!(std::fs::read(&target).unwrap(), b"preserve this file");
             std::fs::remove_dir_all(root).unwrap();
         }
     }

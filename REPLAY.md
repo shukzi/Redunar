@@ -105,6 +105,8 @@ The optional clip-to-game ledger retains the newest 512 valid entries, with an
 hide recordings. Invalid ledger contents can be replaced on the next attribution
 write; linked or special files are refused. Historical non-finite measurements
 remain unavailable without discarding the session or its valid measurements.
+Attribution writes use one reserved temporary file. On startup the state
+owner removes a private pending file left by an interrupted write.
 
 ## Validation
 
