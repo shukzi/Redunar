@@ -465,6 +465,7 @@ impl CaptureSessionHandle {
 
         let initial = CaptureSessionModel::new(session_id).snapshot();
         let shared = Arc::new(CaptureShared {
+            session_statistics: Mutex::default(),
             latest: Mutex::new(Arc::new(initial)),
             stop: AtomicBool::new(false),
             replay_exports: Mutex::new(ReplayExportQueue::default()),
@@ -1087,6 +1088,17 @@ impl CaptureSessionHandle {
         publish(&self.shared, failed);
     }
 
+    /// Stop frame intake before calculating the exact completed summary.
+    pub(crate) fn finish_statistics(&mut self) -> crate::SessionFrameSummary {
+        self.shutdown();
+        self.shared
+            .session_statistics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_default()
+    }
+
     fn stop_receiver(&mut self) -> bool {
         let Some(worker) = self.worker.take() else {
             return false;
@@ -1221,6 +1233,7 @@ impl Drop for CaptureSessionHandle {
 }
 
 struct CaptureShared {
+    session_statistics: Mutex<Option<crate::SessionFrameSummary>>,
     latest: Mutex<Arc<CaptureSnapshot>>,
     stop: AtomicBool,
     replay_exports: Mutex<ReplayExportQueue>,
@@ -1259,6 +1272,7 @@ impl ReplayExportEndpoint {
         let session_id = CaptureSessionId::new([9; 16]).expect("non-zero test session");
         let acknowledgements = Arc::new(Mutex::new(Vec::new()));
         let shared = Arc::new(CaptureShared {
+            session_statistics: Mutex::default(),
             latest: Mutex::new(Arc::new(CaptureSessionModel::new(session_id).snapshot())),
             stop: AtomicBool::new(false),
             replay_exports: Mutex::new(ReplayExportQueue::default()),
@@ -1521,6 +1535,16 @@ fn receiver_loop(socket: &UnixDatagram, shared: &CaptureShared, session_id: Capt
         }
         publish(shared, model.snapshot());
     }
+    // Finalize once after intake stops. Live snapshots never clone or sort the
+    // retained tail, and the accumulator is released with this worker.
+    let mut summary = model.session_statistics.summary();
+    let snapshot = model.snapshot();
+    summary.dropped_frame_count = snapshot.dropped_frame_count;
+    summary.rejected_message_count = snapshot.rejected_message_count;
+    *shared
+        .session_statistics
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(summary);
 }
 
 fn log_capture_gpu_identity(
@@ -2305,6 +2329,7 @@ mod tests {
         let session_id = CaptureSessionId::new([8; 16]).expect("session id");
         let (receiver, sender) = UnixDatagram::pair().expect("socket pair");
         let shared = Arc::new(CaptureShared {
+            session_statistics: Mutex::default(),
             latest: Mutex::new(Arc::new(CaptureSessionModel::new(session_id).snapshot())),
             stop: AtomicBool::new(false),
             replay_exports: Mutex::new(ReplayExportQueue::default()),
@@ -2719,6 +2744,38 @@ mod tests {
                 elapsed: Duration::from_secs(1),
             }),
         ));
+    }
+
+    #[test]
+    fn receiver_finalizes_all_frames_once_on_shutdown() {
+        let (session_id, shared, sender, worker) = receiver_pair();
+        let mut bytes = [0; MAX_MESSAGE_BYTES];
+        let hello = CaptureMessage::Hello {
+            session_id,
+            process_id: 42,
+            api: CaptureApi::Vulkan,
+            producer_started_monotonic_ns: 1,
+        };
+        let length = encode_message(&hello, &mut bytes).unwrap();
+        sender.send(&bytes[..length]).unwrap();
+        for i in 0..10 {
+            let message = CaptureMessage::FrameBatch {
+                session_id,
+                api: CaptureApi::Vulkan,
+                first_sequence: i * 100,
+                frame_intervals_ns: vec![if i == 0 { 100_000_000 } else { 10_000_000 }; 100],
+            };
+            let length = encode_message(&message, &mut bytes).unwrap();
+            sender.send(&bytes[..length]).unwrap();
+        }
+        wait_for_revision(&shared, 11);
+        assert!(shared.session_statistics.lock().unwrap().is_none());
+        stop_receiver(&shared, &sender, worker);
+        let summary = shared.session_statistics.lock().unwrap().clone().unwrap();
+        assert_eq!(summary.frame_count, 1000);
+        assert_eq!(summary.total_frame_time_ns, 19_000_000_000);
+        assert_eq!(summary.average_fps, Some(1000.0 / 19.0));
+        assert_eq!(summary.one_percent_low_fps, Some(10.0));
     }
 
     #[test]

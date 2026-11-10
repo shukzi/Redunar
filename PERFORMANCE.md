@@ -65,6 +65,30 @@ arrival, and selection feedback use bounded opacity/transform transitions;
 reduced motion disables them. No recurring animation or whole-document observer
 is added for ordinary workspace interaction.
 
+## Completed session measurements
+
+Whole-session frame summaries accumulate the count and integer nanosecond sum
+of every accepted frame interval on the capture receiver. The live 240-frame
+window and sampled timeline remain independent. Completed averages divide the
+accepted frame count by that duration. Low FPS uses the reciprocal mean duration
+of the slowest `ceil(frame_count / 100)` and `ceil(frame_count / 1000)` intervals.
+No interpolation or percentile estimate is used.
+
+A min-heap retains at most 100,000 slow intervals. Its allocation is bounded to
+1 MiB, plus a maximum 800,000-byte vector used only for final sorting. Ordinary
+snapshots do not clone or sort this heap. Exact 1% lows cover up to 10 million
+frames and exact 0.1% lows up to 100 million. An exhausted tail yields no value;
+whole-session count and duration remain available. The worker releases the
+accumulator at teardown. This bound is separate from encoded Replay storage.
+
+The journal retains integer totals and compatible optional summary fields.
+Older records cannot reconstruct whole-session summaries from their retained
+live window. History displays those summaries as unavailable. Transport drops
+or rejected messages also make whole-session summaries unavailable. Timeline
+observations remain available independently, with the existing compaction limit.
+History retains the latest 64 records. These calculations measure received game
+presentation timings, not physical display scanout or unobserved frames.
+
 ## Replay bounds
 
 Replay uses a bounded producer/export pool, encoder queue, rolling spool, and

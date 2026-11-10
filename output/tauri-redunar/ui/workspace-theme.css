@@ -2390,3 +2390,11 @@ html:not([data-page="replay-menu"]) #workspace .overlay-settings-editor .metric-
     grid-template-columns: repeat(4, 40px);
   }
 }
+
+/* Bin actions stay beside each owned clip, with a stacked narrow layout. */
+.trashed-clip-list .trash-bin-row { align-items:center; flex-wrap:wrap; gap:12px; }
+.trash-bin-row>div:first-child { flex:1 1 180px; min-width:0; }
+.trash-bin-row strong { display:block; overflow-wrap:anywhere; }
+.trash-bin-row small { display:block; margin-top:4px; color:var(--muted); }
+.trash-bin-actions { display:flex; flex-wrap:wrap; gap:12px; }
+.trash-delete-list { max-height:35vh; overflow:auto; overflow-wrap:anywhere; }

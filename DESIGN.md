@@ -334,3 +334,15 @@ For UI changes, inspect the effective stylesheet order and run the production
 Tauri build plus the relevant UI checks. Verify the affected navigation,
 drafts, startup and shutdown, unsupported hardware, errors, cancellation, and
 cleanup paths. Do not claim hardware or real-game support from synthetic data.
+
+## Clip trash and completed history
+
+Trash offers Restore and Delete permanently beside each recording and Clear bin
+for the current collection. Permanent actions use a neutral initial focus and
+an explicit confirmation listing the target filenames and total size. Partial
+failures remain visible. Empty bins omit destructive actions.
+
+History retains its existing layout, controls and copy. Whole-session statistics
+use completed native measurements. Unavailable or legacy incomplete summaries
+use the existing dash without an added explanation. Timeline sampling and the
+live Overview window remain independent of completed summary calculations.

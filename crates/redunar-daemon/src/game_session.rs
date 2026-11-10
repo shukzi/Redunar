@@ -158,6 +158,7 @@ struct CoordinatorInner {
 
 #[derive(Default)]
 struct CoordinatorState {
+    completed_statistics: Option<crate::SessionFrameSummary>,
     status: GameSessionStatus,
     request: Option<GameSessionRequest>,
     capture: Option<CaptureSessionHandle>,
@@ -790,6 +791,7 @@ impl ProductionGameSessionCoordinator {
         drop(state.microphone_test.take());
         let capture_attached = capture.is_some();
         state.request = Some(request.clone());
+        state.completed_statistics = None;
         state.capture = capture;
         state.noticed_save_revision = replay_status.completed_save_revision;
         state.recorded_save_revision = replay_status.completed_save_revision;
@@ -815,6 +817,14 @@ impl ProductionGameSessionCoordinator {
             state.status.phase = GameSessionPhase::Running;
             bump(&mut state.status);
         }
+    }
+
+    /// Exact statistics retained after native capture teardown.
+    #[must_use]
+    pub fn completed_frame_statistics(&self) -> Option<crate::SessionFrameSummary> {
+        lock_unpoisoned(&self.inner.state)
+            .completed_statistics
+            .clone()
     }
 
     #[must_use]
@@ -930,7 +940,10 @@ impl ProductionGameSessionCoordinator {
             bump(&mut state.status);
             state.capture.take()
         };
-        drop(capture);
+        if let Some(mut capture) = capture {
+            let summary = capture.finish_statistics();
+            lock_unpoisoned(&self.inner.state).completed_statistics = Some(summary);
+        }
     }
 
     /// Stop all optional session resources and publish a terminal state.
@@ -969,7 +982,10 @@ impl ProductionGameSessionCoordinator {
             collect_and_release_replay_exports(&mut state, &self.inner.replay);
             state.capture.take()
         };
-        drop(capture);
+        if let Some(mut capture) = capture {
+            let summary = capture.finish_statistics();
+            lock_unpoisoned(&self.inner.state).completed_statistics = Some(summary);
+        }
 
         let mut state = lock_unpoisoned(&self.inner.state);
         state.status.phase = GameSessionPhase::Ended;

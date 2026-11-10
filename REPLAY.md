@@ -97,6 +97,14 @@ owned by Redunar.
 
 History stores bounded session measurements and clip metadata. Filenames,
 favorites, and the recoverable clip trash ledger preserve inode and path checks.
+The trash bin offers Restore and Delete permanently for each clip, plus Clear
+bin. Permanent deletion requires confirmation of an exact native snapshot.
+Newly trashed clips are excluded from that snapshot. Restored, modified, linked,
+or replaced files are retained. Partial failures identify the files that remain.
+Confirmation expires after five minutes and cannot be reused. Permanent deletion
+removes media and its owned thumbnails. Merely moving a clip to the bin does not
+free disk space.
+
 Readers cap file size and record count; writes use private temporary files,
 atomic replacement, and directory synchronization.
 

@@ -1,6 +1,7 @@
 mod named_export;
 mod thumbnails;
 mod trash;
+pub use trash::{TrashDeletionPlan, TrashDeletionResult};
 
 use crate::replay_clip_labels::{self as labels, Label};
 use crate::{

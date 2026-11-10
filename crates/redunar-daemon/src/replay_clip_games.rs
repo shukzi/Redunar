@@ -303,6 +303,7 @@ mod tests {
 
     fn session(game: &str, started_unix: u64, duration_seconds: u32) -> SessionRecord {
         SessionRecord {
+            frame_summary: None,
             id: 1,
             game: game.to_owned(),
             started_unix,

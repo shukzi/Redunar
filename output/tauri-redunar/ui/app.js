@@ -1,3 +1,4 @@
+import { trashBinMarkup, trashDeletionMarkup, trashDeletionResultMarkup } from './trash-bin.mjs';
 import {icon, mountShellIcons} from './icons.mjs';
 import {installToasts} from './toasts.mjs';
 import {installIconMotion} from './icon-motion.mjs';
@@ -602,7 +603,7 @@ function deltaText(current,previous,unit='') {
 }
 function historyComparison(selected,peer) {
  if(!historyCompare||!peer)return '';
- const selectedFrame=average(selected.frames),peerFrame=average(peer.frames);
+ const selectedFrame=selected.averageFrameTime,peerFrame=peer.averageFrameTime;
  return `<section class="panel history-comparison"><div class="section-heading"><div><h3>Session comparison</h3><p>Compared with ${escape(peer.date)} at ${escape(peer.time)}</p></div>${pill('Same game')}</div><div class="comparison-grid"><div><span>Average FPS</span><b>${deltaText(selected.averageFps,peer.averageFps,' FPS')}</b></div><div><span>1% low</span><b>${deltaText(selected.onePercentLowFps,peer.onePercentLowFps,' FPS')}</b></div><div><span>0.1% low</span><b>${deltaText(selected.pointOnePercentLowFps,peer.pointOnePercentLowFps,' FPS')}</b></div><div><span>Saved frame time</span><b>${deltaText(selectedFrame,peerFrame,' ms')}</b></div></div></section>`;
 }
 function historyCatalog() {
@@ -1633,7 +1634,14 @@ document.addEventListener('click',event=>{
  const action=target.dataset.action;
  if(action==='clear-history-filters'){historyFilters={search:'',game:'all',date:'all'};render();return;}
  if(action==='undo-clip-trash'){restoreTrashedClips(lastTrashed);return;}
- if(action==='view-clip-trash'){perform(async()=>{const items=await call('trashed_replay_clips');const content=items.length?`<p>Restore clips to Saved clips.</p><div class="trashed-clip-list">${items.map(c=>`<div><strong>${escape(c.file_name)}</strong><button class="button" data-action="restore-trash-clip" data-file-name="${escape(c.file_name)}">Restore</button></div>`).join('')}</div>`:'<p>The trash bin is empty.</p>';modal('Trash bin',`${content}<div class="dialog-actions"><button class="button" type="button" data-close>Done</button></div>`);});return;}
+ if(action==='view-clip-trash'){perform(async()=>{const items=await call('trashed_replay_clips');modal('Trash bin',trashBinMarkup(items));});return;}
+ if(action==='delete-trash-clip'||action==='clear-trash-bin'){perform(async()=>{const preview=await call('prepare_trash_deletion',{fileName:action==='clear-trash-bin'?null:target.dataset.fileName});modal('Delete permanently?',trashDeletionMarkup(preview));});return;}
+ if(action==='confirm-trash-deletion'){perform(async()=>{
+  const result=await call('delete_trashed_replay_clips',{token:target.dataset.token});
+  clearClipTrashFeedback();await reloaders['reload-clips']();presentClipInventory();
+  modal('Trash bin',trashDeletionResultMarkup(result));
+ });return;}
+
  if(action==='restore-trash-clip'){restoreTrashedClips([target.dataset.fileName]);return;}
  if(action==='show-export-folder'){perform(()=>call('open_replay_folder'));return;}
  if(action==='open-exported-clip'){selectedClip=target.dataset.fileName;$('#dialog').close();render();return;}

@@ -31,6 +31,7 @@ pub struct SessionTelemetrySample {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRecord {
+    pub frame_summary: Option<crate::SessionFrameSummary>,
     pub id: u64,
     pub game: String,
     pub started_unix: u64,
@@ -132,7 +133,9 @@ fn parse(line: &str) -> Option<SessionRecord> {
         .take(240)
         .collect();
     let timeline = parse_timeline(fields.next().unwrap_or_default());
+    let frame_summary = parse_summary(fields.next().unwrap_or_default());
     Some(SessionRecord {
+        frame_summary,
         id,
         game,
         started_unix,
@@ -144,6 +147,63 @@ fn parse(line: &str) -> Option<SessionRecord> {
         timeline,
     })
 }
+fn format_summary(summary: Option<&crate::SessionFrameSummary>) -> String {
+    summary.map_or_else(
+        || "-".into(),
+        |s| {
+            format!(
+                "v2,{},{},{},{},{},{}",
+                s.frame_count,
+                s.total_frame_time_ns,
+                s.dropped_frame_count,
+                s.rejected_message_count,
+                s.slowest_one_percent_ns
+                    .map_or_else(|| "-".into(), |n| n.to_string()),
+                s.slowest_point_one_percent_ns
+                    .map_or_else(|| "-".into(), |n| n.to_string())
+            )
+        },
+    )
+}
+fn parse_summary(value: &str) -> Option<crate::SessionFrameSummary> {
+    let fields: Vec<_> = value.splitn(8, ',').collect();
+    if fields.len() != 7 || fields[0] != "v2" {
+        return None;
+    }
+    let count: u64 = fields[1].parse().ok()?;
+    let total: u128 = fields[2].parse().ok()?;
+    if (count == 0) != (total == 0)
+        || total < u128::from(count)
+        || total > u128::from(count) * u128::from(u64::MAX)
+    {
+        return None;
+    }
+    let tail = |value: &str, denominator: u64| -> Option<Option<u128>> {
+        if value == "-" {
+            return Some(None);
+        }
+        let n: u128 = value.parse().ok()?;
+        let frames = count.div_ceil(denominator);
+        (frames > 0 && frames <= 100_000 && n >= u128::from(frames) && n <= total)
+            .then_some(Some(n))
+    };
+    let one = tail(fields[5], 100)?;
+    let point = tail(fields[6], 1000)?;
+    Some(crate::SessionFrameSummary {
+        frame_count: count,
+        total_frame_time_ns: total,
+        dropped_frame_count: fields[3].parse().ok()?,
+        rejected_message_count: fields[4].parse().ok()?,
+        slowest_one_percent_ns: one,
+        slowest_point_one_percent_ns: point,
+        average_fps: crate::session_statistics::fps(count, total),
+        one_percent_low_fps: one
+            .and_then(|n| crate::session_statistics::fps(count.div_ceil(100), n)),
+        point_one_percent_low_fps: point
+            .and_then(|n| crate::session_statistics::fps(count.div_ceil(1000), n)),
+    })
+}
+
 fn parse_opt(value: &str) -> Option<f64> {
     value.parse::<f64>().ok().filter(|value| value.is_finite())
 }
@@ -184,7 +244,7 @@ fn save_unlocked(state: &Path, records: &[SessionRecord]) -> io::Result<()> {
                 .join(",");
             writeln!(
                 file,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 record.id,
                 game,
                 record.started_unix,
@@ -193,7 +253,8 @@ fn save_unlocked(state: &Path, records: &[SessionRecord]) -> io::Result<()> {
                 format_opt(record.one_percent_low_fps),
                 format_opt(record.point_one_percent_low_fps),
                 intervals,
-                format_timeline(&record.timeline)
+                format_timeline(&record.timeline),
+                format_summary(record.frame_summary.as_ref())
             )?;
         }
         if file.metadata()?.len() > MAX_FILE_BYTES {
@@ -290,6 +351,23 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
     #[test]
+    fn exact_summary_round_trip_and_legacy_records_stay_distinct() {
+        use super::{format_summary, parse, parse_summary};
+        let mut frames = crate::session_statistics::SessionFrameAccumulator::default();
+        frames.record(&[1_234_567, 8_765_432, 123_456_789]);
+        let summary = frames.summary();
+        assert_eq!(
+            parse_summary(&format_summary(Some(&summary))),
+            Some(summary)
+        );
+        assert_eq!(parse_summary("-"), None);
+        assert_eq!(parse_summary("v2,0,1,0,0,-,-"), None);
+        assert_eq!(parse_summary("v2,3,100,0,0,101,-"), None);
+        let legacy = parse("1\tGame\t42\t60\t120\t90\t80\t10000000\t").unwrap();
+        assert_eq!(legacy.average_fps, Some(120.0));
+        assert_eq!(legacy.frame_summary, None);
+    }
+    #[test]
     fn round_trips_bounded_session_records() {
         let root = std::env::temp_dir().join(format!(
             "redunar-history-test-{}",
@@ -299,6 +377,7 @@ mod tests {
                 .as_nanos()
         ));
         let record = SessionRecord {
+            frame_summary: None,
             id: 0,
             game: "A game\twith\nnewlines and \\new \\tabs \\unknown".to_owned(),
             started_unix: 42,

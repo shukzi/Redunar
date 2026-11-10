@@ -30,11 +30,20 @@ pub struct SessionHistoryItem {
     game: String,
     started_unix: u64,
     duration_seconds: u32,
+    average_frame_time_ms: Option<f64>,
     average_fps: Option<f64>,
     one_percent_low_fps: Option<f64>,
     point_one_percent_low_fps: Option<f64>,
     frame_intervals_ns: Vec<u64>,
     timeline: Vec<SessionTelemetrySampleDto>,
+}
+
+fn complete_history_summary(
+    item: &redunar_daemon::SessionRecord,
+) -> Option<&redunar_daemon::SessionFrameSummary> {
+    item.frame_summary
+        .as_ref()
+        .filter(|s| s.dropped_frame_count == 0 && s.rejected_message_count == 0)
 }
 
 #[derive(Debug, Serialize)]
@@ -383,12 +392,18 @@ pub async fn session_history() -> Result<Vec<SessionHistoryItem>, String> {
         .into_iter()
         .map(|item| SessionHistoryItem {
             id: item.id,
-            game: item.game,
+            game: item.game.clone(),
             started_unix: item.started_unix,
             duration_seconds: item.duration_seconds,
-            average_fps: item.average_fps,
-            one_percent_low_fps: item.one_percent_low_fps,
-            point_one_percent_low_fps: item.point_one_percent_low_fps,
+            average_frame_time_ms: complete_history_summary(&item).and_then(|s| {
+                (s.frame_count > 0)
+                    .then(|| s.total_frame_time_ns as f64 / s.frame_count as f64 / 1_000_000.0)
+            }),
+            average_fps: complete_history_summary(&item).and_then(|s| s.average_fps),
+            one_percent_low_fps: complete_history_summary(&item)
+                .and_then(|s| s.one_percent_low_fps),
+            point_one_percent_low_fps: complete_history_summary(&item)
+                .and_then(|s| s.point_one_percent_low_fps),
             frame_intervals_ns: item.frame_intervals_ns,
             timeline: item
                 .timeline
@@ -824,4 +839,44 @@ pub fn pick_replay_folder() -> Result<Option<String>, String> {
     };
     dialog.destroy();
     Ok(result)
+}
+
+#[cfg(test)]
+mod complete_history_tests {
+    use super::*;
+    #[test]
+    fn old_tail_values_and_incomplete_capture_are_not_whole_session_statistics() {
+        let mut record = redunar_daemon::SessionRecord {
+            frame_summary: None,
+            id: 1,
+            game: "Fixture".into(),
+            started_unix: 1,
+            duration_seconds: 60,
+            average_fps: Some(144.0),
+            one_percent_low_fps: Some(100.0),
+            point_one_percent_low_fps: Some(80.0),
+            frame_intervals_ns: vec![],
+            timeline: vec![],
+        };
+        assert!(complete_history_summary(&record).is_none());
+        record.frame_summary = Some(redunar_daemon::SessionFrameSummary {
+            frame_count: 600,
+            total_frame_time_ns: 10_000_000_000,
+            average_fps: Some(60.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            complete_history_summary(&record).unwrap().average_fps,
+            Some(60.0)
+        );
+        record.frame_summary.as_mut().unwrap().dropped_frame_count = 1;
+        assert!(complete_history_summary(&record).is_none());
+        record.frame_summary.as_mut().unwrap().dropped_frame_count = 0;
+        record
+            .frame_summary
+            .as_mut()
+            .unwrap()
+            .rejected_message_count = 1;
+        assert!(complete_history_summary(&record).is_none());
+    }
 }
