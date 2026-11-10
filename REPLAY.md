@@ -100,6 +100,14 @@ favorites, and the recoverable clip trash ledger preserve inode and path checks.
 Readers cap file size and record count; writes use private temporary files,
 atomic replacement, and directory synchronization.
 
+The optional clip-to-game ledger retains the newest 512 valid entries, with an
+8 MiB file limit and a 4 KiB game-label limit. Unreadable attribution does not
+hide recordings. Invalid ledger contents can be replaced on the next attribution
+write; linked or special files are refused. Historical non-finite measurements
+remain unavailable without discarding the session or its valid measurements.
+Attribution writes use one reserved temporary file. On startup the state
+owner removes a private pending file left by an interrupted write.
+
 ## Validation
 
 Use automated fixtures, media decode checks, and the native Replay probes in

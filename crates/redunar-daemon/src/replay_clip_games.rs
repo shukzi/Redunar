@@ -8,14 +8,19 @@
 use crate::SessionRecord;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::Mutex;
 
 const FILE: &str = "replay-clip-games-v1.tsv";
+const PENDING_FILE: &str = ".replay-clip-games-v1.tsv.pending";
 const HEADER: &str = "redunar-replay-clip-games-v1";
 const MAX_ENTRIES: usize = 512;
 const MAX_FILE_NAME_BYTES: usize = 128;
+// Catalog names are at most 256 bytes. Allow larger historical labels while
+// bounding the worst-case escaped representation of all retained entries.
+const MAX_GAME_NAME_BYTES: usize = 4096;
+const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
 /// Clip names arrive from the store, but validation here keeps a future
@@ -70,6 +75,12 @@ pub(crate) fn record(state: &Path, file_name: &str, game_name: &str) -> io::Resu
             "replay clip name cannot be stored",
         ));
     }
+    if game_name.len() > MAX_GAME_NAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "replay game name exceeds its storage bound",
+        ));
+    }
     let _guard = OPERATIONS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -95,6 +106,32 @@ pub(crate) fn games(state: &Path) -> Vec<(String, String)> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     load_unlocked(state).unwrap_or_default()
+}
+
+/// Recover an interrupted write before the state owner starts accepting work.
+pub(crate) fn recover_interrupted_write(state: &Path) -> io::Result<()> {
+    let _guard = OPERATIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let directory = fs::symlink_metadata(state)?;
+    // Only trust a directory other users cannot change.
+    if !directory.is_dir() || directory.mode() & 0o022 != 0 {
+        return Ok(());
+    }
+    let pending = state.join(PENDING_FILE);
+    match fs::symlink_metadata(&pending) {
+        Ok(file)
+            if file.is_file()
+                && file.nlink() == 1
+                && file.uid() == directory.uid()
+                && matches!(file.mode() & 0o777, 0o600 | 0o400 | 0o200 | 0) =>
+        {
+            fs::remove_file(pending)
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Resolve one clip's game: an exact ledger line wins, otherwise the clip's
@@ -147,9 +184,28 @@ fn commit_unix_seconds(file_name: &str) -> Option<u64> {
 fn load_unlocked(state: &Path) -> io::Result<Vec<(String, String)>> {
     let path = state.join(FILE);
     let mut text = String::new();
-    match fs::File::open(&path) {
-        Ok(mut file) => {
-            file.read_to_string(&mut text)?;
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => {
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.nlink() != 1 {
+                // This is not recoverable malformed labeling data. Refuse to
+                // replace shared or special files when recording a new label.
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "replay clip game ledger is not private regular storage",
+                ));
+            }
+            if metadata.len() > MAX_FILE_BYTES {
+                return Err(oversized_ledger());
+            }
+            file.take(MAX_FILE_BYTES + 1).read_to_string(&mut text)?;
+            if text.len() as u64 > MAX_FILE_BYTES {
+                return Err(oversized_ledger());
+            }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
@@ -161,7 +217,20 @@ fn load_unlocked(state: &Path) -> io::Result<Vec<(String, String)>> {
             "replay clip game ledger header is invalid",
         ));
     }
-    Ok(lines.filter_map(parse).collect())
+    let mut entries = lines
+        .rev()
+        .filter_map(parse)
+        .take(MAX_ENTRIES)
+        .collect::<Vec<_>>();
+    entries.reverse();
+    Ok(entries)
+}
+
+fn oversized_ledger() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "replay clip game ledger exceeds its file bound",
+    )
 }
 
 fn parse(line: &str) -> Option<(String, String)> {
@@ -170,30 +239,49 @@ fn parse(line: &str) -> Option<(String, String)> {
     if !is_storable_file_name(file_name) {
         return None;
     }
-    let game = unescape(fields.next()?);
-    if fields.next().is_some() {
+    let escaped_game = fields.next()?;
+    if escaped_game.len() > MAX_GAME_NAME_BYTES * 2 || fields.next().is_some() {
+        return None;
+    }
+    let game = unescape(escaped_game);
+    if game.len() > MAX_GAME_NAME_BYTES {
         return None;
     }
     Some((file_name.to_owned(), game))
 }
 
 fn save_unlocked(state: &Path, entries: &[(String, String)]) -> io::Result<()> {
-    fs::create_dir_all(state)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(state)?;
+    if !fs::symlink_metadata(state)?.is_dir() {
+        return Err(io::Error::other("replay state is not a directory"));
+    }
     let path = state.join(FILE);
-    let temporary = state.join(format!(".{FILE}.tmp"));
+    // One exclusive pending slot bounds what an interrupted write can leave.
+    let temporary = state.join(PENDING_FILE);
     let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
         .write(true)
+        .create_new(true)
         .mode(0o600)
         .open(&temporary)?;
-    writeln!(file, "{HEADER}")?;
-    for (name, game) in entries {
-        writeln!(file, "{name}\t{}", escape(game))?;
+    let result = (|| {
+        writeln!(file, "{HEADER}")?;
+        for (name, game) in entries {
+            writeln!(file, "{name}\t{}", escape(game))?;
+        }
+        if file.metadata()?.len() > MAX_FILE_BYTES {
+            return Err(oversized_ledger());
+        }
+        file.sync_all()?;
+        fs::rename(&temporary, &path)?;
+        super::replay_store::sync_directory(state)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    file.sync_all()?;
-    fs::rename(&temporary, &path)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+    result
 }
 
 #[cfg(test)]
@@ -273,6 +361,158 @@ extra\tcolumns\there\n\
         assert_eq!(loaded.first().unwrap().0, "clip-8.mkv");
         assert_eq!(loaded.last().unwrap().0, "clip-519.mkv");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn loading_retains_only_newest_entries() {
+        use std::fmt::Write as _;
+        let root = temp_state("read-bound");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut text = format!("{}\n", super::HEADER);
+        for index in 0..520 {
+            writeln!(text, "clip-{index}.mkv\tGame").unwrap();
+        }
+        text.push_str("malformed\n");
+        std::fs::write(root.join(super::FILE), text).unwrap();
+        let loaded = games(&root);
+        assert_eq!(loaded.len(), 512);
+        assert_eq!(loaded[0].0, "clip-8.mkv");
+        assert_eq!(loaded[511].0, "clip-519.mkv");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_ledger_is_unavailable_and_next_record_recovers() {
+        let root = temp_state("file-bound");
+        record(&root, "old.mkv", "Old game").unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.join(super::FILE))
+            .unwrap();
+        file.set_len(8 * 1024 * 1024 + 1).unwrap();
+        drop(file);
+        assert_eq!(games(&root), Vec::<(String, String)>::new());
+        record(&root, "new.mkv", "New game").unwrap();
+        assert_eq!(games(&root), vec![("new.mkv".into(), "New game".into())]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn linked_ledger_is_not_read_or_replaced() {
+        let root = temp_state("linked-ledger");
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("unrelated");
+        let original = format!("{}\nclip.mkv\tUnrelated\n", super::HEADER);
+        std::fs::write(&target, &original).unwrap();
+        std::os::unix::fs::symlink(&target, root.join(super::FILE)).unwrap();
+        assert_eq!(games(&root), Vec::<(String, String)>::new());
+        assert!(record(&root, "new.mkv", "Game").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+        assert!(root.join(super::FILE).is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preexisting_temporary_links_are_never_truncated() {
+        for hardlink in [false, true] {
+            let root = temp_state("temporary-link");
+            std::fs::create_dir_all(&root).unwrap();
+            let target = root.join("unrelated");
+            std::fs::write(&target, "preserve this file").unwrap();
+            let temporary = root.join(format!(".{}.tmp", super::FILE));
+            if hardlink {
+                std::fs::hard_link(&target, &temporary).unwrap();
+            } else {
+                std::os::unix::fs::symlink(&target, &temporary).unwrap();
+            }
+            record(&root, "new.mkv", "Game").unwrap();
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "preserve this file"
+            );
+            assert_eq!(games(&root), vec![("new.mkv".into(), "Game".into())]);
+            assert!(std::fs::symlink_metadata(&temporary).is_ok());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_attribution_links_are_never_removed_or_truncated() {
+        use std::os::unix::fs::PermissionsExt;
+        for hardlink in [false, true] {
+            let root = temp_state("pending-link");
+            std::fs::create_dir_all(&root).unwrap();
+            let target = root.join("unrelated");
+            std::fs::write(&target, b"preserve this file").unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let pending = root.join(super::PENDING_FILE);
+            if hardlink {
+                std::fs::hard_link(&target, &pending).unwrap();
+            } else {
+                std::os::unix::fs::symlink(&target, &pending).unwrap();
+            }
+            super::recover_interrupted_write(&root).unwrap();
+            assert!(record(&root, "new.mkv", "Game").is_err());
+            assert_eq!(std::fs::read(&pending).unwrap(), b"preserve this file");
+            assert_eq!(std::fs::read(&target).unwrap(), b"preserve this file");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn oversized_game_name_does_not_replace_existing_attribution() {
+        let root = temp_state("name-bound");
+        record(&root, "clip.mkv", "Original").unwrap();
+        assert!(record(&root, "clip.mkv", &"x".repeat(4097)).is_err());
+        assert_eq!(games(&root), vec![("clip.mkv".into(), "Original".into())]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn maximum_escaped_labels_round_trip_in_private_storage() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_state("maximum-labels");
+        let game = "\\".repeat(super::MAX_GAME_NAME_BYTES);
+        let entries = (0..super::MAX_ENTRIES)
+            .map(|index| (format!("clip-{index}.mkv"), game.clone()))
+            .collect::<Vec<_>>();
+        super::save_unlocked(&root, &entries).unwrap();
+        assert_eq!(games(&root), entries);
+        let metadata = std::fs::metadata(root.join(super::FILE)).unwrap();
+        assert!(metadata.len() <= super::MAX_FILE_BYTES);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_commit_removes_only_its_own_temporary_file() {
+        let root = temp_state("failed-commit");
+        std::fs::create_dir_all(root.join(super::FILE)).unwrap();
+        let unrelated = root.join("unrelated.tmp");
+        std::fs::write(&unrelated, "preserve").unwrap();
+        assert!(super::save_unlocked(&root, &[("clip.mkv".into(), "Game".into())]).is_err());
+        assert!(root.join(super::FILE).is_dir());
+        assert_eq!(std::fs::read_to_string(unrelated).unwrap(), "preserve");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hardlinked_ledger_is_not_read_or_replaced() {
+        let root = temp_state("hardlinked-ledger");
+        record(&root, "clip.mkv", "Original").unwrap();
+        let target = root.join("unrelated");
+        std::fs::hard_link(root.join(super::FILE), &target).unwrap();
+        let original = std::fs::read(&target).unwrap();
+        assert_eq!(games(&root), Vec::<(String, String)>::new());
+        assert!(record(&root, "new.mkv", "Game").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert_eq!(std::fs::read(root.join(super::FILE)).unwrap(), original);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

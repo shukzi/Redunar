@@ -1,6 +1,7 @@
 use redunar_core::{CpuSnapshot, GpuSnapshot, HardwareProbe, ProbeError, SystemSnapshot};
 use redunar_nvidia_nvml::{NvidiaDiagnostics, NvidiaNvml, NvidiaReadiness, is_nvidia};
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 #[path = "linux_drm.rs"]
@@ -19,7 +20,7 @@ pub struct LinuxHardwareProbe {
 
 /// Stateful aggregate CPU utilization sampler backed by `/proc/stat`.
 ///
-/// Sampling performs one small file read. The caller controls the interval;
+/// Sampling reads only the bounded aggregate row. The caller controls the interval;
 /// Redunar's live monitor normally calls this once per second.
 #[derive(Clone, Debug)]
 pub struct LinuxCpuUtilizationSampler {
@@ -89,7 +90,16 @@ impl LinuxCpuUtilizationSampler {
     /// or wrap, the new reading becomes the baseline for the next call.
     #[must_use]
     pub fn sample(&mut self) -> Option<f64> {
-        let contents = fs::read_to_string(&self.stat_path).ok()?;
+        // The kernel emits the aggregate row first. Do not read every CPU and
+        // interrupt counter on each tick. One extra byte detects oversized rows.
+        let file = fs::File::open(&self.stat_path).ok()?;
+        let mut contents = String::new();
+        BufReader::new(file.take(4097))
+            .read_line(&mut contents)
+            .ok()?;
+        if contents.len() > 4096 {
+            return None;
+        }
         let current = parse_cpu_times(&contents)?;
         let previous = self.previous.replace(current)?;
 
@@ -514,7 +524,10 @@ fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
 }
 
 fn read_number(path: impl AsRef<Path>) -> Option<f64> {
-    read_trimmed(path)?.parse().ok()
+    read_trimmed(path)?
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
 }
 
 fn read_u64(path: impl AsRef<Path>) -> Option<u64> {
@@ -812,6 +825,82 @@ mod tests {
         let mut sampler = LinuxCpuUtilizationSampler::new(fixture.root.join("proc"));
         assert_eq!(sampler.sample(), None);
         assert_eq!(sampler.sample(), None);
+    }
+
+    #[test]
+    fn cpu_sampler_ignores_unrelated_stat_rows() {
+        let fixture = amd_fixture();
+        fixture.write("proc/stat", "cpu 100 0 0 100\n");
+        let mut sampler = LinuxCpuUtilizationSampler::new(fixture.root.join("proc"));
+        assert_eq!(sampler.sample(), None);
+
+        // Only the aggregate row is needed. Unrelated rows need not decode.
+        let mut contents = b"cpu 130 0 0 110\n".to_vec();
+        contents.extend(vec![0xff; 128 * 1024]);
+        fs::write(fixture.root.join("proc/stat"), contents).unwrap();
+        assert_eq!(sampler.sample(), Some(75.0));
+    }
+
+    #[test]
+    fn cpu_sampler_rejects_oversized_row_without_losing_baseline() {
+        let fixture = amd_fixture();
+        fixture.write("proc/stat", "cpu 100 0 0 100\n");
+        let mut sampler = LinuxCpuUtilizationSampler::new(fixture.root.join("proc"));
+        assert_eq!(sampler.sample(), None);
+
+        fixture.write(
+            "proc/stat",
+            &format!("cpu 110 0 0 110{}\n", " ".repeat(4096)),
+        );
+        assert_eq!(sampler.sample(), None);
+        fixture.write("proc/stat", "cpu 130 0 0 110\n");
+        assert_eq!(sampler.sample(), Some(75.0));
+    }
+
+    #[test]
+    fn telemetry_sampler_rejects_nonfinite_sensors_and_recovers() {
+        let fixture = amd_fixture();
+        let mut sampler = fixture.telemetry_sampler();
+        for value in ["NaN\n", "inf\n", "-inf\n", "1e999\n"] {
+            fixture.write("sys/class/hwmon/hwmon4/temp1_input", value);
+            fixture.write("sys/class/drm/card1/device/hwmon/hwmon2/temp1_input", value);
+            fixture.write("sys/class/drm/card1/device/hwmon/hwmon2/freq1_input", value);
+            fixture.write(
+                "sys/class/drm/card1/device/hwmon/hwmon2/power1_average",
+                value,
+            );
+            fixture.write("sys/class/drm/card1/device/gpu_busy_percent", value);
+            for snapshot in [fixture.probe().snapshot().unwrap(), sampler.sample()] {
+                assert_eq!(snapshot.cpu.temperature_celsius, None);
+                let gpu = &snapshot.gpus[0];
+                assert_eq!(gpu.temperature_celsius, None);
+                assert_eq!(gpu.clock_mhz, None);
+                assert_eq!(gpu.power_watts, None);
+                assert_eq!(gpu.utilization_percent, None);
+                assert_eq!(gpu.vram_total_bytes, Some(17_179_869_184));
+            }
+        }
+
+        fixture.write("sys/class/hwmon/hwmon4/temp1_input", "51000\n");
+        fixture.write(
+            "sys/class/drm/card1/device/hwmon/hwmon2/temp1_input",
+            "62000\n",
+        );
+        fixture.write(
+            "sys/class/drm/card1/device/hwmon/hwmon2/freq1_input",
+            "2200000000\n",
+        );
+        fixture.write(
+            "sys/class/drm/card1/device/hwmon/hwmon2/power1_average",
+            "180000000\n",
+        );
+        fixture.write("sys/class/drm/card1/device/gpu_busy_percent", "81\n");
+        let snapshot = sampler.sample();
+        assert_eq!(snapshot.cpu.temperature_celsius, Some(51.0));
+        assert_eq!(snapshot.gpus[0].temperature_celsius, Some(62.0));
+        assert_eq!(snapshot.gpus[0].clock_mhz, Some(2200.0));
+        assert_eq!(snapshot.gpus[0].power_watts, Some(180.0));
+        assert_eq!(snapshot.gpus[0].utilization_percent, Some(81.0));
     }
 
     #[test]

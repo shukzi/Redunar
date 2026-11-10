@@ -20,6 +20,7 @@ CPU, GPU, memory, drops, and backpressure separately.
 ## Collection rules
 
 - Discover sensors once and sample cached paths at 1 Hz.
+- Read only the aggregate CPU row from `/proc/stat`, with a 4 KiB row limit.
 - Scan game processes on a bounded slower cadence or on lifecycle events.
 - Publish one bounded latest snapshot; do not enqueue one UI callback per sample.
 - Keep frame telemetry, media queues, worker counts, file sizes, records, and

@@ -254,23 +254,30 @@ impl RedunarService {
     /// # Errors
     /// Fails closed when process ownership cannot be safely established.
     pub fn for_tauri() -> std::io::Result<Self> {
-        let lease = session_ownership::SessionLease::acquire(&default_state_directory())?;
-        let mut service = Self::default();
+        Self::default().claim_tauri_ownership()
+    }
+
+    fn claim_tauri_ownership(mut self) -> std::io::Result<Self> {
+        let lease = session_ownership::SessionLease::acquire(&self.state_directory)?;
         // Older installed builds do not take this lock. Retain their live
         // socket as an additional compatibility guard, never as acquisition.
-        let legacy_owner = service
+        let legacy_owner = self
             .replay_control_path
             .as_ref()
             .is_some_and(|path| std::os::unix::net::UnixStream::connect(path).is_ok());
-        service.read_only = lease.is_none() || legacy_owner;
-        if service.read_only {
-            service.replay_control_path = None;
+        self.read_only = lease.is_none() || legacy_owner;
+        if self.read_only {
+            self.replay_control_path = None;
+        } else if let Err(error) =
+            replay_clip_games::recover_interrupted_write(&self.state_directory)
+        {
+            log_op!("Redunar could not recover an interrupted Replay metadata write: {error}");
         }
-        service.runtime = Arc::new(ServiceRuntime {
+        self.runtime = Arc::new(ServiceRuntime {
             _ownership: lease,
             ..ServiceRuntime::default()
         });
-        Ok(service)
+        Ok(self)
     }
 
     #[must_use]
@@ -2048,6 +2055,75 @@ mod tests {
         assert!(secondary.rename_replay_clip(name, "No.mkv").is_err());
         assert!(secondary.set_replay_clip_trashed(name, true).is_err());
         assert!(secondary.set_replay_clip_favorite(name, true).is_err());
+    }
+
+    #[test]
+    fn unreadable_attribution_does_not_hide_recordings_and_recovers() {
+        let fixture = Fixture::new();
+        let state = fixture.root.join("state");
+        let service = RedunarService::with_state_directory(&state);
+        service
+            .set_replay_save_parent(Some(fixture.root.clone()))
+            .unwrap();
+        let settings = service.load_game_catalog().unwrap().global_profile.replay;
+        let store = ReplayClipStore::open(
+            service.replay_save_directory().unwrap(),
+            ReplayBudget::from_settings(settings),
+        )
+        .unwrap();
+        let name = "redunar-replay-1-000000001-1.mkv";
+        let path = store.directory().join(name);
+        fs::write(&path, b"preserve recording").unwrap();
+        fs::write(state.join("replay-clip-games-v1.tsv"), "invalid ledger").unwrap();
+        let entries = service.replay_clip_inventory().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name, name);
+        assert_eq!(entries[0].game_name, None);
+        service.record_clip_game(name, "Recovered game").unwrap();
+        let entries = service.replay_clip_inventory().unwrap();
+        assert_eq!(entries[0].game_name.as_deref(), Some("Recovered game"));
+        assert_eq!(fs::read(&path).unwrap(), b"preserve recording");
+    }
+
+    #[test]
+    fn next_state_owner_recovers_interrupted_attribution_write() {
+        let fixture = Fixture::new();
+        let state = fixture.root.join("state");
+        let open = || {
+            RedunarService::with_state_directory(&state)
+                .claim_tauri_ownership()
+                .unwrap()
+        };
+        let name = "redunar-replay-1-000000001-1.mkv";
+        let owner = open();
+        assert!(!owner.is_read_only());
+        owner.record_clip_game(name, "Committed game").unwrap();
+        let pending = state.join(".replay-clip-games-v1.tsv.pending");
+        fs::write(&pending, b"interrupted write").unwrap();
+        fs::set_permissions(&pending, fs::Permissions::from_mode(0o600)).unwrap();
+        let unrelated = state.join("unrelated.tmp");
+        fs::write(&unrelated, b"preserve this file").unwrap();
+
+        let secondary = open();
+        assert!(secondary.is_read_only());
+        assert!(owner.record_clip_game(name, "Do not overwrite").is_err());
+        assert_eq!(fs::read(&pending).unwrap(), b"interrupted write");
+        drop(owner);
+
+        let successor = open();
+        assert!(!successor.is_read_only());
+        assert!(!pending.exists());
+        assert_eq!(fs::read(&unrelated).unwrap(), b"preserve this file");
+        assert_eq!(
+            replay_clip_games::games(&state),
+            vec![(name.into(), "Committed game".into())]
+        );
+        successor.record_clip_game(name, "Recovered game").unwrap();
+        assert!(!pending.exists());
+        assert_eq!(
+            replay_clip_games::games(&state),
+            vec![(name.into(), "Recovered game".into())]
+        );
     }
 
     #[test]
