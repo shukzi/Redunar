@@ -2051,6 +2051,34 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_attribution_does_not_hide_recordings_and_recovers() {
+        let fixture = Fixture::new();
+        let state = fixture.root.join("state");
+        let service = RedunarService::with_state_directory(&state);
+        service
+            .set_replay_save_parent(Some(fixture.root.clone()))
+            .unwrap();
+        let settings = service.load_game_catalog().unwrap().global_profile.replay;
+        let store = ReplayClipStore::open(
+            service.replay_save_directory().unwrap(),
+            ReplayBudget::from_settings(settings),
+        )
+        .unwrap();
+        let name = "redunar-replay-1-000000001-1.mkv";
+        let path = store.directory().join(name);
+        fs::write(&path, b"preserve recording").unwrap();
+        fs::write(state.join("replay-clip-games-v1.tsv"), "invalid ledger").unwrap();
+        let entries = service.replay_clip_inventory().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name, name);
+        assert_eq!(entries[0].game_name, None);
+        service.record_clip_game(name, "Recovered game").unwrap();
+        let entries = service.replay_clip_inventory().unwrap();
+        assert_eq!(entries[0].game_name.as_deref(), Some("Recovered game"));
+        assert_eq!(fs::read(&path).unwrap(), b"preserve recording");
+    }
+
+    #[test]
     fn service_resolves_global_and_per_game_overlay_visibility() {
         let fixture = Fixture::new();
         let executable = fixture.root.join("game-bin");

@@ -49,6 +49,8 @@ Pure ALSA output capture and game-only audio isolation are unsupported claims.
 ## Failure behavior
 
 - Missing sensors affect only their own values.
+- Non-finite sysfs measurements remain unavailable. Cached sensors recover when
+  valid readings return.
 - Device loss clears stale readings and blocks unsafe frame reuse.
 - Multiple or unidentified render GPUs remain unavailable until identity is
   unambiguous.

@@ -145,7 +145,7 @@ fn parse(line: &str) -> Option<SessionRecord> {
     })
 }
 fn parse_opt(value: &str) -> Option<f64> {
-    (value != "-").then(|| value.parse().ok()).flatten()
+    value.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 fn save_unlocked(state: &Path, records: &[SessionRecord]) -> io::Result<()> {
     fs::DirBuilder::new()
@@ -235,7 +235,9 @@ fn unescape(value: &str) -> String {
     output
 }
 fn format_opt(value: Option<f64>) -> String {
-    value.map_or_else(|| "-".to_owned(), |value| format!("{value:.4}"))
+    value
+        .filter(|value| value.is_finite())
+        .map_or_else(|| "-".to_owned(), |value| format!("{value:.4}"))
 }
 
 fn parse_timeline(value: &str) -> Vec<SessionTelemetrySample> {
@@ -394,5 +396,35 @@ mod tests {
         assert_eq!(records[0].id, 7);
         assert_eq!(records[63].id, 70);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn historical_nonfinite_metrics_remain_unavailable_without_losing_record() {
+        let record =
+            super::parse("1\tGame\t42\t60\tNaN\tinf\t-inf\t16666667\t1,NaN,inf,-inf,1e999,25,75")
+                .unwrap();
+        assert_eq!(record.game, "Game");
+        assert_eq!(record.average_fps, None);
+        assert_eq!(record.one_percent_low_fps, None);
+        assert_eq!(record.point_one_percent_low_fps, None);
+        assert_eq!(record.frame_intervals_ns, vec![16_666_667]);
+        assert_eq!(record.timeline.len(), 1);
+        let sample = &record.timeline[0];
+        assert_eq!(sample.fps, None);
+        assert_eq!(sample.frame_time_ms, None);
+        assert_eq!(sample.cpu_temperature_celsius, None);
+        assert_eq!(sample.gpu_temperature_celsius, None);
+        assert_eq!(sample.cpu_utilization_percent, Some(25.0));
+        assert_eq!(sample.gpu_utilization_percent, Some(75.0));
+    }
+
+    #[test]
+    fn nonfinite_metrics_use_existing_missing_value_encoding() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(super::format_opt(Some(value)), "-");
+        }
+        assert_eq!(super::format_opt(Some(-12.5)), "-12.5000");
+        assert_eq!(super::parse_opt("-12.5000"), Some(-12.5));
+        assert_eq!(super::format_opt(Some(0.0)), "0.0000");
     }
 }
