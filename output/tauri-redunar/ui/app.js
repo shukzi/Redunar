@@ -96,7 +96,7 @@ const refreshFeedback=createRefreshFeedback({changed:()=>updateObservedElements(
 window.addEventListener('pagehide',()=>refreshFeedback.clear());
 let observedSaveRevision = null, loadedClipRevision = null;
 let lastSlowRuntimeRefresh = 0;
-let diagnosticsGeneration = 0, diagnosticsFailure = null;
+let diagnosticsGeneration = 0, diagnosticsFailed = false;
 const paintedDiagnostics = new WeakMap(), diagnosticsTransitions = new WeakSet();
 let shortcutStatus = {state:'Inactive',message:null,last_action:null};
 let playerDuration = 0, playerPosition = 0, pendingSeek = null, trimStart = 0, trimEnd = 0;
@@ -769,9 +769,9 @@ function updateDiagnosticsPanel() {
   return;
  }
  const feedback=$('.diagnostics-feedback',panel);
- const text=diagnosticsFailure?(diagnostics?'Diagnostics refresh failed. Showing the last available results. Select Refresh to try again.':'Diagnostics could not load. Select Refresh to try again.'):(diagnostics?'':'Loading diagnostics…');
+ const text=diagnosticsFailed?(diagnostics?'Diagnostics refresh failed. Showing the last available results. Select Refresh to try again.':'Diagnostics could not load. Select Refresh to try again.'):(diagnostics?'':'Loading diagnostics…');
  if(feedback.textContent!==text)feedback.textContent=text;
- feedback.classList.toggle('diagnostics-error',Boolean(diagnosticsFailure));
+ feedback.classList.toggle('diagnostics-error',diagnosticsFailed);
  if(paintedDiagnostics.get(panel)===diagnostics)return;
  const {rows,details:body}=diagnosticsSnapshotView(diagnostics);
  const grid=$('.diagnostics-grid',panel);
@@ -787,10 +787,10 @@ async function refreshDiagnostics() {
  await refreshFeedback.run('diagnostics',async()=>{
   try {
    diagnostics=await call('diagnostics_snapshot',{refreshCapabilities:true});
-   diagnosticsFailure=null;
+   diagnosticsFailed=false;
    return true;
   } catch {
-   diagnosticsFailure='manual';
+   diagnosticsFailed=true;
    return false;
   }
  });
@@ -1362,10 +1362,8 @@ async function readRuntime() {
  if(slowResults){
   const [diagnosticsResult,displayResult]=await slowResults;
   if(readDiagnostics&&diagnosticsReadGeneration===diagnosticsGeneration){
-   if(diagnosticsResult.status==='fulfilled'){
-    diagnostics=diagnosticsResult.value;
-    if(diagnosticsFailure==='poll')diagnosticsFailure=null;
-   }else if(!diagnosticsFailure)diagnosticsFailure='poll';
+   diagnosticsFailed=diagnosticsResult.status==='rejected';
+   if(!diagnosticsFailed)diagnostics=diagnosticsResult.value;
   }
   displayCapability=displayResult.status==='fulfilled'?displayResult.value:displayCapability;
  }

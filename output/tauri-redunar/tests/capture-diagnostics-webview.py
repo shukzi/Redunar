@@ -97,13 +97,21 @@ try:
   check(q('#diagnostic-capture-received').textContent==='401'&&q('#diagnostic-capture-dropped').textContent==='4','independent session data');
  """)
  snap('diagnostics-refresh-failure')
- js("bridge.failDiagnostics=false;bridge.holdDiagnosticsPoll=true;bridge.clockOffset=12000")
+ js("bridge.failDiagnostics=false;bridge.monitorSamples=19;bridge.clockOffset=12000")
+ wait_for("q('[data-diagnostics-snapshot-row] b').textContent==='19'")
+ test('A successful background poll clears the manual refresh error',"""
+  check(!q('.diagnostics-feedback').textContent,'fresh results clear the failure banner');
+  check(refreshCalls()===priorRefreshes+1,'no additional manual refresh');
+  check(document.activeElement===refreshControl,'recovery keeps focus');
+ """)
+ snap('diagnostics-poll-recovered')
+ js("bridge.holdDiagnosticsPoll=true;bridge.clockOffset=24000")
  wait_for("typeof bridge.releaseDiagnosticsPoll==='function'")
  js("bridge.monitorSamples=25;refreshControl.click()")
  wait_for("q('[data-diagnostics-snapshot-row] b').textContent==='25'&&!refreshControl.hasAttribute('aria-disabled')")
  js("bridge.holdDiagnosticsPoll=false;bridge.releaseDiagnosticsPoll()");pump(400)
- test('Retry clears the error and an older background result cannot overwrite it',"""
-  check(!q('.diagnostics-feedback').textContent,'failure cleared');
+ test('An older background result cannot overwrite a manual refresh',"""
+  check(!q('.diagnostics-feedback').textContent,'no stale failure');
   check(q('[data-diagnostics-snapshot-row] b').textContent==='25','new result preserved');
   bridge.failSession=true;
  """)

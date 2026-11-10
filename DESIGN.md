@@ -135,7 +135,8 @@ separators as Session behavior. Debug logging omits the off status and its
 empty space; restart instructions, active status, and failures remain visible.
 Diagnostics starts collapsed. Its header stays in place as the panel opens or
 closes. Refresh updates the panel in place. If a refresh fails, keep the last
-available snapshot and leave Refresh available for retry.
+available snapshot and leave Refresh available for retry. Clear the error
+when either a manual refresh or a background poll returns a new snapshot.
 
 ## Shared controls and layout
 
