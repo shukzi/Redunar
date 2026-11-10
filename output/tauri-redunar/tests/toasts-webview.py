@@ -15,11 +15,26 @@ window.__TAURI_INTERNALS__.invoke=async(command,args={})=>command==='check_for_u
 window.fixtureToast=(message,options)=>q('#toast')[Symbol.for('redunar.toast-owner')](message,options);
 window.liveToasts=()=>qa('.toast-card:not([aria-hidden="true"])');
 window.clearToasts=()=>liveToasts().forEach(card=>card.querySelector('button').click());
+window.resumeToastClock=()=>{
+ q('#workspace').focus({preventScroll:true});
+ q('#toast').dispatchEvent(new PointerEvent('pointerleave',{pointerType:'mouse'}));
+ window.dispatchEvent(new Event('focus'));
+};
 window.exitFrame=(card,time=100)=>{
  const animation=card.getAnimations()[0];check(animation,'exit animation');animation.pause();animation.currentTime=time;return animation;
 };
 """
 manager.add_script(WebKit2.UserScript.new(extra,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
+
+def pixels_below_front(name, bounds):
+    frame = GdkPixbuf.Pixbuf.new_from_file(str(ARTIFACTS / (name + '.png')))
+    scale_x, scale_y = frame.get_width() / bounds['width'], frame.get_height() / bounds['height']
+    left, right = round((bounds['left'] + 20) * scale_x), round((bounds['right'] - 20) * scale_x)
+    top = round((bounds['bottom'] + 2) * scale_y)
+    assert top < frame.get_height() and left < right, bounds
+    stride, channels, pixels = frame.get_rowstride(), frame.get_n_channels(), frame.get_pixels()
+    return [pixels[row * stride + left * channels:row * stride + right * channels]
+            for row in range(top, frame.get_height())]
 
 try:
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#settings')
@@ -48,6 +63,62 @@ try:
     test('The last toast retains its normal downward dismissal', "window.last=liveToasts()[0];last.querySelector('button').click();window.lastExit=exitFrame(last,100);check(last.getBoundingClientRect().bottom>q('#toast').getBoundingClientRect().bottom,'last card leaves toward edge');check(lastExit.effect.getTiming().duration===200,'bounded exit');lastExit.finish();")
     pump(80)
     test('The viewport clears completely after the last exit', "check(q('#toast').hidden&&!q('.toast-card'),'no empty viewport or lingering surface');")
+    js("fixtureToast('A toast that starts leaving alone',{duration:10000});resumeToastClock()")
+    pump(650)
+    js("""
+     window.leaving=liveToasts()[0];leaving.querySelector('button').click();
+     window.leavingMotion=exitFrame(leaving,100);
+     fixtureToast('A new toast arrives during the exit',{duration:10000});
+    """)
+    pump(850)
+    bounds = json.loads(js("""
+     const front=liveToasts()[0].getBoundingClientRect();
+     check(leaving.getBoundingClientRect().bottom>front.bottom+2,'the previous toast is still below the front');
+     return JSON.stringify({left:front.left,right:front.right,bottom:front.bottom,width:innerWidth,height:innerHeight});
+    """))
+    snap('replacement-overlap')
+    js("leavingMotion.finish()")
+    wait_for("!leaving.isConnected")
+    snap('replacement-reference')
+    assert pixels_below_front('replacement-overlap', bounds) == pixels_below_front('replacement-reference', bounds), 'A departing toast painted below its replacement'
+    checks.append('A toast already leaving cannot paint beneath its replacement')
+    js('clearToasts()');pump(250)
+    js("fixtureToast('Countdown in progress',{duration:4000});resumeToastClock()")
+    wait_for("liveToasts()[0]?.querySelector('.toast-progress').getAnimations().length===1")
+    pump(650)
+    test('An unrelated notification does not restart a running countdown',"""
+     const bar=liveToasts()[0].querySelector('.toast-progress');
+     const countdown=bar.getAnimations()[0];check(countdown,'countdown is running');
+     fixtureToast('Another notification',{duration:10000});
+     check(bar.getAnimations().includes(countdown),'same countdown animation remains active');
+     clearToasts();
+    """)
+    pump(250)
+    js("fixtureToast('Dismiss a partially completed countdown',{duration:4000});resumeToastClock()")
+    wait_for("liveToasts()[0]?.querySelector('.toast-progress').getAnimations().length===1")
+    pump(650)
+    test('The countdown stays at its painted width while a toast leaves',"""
+     const card=liveToasts()[0],bar=card.querySelector('.toast-progress');
+     const fraction=()=>new DOMMatrix(getComputedStyle(bar).transform).a;
+     const before=fraction();check(before>.1&&before<.95,'countdown is partway through');
+     card.querySelector('button').click();
+     const exit=exitFrame(card,100);
+     check(Math.abs(fraction()-before)<.015,'countdown does not jump on exit');
+     exit.finish();
+    """)
+    pump(80)
+    js("fixtureToast('Keep this notification',{duration:10000})")
+    pump(650)
+    js("fixtureToast('Dismiss before the entrance finishes',{duration:10000})")
+    wait_for("liveToasts().length===2&&Number(getComputedStyle(liveToasts().at(-1)).opacity)>.15&&liveToasts().at(-1).getBoundingClientRect().bottom>q('#toast').getBoundingClientRect().bottom+2")
+    test('An entering toast cannot leave a strip beneath the remaining stack',"""
+     const card=liveToasts().at(-1);
+     card.querySelector('button').click();
+     const exit=exitFrame(card,100);
+     check(card.getBoundingClientRect().bottom<=q('#toast').getBoundingClientRect().bottom+1,'outgoing card stays above the stack baseline');
+     exit.finish();clearToasts();
+    """)
+    pump(250)
     route('library');js("click('[data-action=add-game]');fixtureToast('Dialog notification',{duration:10000})");pump(1000)
     test('Dialog notifications stay in the top layer', "check(q('#toast').parentElement===q('#dialog'),'dialog owns notification');click('#dialog [data-close]');")
     wait_for("q('#toast').parentElement===document.body")
@@ -61,7 +132,12 @@ try:
     Gtk.Settings.get_default().set_property('gtk-enable-animations',False)
     wait_for("matchMedia('(prefers-reduced-motion: reduce)').matches")
     pump(250)
-    test('Reduced motion removes stacked and last notifications immediately', "fixtureToast('Reduced one');fixtureToast('Reduced two');clearToasts();check(q('#toast').hidden&&!q('.toast-card'),'no retained reduced-motion exit');check(bridge.errors.length===0,bridge.errors.join('; '));")
+    test('Reduced motion removes stacked and last notifications immediately', """
+     fixtureToast('Reduced one');fixtureToast('Reduced two');clearToasts();
+     const retained=qa('.toast-card').map(card=>({text:card.textContent,hidden:card.getAttribute('aria-hidden'),motions:card.getAnimations().length}));
+     check(q('#toast').hidden&&!retained.length,'retained cards: '+JSON.stringify(retained));
+     check(bridge.errors.length===0,bridge.errors.join('; '));
+    """)
     (ARTIFACTS/'toasts-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
     print(f'PASS: {len(checks)} toast checks. Screenshots: {ARTIFACTS}')
 finally:

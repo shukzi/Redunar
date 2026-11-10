@@ -3,6 +3,7 @@ import {icon} from './icons.mjs';
 const labels={
   history:{ready:'Refresh history',pending:'Refreshing history…',success:'History refreshed',error:'History refresh failed'},
   inputs:{ready:'Refresh inputs',pending:'Refreshing…',success:'Inputs refreshed',error:'Input refresh failed'},
+  diagnostics:{ready:'Refresh',pending:'Refreshing diagnostics…',success:'Diagnostics refreshed',error:'Diagnostics refresh failed'},
 };
 export function refreshButtonContent(key) {
   return `<span class="refresh-symbol" data-refresh-symbol aria-hidden="true">${icon('refresh')}</span><span class="refresh-label">${labels[key].ready}</span><span class="refresh-status" aria-live="polite" aria-atomic="true"></span>`;

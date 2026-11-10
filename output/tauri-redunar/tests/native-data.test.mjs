@@ -311,8 +311,10 @@ test('Discovery hides Redunar entries and disables games already in the catalog'
 test('Runtime polling keeps expensive diagnostics and display probing off the one-second path',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  assert.match(source,/const slowRefresh=Date\.now\(\)-lastSlowRuntimeRefresh>=10000/);
- assert.match(source,/Promise\.allSettled\(\[call\('diagnostics_snapshot'\),call\('replay_display_capability'\)\]\)/);
- assert.match(source,/reload-diagnostics.*diagnostics_snapshot.*refreshCapabilities:true/);
+ assert.match(source,/const readDiagnostics=slowRefresh&&/);
+ assert.match(source,/const slowResults=slowRefresh\?Promise\.allSettled\(\[readDiagnostics\?call\('diagnostics_snapshot'\):null,call\('replay_display_capability'\)\]\)/);
+ assert.match(source,/if\(action==='reload-diagnostics'\)\{void refreshDiagnostics\(\);return;\}/);
+ assert.match(source,/call\('diagnostics_snapshot',\{refreshCapabilities:true\}\)/);
  assert.match(source,/1000:2500/);
 });
 
