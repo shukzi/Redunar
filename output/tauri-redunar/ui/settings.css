@@ -1,5 +1,7 @@
 /* Settings keeps the desktop choices together and uses one visual rhythm for
    every preference. This file follows the shared control styles in index.html. */
+/* Keep the gutter when WebKit adds a scrollbar as Diagnostics opens. */
+html[data-page="settings"] .window-content { overflow-y: scroll; }
 .settings-page{grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
 .settings-page .panel{padding:24px}
 .settings-card-heading h2,.settings-page .updates-heading h2{font-size:16px;line-height:1.4}
