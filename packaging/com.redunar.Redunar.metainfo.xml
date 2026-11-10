@@ -27,6 +27,17 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.4" date="2026-11-10">
+      <description>
+        <ul>
+          <li>Keep the Diagnostics panel steady when it opens or closes.</li>
+          <li>Keep the last Diagnostics results when a refresh fails. Clear the error when new results arrive.</li>
+          <li>Fix the line that flickered below notifications.</li>
+          <li>Ignore invalid readings in live system metrics and in History.</li>
+          <li>Clear unfinished updates to saved replay game labels at startup. Keep the previous labels and recordings.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.3" date="2026-11-09">
       <description>
         <ul>
