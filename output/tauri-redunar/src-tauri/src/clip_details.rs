@@ -109,6 +109,44 @@ pub async fn restore_replay_clips(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn confirmation_rejects_stale_expired_and_repeated_requests() {
+        use redunar_daemon::ReplayClipStore;
+        use std::time::{Duration, Instant};
+        let root =
+            std::env::temp_dir().join(format!("redunar-confirmation-{}", std::process::id()));
+        let store = ReplayClipStore::open(
+            root.clone(),
+            redunar_daemon::ReplayBudget::from_settings(redunar_core::ReplaySettings::default()),
+        )
+        .unwrap();
+        let clip = store
+            .save_matroska(&mut [0x1a, 0x45, 0xdf, 0xa3].as_slice())
+            .unwrap();
+        store
+            .set_trashed(clip.path.file_name().unwrap().to_str().unwrap(), true)
+            .unwrap();
+        let mut pending = super::PendingTrashDeletion {
+            revision: 2,
+            plan: Some((Instant::now(), store.prepare_trash_deletion(None).unwrap())),
+        };
+        assert!(pending.take_confirmed("1").is_err());
+        assert!(pending.plan.is_some());
+        assert!(pending.take_confirmed("2").is_ok());
+        assert!(pending.take_confirmed("2").is_err());
+        pending.plan = Some((
+            Instant::now() - Duration::from_secs(301),
+            store.prepare_trash_deletion(None).unwrap(),
+        ));
+        assert!(pending
+            .take_confirmed("2")
+            .err()
+            .unwrap()
+            .contains("expired"));
+        assert!(pending.plan.is_none());
+        assert!(clip.path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn trash_commands_bound_the_number_of_targets() {
         assert!(super::single_clip(vec![]).is_err());
         assert!(super::single_clip(vec!["one.mp4".into(), "two.mp4".into()]).is_err());
@@ -117,4 +155,114 @@ mod tests {
             "one.mp4"
         );
     }
+}
+
+#[derive(Clone, Default)]
+pub struct TrashDeletion(std::sync::Arc<std::sync::Mutex<PendingTrashDeletion>>);
+#[derive(Default)]
+struct PendingTrashDeletion {
+    revision: u64,
+    plan: Option<(std::time::Instant, redunar_daemon::TrashDeletionPlan)>,
+}
+impl PendingTrashDeletion {
+    fn take_confirmed(&mut self, token: &str) -> Result<redunar_daemon::TrashDeletionPlan, String> {
+        if token != self.revision.to_string() {
+            return Err("Trash confirmation changed. Review the bin again.".into());
+        }
+        let (created, plan) = self
+            .plan
+            .take()
+            .ok_or("Review the trash bin before deleting.")?;
+        if created.elapsed() > std::time::Duration::from_secs(300) {
+            return Err("Trash confirmation expired. Review the bin again.".into());
+        }
+        Ok(plan)
+    }
+}
+#[derive(Serialize)]
+pub struct TrashDeletionPreview {
+    token: String,
+    entries: Vec<TrashDeletionEntry>,
+}
+#[derive(Serialize)]
+pub struct TrashDeletionEntry {
+    file_name: String,
+    bytes: u64,
+}
+#[derive(Serialize)]
+pub struct TrashDeletionReport {
+    deleted: Vec<String>,
+    failures: Vec<(String, String)>,
+}
+
+#[tauri::command]
+pub async fn prepare_trash_deletion(
+    file_name: Option<String>,
+    pending: tauri::State<'_, TrashDeletion>,
+    exports: tauri::State<'_, crate::clip_export::ClipExports>,
+) -> Result<TrashDeletionPreview, String> {
+    crate::backend::ensure_write_access()?;
+    let pending = pending.inner().clone();
+    let exports = exports.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        exports.with_idle(|| {
+            let mut pending = pending
+                .0
+                .lock()
+                .map_err(|_| "Trash confirmation unavailable")?;
+            pending.plan = None;
+            let plan = crate::backend::service()
+                .prepare_trash_deletion(file_name.as_deref())
+                .map_err(|e| e.to_string())?;
+            pending.revision = pending
+                .revision
+                .checked_add(1)
+                .ok_or("Trash confirmation limit reached")?;
+            let preview = TrashDeletionPreview {
+                token: pending.revision.to_string(),
+                entries: plan
+                    .entries()
+                    .into_iter()
+                    .map(|(file_name, bytes)| TrashDeletionEntry { file_name, bytes })
+                    .collect(),
+            };
+            pending.plan = Some((std::time::Instant::now(), plan));
+            Ok(preview)
+        })
+    })
+    .await
+    .map_err(|_| "Preparing trash confirmation stopped unexpectedly".to_owned())?
+}
+
+#[tauri::command]
+pub async fn delete_trashed_replay_clips(
+    token: String,
+    pending: tauri::State<'_, TrashDeletion>,
+    exports: tauri::State<'_, crate::clip_export::ClipExports>,
+) -> Result<TrashDeletionReport, String> {
+    crate::backend::ensure_write_access()?;
+    let pending = pending.inner().clone();
+    let exports = exports.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        exports.with_idle(|| {
+            let plan = {
+                let mut pending = pending
+                    .0
+                    .lock()
+                    .map_err(|_| "Trash confirmation unavailable")?;
+                pending.take_confirmed(&token)?
+            };
+            let result = crate::backend::service()
+                .delete_trashed_replay_clips(plan)
+                .map_err(|e| e.to_string())?;
+            Ok(TrashDeletionReport {
+                deleted: result.deleted,
+                failures: result.failures,
+            })
+        })
+    })
+    .await
+    .map_err(|_| {
+        "Trash deletion stopped unexpectedly. Refresh the bin to check its contents.".to_owned()
+    })?
 }

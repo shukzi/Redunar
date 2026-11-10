@@ -65,6 +65,7 @@ pub struct CaptureSnapshot {
 /// Daemon-owned validation and bounded history for one capture producer.
 /// Transport code passes only successfully decoded protocol messages here.
 pub struct CaptureSessionModel {
+    pub(crate) session_statistics: crate::session_statistics::SessionFrameAccumulator,
     session_id: CaptureSessionId,
     phase: CapturePhase,
     producer_process_id: Option<u32>,
@@ -103,6 +104,7 @@ impl CaptureSessionModel {
     pub fn new(session_id: CaptureSessionId) -> Self {
         Self {
             session_id,
+            session_statistics: crate::session_statistics::SessionFrameAccumulator::default(),
             phase: CapturePhase::Armed,
             producer_process_id: None,
             capture_api: None,
@@ -353,6 +355,7 @@ impl CaptureSessionModel {
             .checked_add(frame_count)
             .ok_or_else(|| CaptureStateError::new("capture frame sequence overflowed"))?;
 
+        self.session_statistics.record(frame_intervals_ns);
         for interval in frame_intervals_ns {
             if self.history.len() == LIVE_FRAME_HISTORY_CAPACITY {
                 self.history.pop_front();
@@ -678,6 +681,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn session_totals_count_accepted_batches_once() {
+        let id = CaptureSessionId::new([77; 16]).unwrap();
+        let mut model = CaptureSessionModel::new(id);
+        model.accept_hello(42, CaptureApi::Vulkan, 1).unwrap();
+        model
+            .accept_frames(CaptureApi::Vulkan, 0, &[10_000_000; 240])
+            .unwrap();
+        assert!(
+            model
+                .accept_frames(CaptureApi::Vulkan, 0, &[20_000_000; 240])
+                .is_err()
+        );
+        assert!(model.accept_frames(CaptureApi::Vulkan, 240, &[0]).is_err());
+        model
+            .accept_frames(CaptureApi::Vulkan, 240, &[20_000_000; 240])
+            .unwrap();
+        let summary = model.session_statistics.summary();
+        assert_eq!(summary.frame_count, 480);
+        assert_eq!(summary.total_frame_time_ns, 7_200_000_000);
+        assert_eq!(summary.average_fps, Some(480.0 / 7.2));
+        assert!((model.snapshot().metrics.unwrap().average_fps - 50.0).abs() < 1e-9);
+    }
     #[test]
     fn gpu_identity_requires_current_producer_and_clears_on_completion() {
         let mut session = CaptureSessionModel::new(session_id());

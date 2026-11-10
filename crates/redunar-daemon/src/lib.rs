@@ -51,6 +51,8 @@ mod replay_streaming_tests;
 mod replay_thumbnails;
 mod replay_vulkan_video;
 mod session_history;
+mod session_statistics;
+pub use session_statistics::SessionFrameSummary;
 mod session_ownership;
 pub use crate::session_history::{SessionRecord, SessionTelemetrySample};
 
@@ -136,6 +138,7 @@ pub use replay_spool::{
 };
 pub use replay_store::{
     ReplayClipEntry, ReplayClipStore, ReplayStorageStatus, ReplayStoreError, StoredReplayClip,
+    TrashDeletionPlan, TrashDeletionResult,
 };
 pub use replay_vulkan_video::VulkanVideoH264Backend;
 
@@ -876,6 +879,32 @@ impl RedunarService {
         self.clip_mutation_store()?
             .set_trashed(file_name, trashed)
             .map_err(|e| ReplayStorageAccessError::inventory(&e))
+    }
+
+    /// Prepare a native confirmation snapshot without changing recordings.
+    ///
+    /// # Errors
+    /// Rejects read-only access and invalid bin ownership.
+    pub fn prepare_trash_deletion(
+        &self,
+        file_name: Option<&str>,
+    ) -> Result<TrashDeletionPlan, ReplayStorageAccessError> {
+        self.clip_mutation_store()?
+            .prepare_trash_deletion(file_name)
+            .map_err(|e| ReplayStorageAccessError::delete(&e))
+    }
+
+    /// Apply an exact native confirmation snapshot to the current store.
+    ///
+    /// # Errors
+    /// Rejects read-only access and changed store ownership.
+    pub fn delete_trashed_replay_clips(
+        &self,
+        plan: TrashDeletionPlan,
+    ) -> Result<TrashDeletionResult, ReplayStorageAccessError> {
+        self.clip_mutation_store()?
+            .delete_trashed(plan)
+            .map_err(|e| ReplayStorageAccessError::delete(&e))
     }
 
     /// Rename an exact owned recording, preserving persisted labeling.

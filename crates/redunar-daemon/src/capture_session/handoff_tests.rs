@@ -75,6 +75,7 @@ impl Fixture {
             })
             .unwrap();
         let shared = Arc::new(CaptureShared {
+            session_statistics: Mutex::default(),
             latest: Mutex::new(Arc::new(model.snapshot())),
             stop: AtomicBool::new(false),
             replay_exports: Mutex::new(ReplayExportQueue::default()),

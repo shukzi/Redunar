@@ -702,6 +702,7 @@ impl Engine {
                 .as_ref()
                 .and_then(|snapshot| snapshot.metrics.as_ref());
             active.record = Some(SessionRecord {
+                frame_summary: None,
                 id: 0,
                 game: active.game_name.clone(),
                 started_unix: active.started_unix,
@@ -723,6 +724,16 @@ impl Engine {
         // Cleanup always runs, even when saving the history record fails.
         let cleanup = session.end().map_err(|e| e.to_string());
         active.cleanup_done = cleanup.is_ok();
+        if let Some(record) = active.record.as_mut() {
+            let summary = session.completed_frame_statistics().unwrap_or_default();
+            let complete = summary.dropped_frame_count == 0 && summary.rejected_message_count == 0;
+            record.average_fps = complete.then_some(summary.average_fps).flatten();
+            record.one_percent_low_fps = complete.then_some(summary.one_percent_low_fps).flatten();
+            record.point_one_percent_low_fps = complete
+                .then_some(summary.point_one_percent_low_fps)
+                .flatten();
+            record.frame_summary = Some(summary);
+        }
         let history = if !active.confirmed || active.history_written {
             active.history_written = true;
             Ok(())

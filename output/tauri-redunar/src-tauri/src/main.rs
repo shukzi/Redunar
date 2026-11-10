@@ -338,6 +338,7 @@ fn main() {
             }
         })
         .manage(clip_export::ClipExports::default())
+        .manage(clip_details::TrashDeletion::default())
         .manage(hotkeys::ShortcutMonitor::default())
         .manage(playback::Playback::default())
         .manage(backend::Monitor(std::sync::Mutex::new(monitor)))
@@ -361,6 +362,8 @@ fn main() {
             runtime::microphone_inputs,
             clip_details::rename_replay_clip,
             clip_details::trashed_replay_clips,
+            clip_details::prepare_trash_deletion,
+            clip_details::delete_trashed_replay_clips,
             clip_details::move_replay_clips_to_trash,
             clip_details::restore_replay_clips,
             clip_details::set_clip_details,
