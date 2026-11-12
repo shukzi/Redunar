@@ -27,6 +27,17 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.5" date="2026-11-12">
+      <description>
+        <ul>
+          <li>Add more overlay hardware metrics and a restricted CPU power reader.</li>
+          <li>Use eight metrics in Detailed and simplify the metric controls.</li>
+          <li>Reduce OpenGL overlay rendering work at 200% scale without changing visual quality.</li>
+          <li>Add confirmed permanent deletion and Clear bin actions for trashed recordings.</li>
+          <li>Improve completed-session FPS statistics.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.4" date="2026-11-10">
       <description>
         <ul>
