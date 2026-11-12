@@ -47,6 +47,8 @@ check_component steam-wrapper \
   "$payload_root/usr/bin/redunar-steam-launch" /usr/bin/redunar-steam-launch || status=1
 check_component shortcut-helper \
   "$payload_root/usr/libexec/redunar-hotkey-helper" /usr/libexec/redunar-hotkey-helper || status=1
+cmp -s "$payload_root/usr/libexec/redunar-cpu-power-helper" /usr/libexec/redunar-cpu-power-helper || status=1
+cmp -s "$payload_root/usr/share/polkit-1/actions/com.redunar.cpu-power.policy" /usr/share/polkit-1/actions/com.redunar.cpu-power.policy || status=1
 check_component update-helper \
   "$payload_root/usr/libexec/redunar-update-helper" /usr/libexec/redunar-update-helper || status=1
 check_component update-policy \

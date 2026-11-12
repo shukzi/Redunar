@@ -84,7 +84,7 @@ fn global_profile_from_input(
         "Rose" => OverlayPalette::Rose,
         value => return Err(format!("Unsupported overlay palette: {value}")),
     };
-    let mut bits = 0u16;
+    let mut bits = 0u32;
     for metric in &input.metrics {
         bits |= match metric.as_str() {
             "FPS" => OverlayMetricSet::FPS,
@@ -95,6 +95,16 @@ fn global_profile_from_input(
             "GPU temperature" => OverlayMetricSet::GPU_TEMPERATURE,
             "CPU" => OverlayMetricSet::CPU_LOAD,
             "CPU temperature" => OverlayMetricSet::CPU_TEMPERATURE,
+            "GPU model" => OverlayMetricSet::GPU_MODEL,
+            "GPU power" => OverlayMetricSet::GPU_POWER,
+            "GPU clock" => OverlayMetricSet::GPU_CLOCK,
+            "VRAM" => OverlayMetricSet::VRAM,
+            "CPU model" => OverlayMetricSet::CPU_MODEL,
+            "CPU power" => OverlayMetricSet::CPU_POWER,
+            "CPU clock" => OverlayMetricSet::CPU_CLOCK,
+            "RAM" => OverlayMetricSet::RAM,
+            "Graphics API" => OverlayMetricSet::GRAPHICS_API,
+
             value => return Err(format!("Unsupported displayed metric: {value}")),
         };
     }
@@ -217,6 +227,15 @@ fn workspace(service: &RedunarService) -> Result<GlobalWorkspace, String> {
                 ("CPU", M::CPU_LOAD),
                 ("GPU temperature", M::GPU_TEMPERATURE),
                 ("CPU temperature", M::CPU_TEMPERATURE),
+                ("GPU model", M::GPU_MODEL),
+                ("GPU power", M::GPU_POWER),
+                ("GPU clock", M::GPU_CLOCK),
+                ("VRAM", M::VRAM),
+                ("CPU model", M::CPU_MODEL),
+                ("CPU power", M::CPU_POWER),
+                ("CPU clock", M::CPU_CLOCK),
+                ("RAM", M::RAM),
+                ("Graphics API", M::GRAPHICS_API),
             ]
             .into_iter()
             .filter(|(_, bit)| profile.overlay_metrics.contains(*bit))

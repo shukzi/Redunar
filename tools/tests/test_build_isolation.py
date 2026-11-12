@@ -11,7 +11,7 @@ import unittest
 
 TOOLS = Path(__file__).resolve().parents[1]
 ARTIFACTS = (
-    'redunar-tauri', 'redunar-steam-launch', 'redunar-hotkey-helper',
+    'redunar-tauri', 'redunar-steam-launch', 'redunar-hotkey-helper', 'redunar-cpu-power-helper',
     'redunar-update-helper', 'libredunar_capture_vulkan.so', 'libredunar_capture_opengl.so',
 )
 

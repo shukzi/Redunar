@@ -764,6 +764,8 @@ mod tests {
         let mut hardware = SystemSnapshot {
             memory: None,
             cpu: CpuSnapshot {
+                clock_mhz: None,
+                power_watts: None,
                 vendor: "fixture".into(),
                 model: "fixture".into(),
                 logical_cpus: 1,

@@ -63,6 +63,8 @@ for required_path in \
   usr/bin/libredunar_capture_opengl.so \
   usr/libexec/redunar-hotkey-helper \
   usr/libexec/redunar-update-helper \
+  usr/libexec/redunar-cpu-power-helper \
+  usr/share/polkit-1/actions/com.redunar.cpu-power.policy \
   usr/share/polkit-1/actions/com.redunar.install-update.policy \
   usr/lib/udev/rules.d/70-redunar-hotkeys.rules
 do

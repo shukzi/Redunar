@@ -274,7 +274,22 @@ selection and appearance settings.
 
 Ribbon and Telemetry offer Compact, Detailed and Custom information presets.
 The metric toggles are enabled for Custom. A saved Custom selection must
-include at least one metric.
+include at least one metric. Detailed adds GPU power and CPU power to Compact: FPS,
+frame time, GPU load, GPU temperature, GPU power, CPU load, CPU temperature,
+and CPU power. All 17 metrics remain selectable in Custom, including frame lows,
+graphics API, CPU/GPU model and clock, RAM, and VRAM. Preset changes preserve the remembered Custom
+selection. Frame metrics and Hardware metrics are separate full-width sections
+with two columns. GPU and CPU controls align across the hardware columns.
+Load controls are labeled GPU load and CPU load. Only Graphics API has a short
+explanation beneath its metric label.
+The overlay displays frame metrics and API first, then GPU metrics with VRAM,
+then CPU metrics with RAM. Hardware groups show model, load, temperature, power,
+and clock in that order.
+Hardware names use bounded display labels. RAM and VRAM show system/device
+usage in MiB. Graphics API identifies Vulkan or OpenGL capture, not the original
+DirectX API under Proton. Frame time is the latest presentation interval, while
+FPS and lows summarize recent frame history. No in-game graph is shown.
+Missing new hardware readings display unavailable placeholders rather than zero.
 
 Automatic replay has no global or per-game Off selector. Recording and quality
 settings are capability-gated and remain locked through launch, recording, and

@@ -10,7 +10,7 @@ GPU, driver, game, or display configuration.
 | Area | Behavior |
 | --- | --- |
 | Desktop | Tauri with GTK3/WebKitGTK on Wayland or X11. Validate the two sessions separately. |
-| CPU and memory | Cached Linux utilization, supported temperature sensors, RAM, and available GPU memory. Missing or unreadable values remain unavailable. |
+| CPU and memory | Cached Linux utilization, supported temperature sensors, reported CPU frequency, readable package power, RAM, and available GPU memory. Missing or unreadable values remain unavailable. |
 | GPU metrics | AMD `amdgpu`/DRM metrics and NVIDIA metrics through the installed NVML library. Device identity is matched by physical render GPU and PCI topology; ambiguous topology remains gated. |
 | Vulkan games | Frame metrics, overlay, in-game Replay menu, and hardware H.264 Replay through Vulkan Video when the game device, format, queue, memory, and encoder capabilities pass. |
 | Desktop OpenGL games | Launch-scoped GLX/EGL/SDL metrics. Supported desktop OpenGL paths can export eligible frames to the existing Vulkan Video encoder when external-memory and device identity checks pass. OpenGL ES/EGL Replay remains unavailable. |
@@ -30,6 +30,20 @@ The OpenGL bridge uses bounded GPU buffers and synchronization. It does not
 copy captured pixels through a software-video fallback. Missing external-memory
 extensions, unsupported formats, queue limits, device loss, stale sensors, and
 allocation failures produce unavailable or failed states.
+
+CPU frequency is the maximum reported `scaling_cur_freq` across discovered
+CPU policies, not an effective clock measurement. CPU power is calculated from
+package energy counters under powercap. Readable counters are sampled directly.
+For restricted counters, native packages install a fixed polkit CPU power helper
+for active local desktop sessions. It accepts only a sampling token, reads only
+package energy counters, and returns aggregate milliwatts at most once per second.
+It does not accept paths or commands, expose raw counters, or change sensor
+permissions or power policy. The application remains unprivileged. Uninstalled
+portable builds need the native helper installed for restricted counters.
+The first sample, denied authorization, missing helpers, ambiguous package
+sources, invalid data, or long sampling gaps leave power unavailable. Incomplete
+package readings do not become partial totals. These paths require hardware qualification
+before claiming support on a particular processor or distribution.
 
 ## Launch and session limits
 

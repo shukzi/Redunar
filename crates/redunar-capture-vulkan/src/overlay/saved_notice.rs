@@ -69,6 +69,7 @@ mod tests {
             ..Default::default()
         };
         let mut telemetry = redunar_capture::OverlayHardwareTelemetry {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             revision: 2,
             corner: 3,
             preset: 1,

@@ -1,3 +1,4 @@
+import {metricNames,presetMetrics,effectiveMetrics,overlayMetrics,metricWidth,telemetryWidth} from './overlay-metrics.mjs';
 import { trashBinMarkup, trashDeletionMarkup, trashDeletionResultMarkup } from './trash-bin.mjs';
 import {icon, mountShellIcons} from './icons.mjs';
 import {installToasts} from './toasts.mjs';
@@ -54,10 +55,7 @@ const listeningVolume=playbackVolume({storage:listeningStorage,getVideo:()=>$('#
 const pages = [['overview','Overview'],['library','Library'],['global','Global settings'],['replay','Instant Replay'],['history','History']];
 let games = [], clips = [], sessions = [];
 let savedGameOverrides = new Map();
-const metricNames = ['FPS','Frame time','1% low','0.1% low','GPU','CPU','GPU temperature','CPU temperature'];
 
-const presetMetrics = preset => preset==='Compact'?['FPS','Frame time','GPU','CPU','GPU temperature','CPU temperature']:preset==='Detailed'?[...metricNames]:preset==='FPS only'?['FPS']:[];
-const effectiveMetrics = (preset,custom=[]) => preset==='Custom'?[...custom]:presetMetrics(preset||'Compact');
 const initialDefaults = {overlay:null,preset:null,layout:null,palette:null,branding:true,position:null,edgeSpacing:null,scale:null,opacity:null,metrics:[],captureMetrics:null,replay:null,fps:null,quality:null,format:null};
 const durations = [15,30,60,120,180,300,600,900];
 let selectedSaveDuration = null;
@@ -190,25 +188,21 @@ function field(label,description,control) {
  return `<div class="field"><div><label>${label}</label>${description?`<p>${description}</p>`:''}</div>${control}</div>`;
 }
 function ribbonWidth(preset=draft.preset||'Compact',metrics=draft.metrics) {
- return (draft.branding===false?0:94)+effectiveMetrics(preset,metrics).length*89;
+ return (draft.branding===false?0:94)+effectiveMetrics(preset,metrics).reduce((sum,metric)=>sum+metricWidth(metric),0);
 }
 function overlayPreview() {
  const preset=draft.preset||'Compact';
  const layout=draft.layout||'Telemetry';
  const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
- return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:1;--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div>`;
+ return `<div class="overlay-scene vulkan-reference"><div id="hud" class="hud" data-position="${draft.position}" data-preset="${escape(preset)}" data-layout="${escape(layout)}" style="--hud-scale:${draft.scale/100};--hud-preview-fit:1;--hud-telemetry-width:${telemetryWidth(effectiveMetrics(draft.preset,draft.metrics))}px;--hud-ribbon-width:${ribbonWidth(preset,draft.metrics)}px;--hud-opacity:${draft.opacity/100};--hud-accent:${palette[0]};--hud-panel:${palette[1]};--hud-text:${palette[2]};--hud-muted:${palette[3]};--hud-border:${palette[4]}">${hudContent()}</div></div>`;
 }
 function hudContent() {
  const preset=draft.preset||'Compact';
  if(preset==='FPS only')return `<div class="hud-fps-only"><span>FPS</span><b>144</b></div>`;
  const shown=effectiveMetrics(preset,draft.metrics);
- const has=name=>shown.includes(name);
- const items=[
-  has('FPS')&&['FPS','144 FPS'],has('Frame time')&&['FRAME TIME','6.9 MS'],has('1% low')&&['1% LOW','118 FPS'],has('0.1% low')&&['0.1% LOW','96 FPS'],
-  has('GPU')&&['GPU LOAD','91%'],has('GPU temperature')&&['GPU TEMP','68°C'],has('CPU')&&['CPU LOAD','38%'],has('CPU temperature')&&['CPU TEMP','62°C']
- ].filter(Boolean);
- if(draft.layout==='Ribbon')return `${draft.branding===false?'':'<div class="hud-layout-brand"><span>REDUNAR</span></div>'}${items.map(([label,value])=>`<div class="hud-ribbon-metric"><small>${label}</small><b>${value}</b></div>`).join('')}`;
- return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
+ const items=overlayMetrics.filter(([name])=>shown.includes(name));
+ if(draft.layout==='Ribbon')return `${draft.branding===false?'':'<div class="hud-layout-brand"><span>REDUNAR</span></div>'}${items.map(([name,label,value])=>`<div class="hud-ribbon-metric" style="width:${metricWidth(name)}px"><small>${label}</small><b>${value}</b></div>`).join('')}`;
+ return `<div class="hud-telemetry-head">${draft.branding===false?'':'<span>REDUNAR</span>'}<small>FRAME METRICS</small></div>${items.map(([name,label,value])=>`<div class="hud-telemetry-row"><span>${label}</span><b>${value}</b></div>`).join('')}`;
 }
 function replaySaveActions() {
  return `<div class="heading-actions replay-save-actions"><label class="replay-duration-label">Save last <select id="save-duration" aria-label="Replay duration">${durations.map(d=>`<option value="${d}" ${d===(selectedSaveDuration??Number(replayPreferences?.initial_save_duration_seconds||30))?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')}</select></label>${button(`${icon('plus')} <span class="replay-save-label"><span data-replay-save-label aria-live="polite">Save replay</span></span> <span class="replay-shortcut-slot" hidden><kbd id="save-replay-shortcut" aria-hidden="true" hidden></kbd></span>`,'save-replay',true,`aria-label="Save replay" ${!runtime?.can_save?'disabled':''}`)}</div>`;
@@ -909,7 +903,7 @@ function updateHud() {
  if(hud){
   const palette=overlayPalettes[draft.palette]||overlayPalettes.Redunar;
   hud.innerHTML=hudContent();hud.hidden=!draft.overlay;hud.dataset.position=draft.position;hud.dataset.preset=draft.preset||'Compact';hud.dataset.layout=draft.layout||'Telemetry';
-  hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
+  hud.style.setProperty('--hud-telemetry-width',`${telemetryWidth(effectiveMetrics(draft.preset,draft.metrics))}px`);hud.style.setProperty('--hud-scale',draft.scale/100);hud.style.setProperty('--hud-ribbon-width',`${ribbonWidth()}px`);hud.style.setProperty('--hud-opacity',draft.opacity/100);
   [['--hud-accent',palette[0]],['--hud-panel',palette[1]],['--hud-text',palette[2]],['--hud-muted',palette[3]],['--hud-border',palette[4]]].forEach(([key,value])=>hud.style.setProperty(key,value));
   const selectedLayout=selectedOverlayLayout(draft);
   document.querySelectorAll('.layout-grid button[data-layout]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.layout===selectedLayout)));

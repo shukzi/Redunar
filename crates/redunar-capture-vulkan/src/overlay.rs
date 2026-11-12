@@ -98,11 +98,13 @@ const MENU_PANEL_COLOR: [f32; 4] = [0.003, 0.003, 0.003, 1.0];
 const MENU_SELECTED_FILL: [f32; 4] = [0.015, 0.003, 0.003, 1.0];
 const METRIC_PANEL_RADIUS: u8 = 4;
 const RIBBON_BRAND_WIDTH: u32 = 94;
+#[cfg(test)]
 const RIBBON_METRIC_WIDTH: u32 = 89;
 /// Ribbon labels use a tighter advance than the fixed 9 px cell so the
 /// longest label stays clear of the next cell divider.
 const RIBBON_LABEL_ADVANCE: i32 = 8;
 const RIBBON_HEIGHT: u32 = 44;
+#[cfg(test)]
 const TELEMETRY_WIDTH: u32 = 300;
 const TELEMETRY_ROW_HEIGHT: u32 = 24;
 
@@ -114,23 +116,16 @@ const OVERLAY_MARGIN: i32 = OverlayEdgeSpacing::DEFAULT_PIXELS as i32;
 #[cfg(test)]
 const BITMAP_GLYPH_HEIGHT: u32 = overlay_font::GLYPH_HEIGHT;
 const FPS_ONLY_WIDTH: u32 = 116;
-const METRIC_FPS: u16 = 1 << 0;
-const METRIC_FRAME_TIME: u16 = 1 << 1;
-const METRIC_ONE_PERCENT_LOW: u16 = 1 << 2;
-const METRIC_POINT_ONE_PERCENT_LOW: u16 = 1 << 3;
-const METRIC_CPU_LOAD: u16 = 1 << 4;
-const METRIC_CPU_TEMPERATURE: u16 = 1 << 5;
-const METRIC_GPU_LOAD: u16 = 1 << 6;
-const METRIC_GPU_TEMPERATURE: u16 = 1 << 7;
-const METRICS_KNOWN: u16 = METRIC_FPS
-    | METRIC_FRAME_TIME
-    | METRIC_ONE_PERCENT_LOW
-    | METRIC_POINT_ONE_PERCENT_LOW
-    | METRIC_CPU_LOAD
-    | METRIC_CPU_TEMPERATURE
-    | METRIC_GPU_LOAD
-    | METRIC_GPU_TEMPERATURE;
-const METRICS_COMPACT: u16 = METRIC_FPS
+const METRIC_FPS: u32 = 1 << 0;
+const METRIC_FRAME_TIME: u32 = 1 << 1;
+const METRIC_ONE_PERCENT_LOW: u32 = 1 << 2;
+const METRIC_POINT_ONE_PERCENT_LOW: u32 = 1 << 3;
+const METRIC_CPU_LOAD: u32 = 1 << 4;
+const METRIC_CPU_TEMPERATURE: u32 = 1 << 5;
+const METRIC_GPU_LOAD: u32 = 1 << 6;
+const METRIC_GPU_TEMPERATURE: u32 = 1 << 7;
+const METRICS_KNOWN: u32 = redunar_core::OverlayMetricSet::KNOWN;
+const METRICS_COMPACT: u32 = METRIC_FPS
     | METRIC_FRAME_TIME
     | METRIC_CPU_LOAD
     | METRIC_CPU_TEMPERATURE
@@ -281,6 +276,7 @@ impl DeviceFunctions {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct OverlaySnapshot {
+    pub(crate) details: redunar_core::overlay_metrics::HardwareDetails,
     pub(crate) fps: Option<u16>,
     pub(crate) frame_time_tenths_ms: Option<u16>,
     pub(crate) one_percent_low_fps: Option<u16>,
@@ -337,6 +333,7 @@ impl FrameHistory {
         let frame_fields = summarize(&self.intervals_ns[..self.length]);
         let external = self.snapshot;
         self.snapshot = OverlaySnapshot {
+            details: external.details,
             cpu_percent: external.cpu_percent,
             cpu_temperature_c: external.cpu_temperature_c,
             gpu_percent: external.gpu_percent,
@@ -365,6 +362,7 @@ fn summarize(intervals_ns: &[u64]) -> OverlaySnapshot {
     let newest = intervals_ns[intervals_ns.len() - 1];
 
     OverlaySnapshot {
+        details: redunar_core::overlay_metrics::HardwareDetails::default(),
         fps: Some(clamp_metric(average)),
         frame_time_tenths_ms: Some(clamp_metric(u128::from(newest) / 100_000)),
         one_percent_low_fps: Some(fps_for_slice(&sorted[..one_count])),
@@ -686,7 +684,7 @@ impl OverlayPlan {
         let mut metrics = match config.preset {
             OverlayPreset::Compact => METRICS_COMPACT,
             OverlayPreset::FpsOnly => METRIC_FPS,
-            OverlayPreset::Detailed => METRICS_KNOWN,
+            OverlayPreset::Detailed => redunar_core::OverlayMetricSet::DETAILED.bits(),
             OverlayPreset::Custom => config.metrics,
         };
         // Hardware labels are omitted until the shared monitor has supplied a
@@ -743,42 +741,41 @@ impl OverlayPlan {
         plan
     }
 
-    fn ribbon(snapshot: OverlaySnapshot, metrics: u16, config: OverlayConfig) -> Self {
-        let metric_count = u32::try_from(
-            metric_labels()
-                .into_iter()
-                .filter(|(bit, _)| metrics & *bit != 0)
-                .count(),
-        )
-        .unwrap_or(0);
+    fn ribbon(snapshot: OverlaySnapshot, metrics: u32, config: OverlayConfig) -> Self {
         let brand_width = if config.branding_visible {
             RIBBON_BRAND_WIDTH
         } else {
             0
         };
-        let width = brand_width.saturating_add(metric_count.saturating_mul(RIBBON_METRIC_WIDTH));
+        let width = brand_width.saturating_add(
+            metric_labels()
+                .into_iter()
+                .filter(|(bit, _)| metrics & *bit != 0)
+                .map(|(bit, _)| redunar_core::overlay_metrics::ribbon_width(bit))
+                .sum::<u32>(),
+        );
         let mut plan = Self::metric_panel(width, RIBBON_HEIGHT, config);
         if config.branding_visible {
             push_text(&mut plan.accent_glyphs, b"REDUNAR", 10, 15);
         }
-        let mut index = 0_i32;
+        let mut offset = 0_i32;
         for (bit, label) in metric_labels() {
             if metrics & bit == 0 {
                 continue;
             }
-            let left = i32::try_from(brand_width).unwrap_or(94)
-                + 8
-                + index * i32::try_from(RIBBON_METRIC_WIDTH).unwrap_or(89);
+            let left = i32::try_from(brand_width).unwrap_or(94) + 8 + offset;
             plan.dividers.push(left - 8, 6, 1, RIBBON_HEIGHT - 12);
             push_text_advance(&mut plan.muted_glyphs, label, left, 6, RIBBON_LABEL_ADVANCE);
             let value = metric_value(snapshot, bit);
             push_text(&mut plan.text_glyphs, value.as_bytes(), left, 22);
-            index += 1;
+            offset +=
+                i32::try_from(redunar_core::overlay_metrics::ribbon_width(bit)).unwrap_or(304);
         }
         plan
     }
 
-    fn telemetry(snapshot: OverlaySnapshot, metrics: u16, config: OverlayConfig) -> Self {
+    fn telemetry(snapshot: OverlaySnapshot, metrics: u32, config: OverlayConfig) -> Self {
+        let width = redunar_core::overlay_metrics::telemetry_width(metrics);
         let count = u32::try_from(
             metric_labels()
                 .into_iter()
@@ -787,17 +784,17 @@ impl OverlayPlan {
         )
         .unwrap_or(0);
         let height = TELEMETRY_HEADER_HEIGHT + count.saturating_mul(TELEMETRY_ROW_HEIGHT);
-        let mut plan = Self::metric_panel(TELEMETRY_WIDTH, height, config);
+        let mut plan = Self::metric_panel(width, height, config);
         if config.branding_visible {
             push_text(&mut plan.accent_glyphs, b"REDUNAR", 8, 6);
         }
         let mut heading = FixedText::<16>::default();
         heading.push_bytes(b"FRAME METRICS");
-        let heading_x = i32::try_from(TELEMETRY_WIDTH).unwrap_or(300)
+        let heading_x = i32::try_from(width).unwrap_or(300)
             - 8
             - i32::try_from(heading.length).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
         push_text(&mut plan.muted_glyphs, heading.as_bytes(), heading_x, 6);
-        plan.dividers.push(3, 24, TELEMETRY_WIDTH - 3, 1);
+        plan.dividers.push(3, 24, width - 3, 1);
         let mut row = 0_i32;
         for (bit, label) in metric_labels() {
             if metrics & bit == 0 {
@@ -806,7 +803,7 @@ impl OverlayPlan {
             let y = 31 + row * i32::try_from(TELEMETRY_ROW_HEIGHT).unwrap_or(24);
             push_text(&mut plan.muted_glyphs, label, 8, y);
             let value = metric_value(snapshot, bit);
-            let x = i32::try_from(TELEMETRY_WIDTH).unwrap_or(300)
+            let x = i32::try_from(width).unwrap_or(300)
                 - 8
                 - i32::try_from(value.length).unwrap_or(0) * overlay_font::GLYPH_ADVANCE;
             push_text(&mut plan.text_glyphs, value.as_bytes(), x, y);
@@ -815,7 +812,7 @@ impl OverlayPlan {
                 plan.dividers.push(
                     8,
                     y + i32::try_from(TELEMETRY_ROW_HEIGHT).unwrap_or(24) - 7,
-                    TELEMETRY_WIDTH - 16,
+                    width - 16,
                     1,
                 );
             }
@@ -1147,21 +1144,12 @@ fn push_rounded_outline(
     batch.push(right - inset_i32 + 1, bottom - 1, shoulder, 1);
 }
 
-fn metric_labels() -> [(u16, &'static [u8]); 8] {
-    [
-        (METRIC_FPS, b"FPS"),
-        (METRIC_FRAME_TIME, b"FRAME TIME"),
-        (METRIC_ONE_PERCENT_LOW, b"1% LOW"),
-        (METRIC_POINT_ONE_PERCENT_LOW, b"0.1% LOW"),
-        (METRIC_GPU_LOAD, b"GPU LOAD"),
-        (METRIC_GPU_TEMPERATURE, b"GPU TEMP"),
-        (METRIC_CPU_LOAD, b"CPU LOAD"),
-        (METRIC_CPU_TEMPERATURE, b"CPU TEMP"),
-    ]
+fn metric_labels() -> [(u32, &'static [u8]); 17] {
+    redunar_core::overlay_metrics::LABELS
 }
 
-fn metric_value(snapshot: OverlaySnapshot, metric: u16) -> FixedText<16> {
-    let mut value = FixedText::<16>::default();
+fn metric_value(snapshot: OverlaySnapshot, metric: u32) -> FixedText<32> {
+    let mut value = FixedText::<32>::default();
     match metric {
         METRIC_FPS => {
             value.push_metric_unpadded(snapshot.fps, 3);
@@ -1205,7 +1193,7 @@ fn metric_value(snapshot: OverlaySnapshot, metric: u16) -> FixedText<16> {
             );
             value.push_bytes(b"^C");
         }
-        _ => value.push_bytes(b"--"),
+        _ => value.push_bytes(snapshot.details.value(metric, "VULKAN").as_bytes()),
     }
     value
 }
@@ -1371,7 +1359,7 @@ struct OverlayConfig {
     palette: OverlayPalette,
     branding_visible: bool,
     corner: OverlayCorner,
-    metrics: u16,
+    metrics: u32,
     opacity_percent: u8,
     scale_percent: u8,
     edge_spacing: OverlayEdgeSpacing,
@@ -1452,9 +1440,9 @@ fn parse_overlay_palette(value: Option<&str>) -> OverlayPalette {
     }
 }
 
-fn parse_overlay_metrics(value: Option<&str>) -> u16 {
+fn parse_overlay_metrics(value: Option<&str>) -> u32 {
     value
-        .and_then(|value| value.parse::<u16>().ok())
+        .and_then(|value| value.parse::<u32>().ok())
         .filter(|bits| *bits != 0 && *bits & !METRICS_KNOWN == 0)
         .unwrap_or(METRICS_COMPACT)
 }
@@ -1975,6 +1963,7 @@ impl TelemetryReader {
 
 fn hardware_snapshot(telemetry: OverlayHardwareTelemetry) -> OverlaySnapshot {
     OverlaySnapshot {
+        details: telemetry.details,
         cpu_percent: telemetry.cpu_utilization_tenths.map(round_percent),
         cpu_temperature_c: telemetry
             .cpu_temperature_tenths_celsius
@@ -2370,6 +2359,7 @@ impl RendererState {
     ) {
         if let Some(telemetry) = telemetry {
             let hardware = hardware_snapshot(telemetry);
+            self.history.snapshot.details = hardware.details;
             self.history.snapshot.cpu_percent = hardware.cpu_percent;
             self.history.snapshot.cpu_temperature_c = hardware.cpu_temperature_c;
             self.history.snapshot.gpu_percent = hardware.gpu_percent;
@@ -3848,6 +3838,84 @@ const _: () = assert!(MAX_QUEUE_CONTEXTS >= MAX_SWAPCHAIN_IMAGES);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "synthetic CPU plan measurement; run explicitly in an optimized build"]
+    fn metric_plan_cpu_latency() {
+        let snapshot = OverlaySnapshot {
+            fps: Some(144),
+            frame_time_tenths_ms: Some(69),
+            one_percent_low_fps: Some(118),
+            point_one_percent_low_fps: Some(96),
+            cpu_percent: Some(38),
+            cpu_temperature_c: Some(62),
+            gpu_percent: Some(91),
+            gpu_temperature_c: Some(68),
+            details: redunar_core::overlay_metrics::HardwareDetails {
+                cpu_model: redunar_core::overlay_metrics::MetricText::model_name(
+                    "AMD Ryzen 7 9800X3D",
+                ),
+                gpu_model: redunar_core::overlay_metrics::MetricText::model_name(
+                    "NVIDIA GeForce RTX 5070",
+                ),
+                cpu_clock_mhz: Some(5225),
+                gpu_clock_mhz: Some(2835),
+                cpu_power_tenths: Some(656),
+                gpu_power_tenths: Some(1776),
+                ram_mib: Some(15048),
+                vram_mib: Some(8319),
+            },
+        };
+        for preset in [OverlayPreset::Compact, OverlayPreset::Detailed] {
+            let config = OverlayConfig {
+                preset,
+                ..OverlayConfig::default()
+            };
+            let mut timings = Vec::with_capacity(1000);
+            for index in 0..1100 {
+                let start = std::time::Instant::now();
+                std::hint::black_box(OverlayPlan::new(std::hint::black_box(snapshot), config));
+                if index >= 100 {
+                    timings.push(start.elapsed().as_nanos());
+                }
+            }
+            timings.sort_unstable();
+            println!(
+                "Vulkan CPU plan {preset:?}: p50={} ns, p95={} ns, p99={} ns",
+                timings[499], timings[949], timings[989]
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_values_use_shared_units_and_keep_missing_values_unavailable() {
+        use redunar_core::{
+            OverlayMetricSet as M,
+            overlay_metrics::{HardwareDetails, MetricText},
+        };
+        let snapshot = OverlaySnapshot {
+            details: HardwareDetails {
+                cpu_model: MetricText::new("AMD RYZEN 7 9800X3D"),
+                gpu_power_tenths: Some(1776),
+                cpu_clock_mhz: Some(5225),
+                vram_mib: Some(8319),
+                ..HardwareDetails::default()
+            },
+            ..OverlaySnapshot::default()
+        };
+        assert_eq!(
+            metric_value(snapshot, M::CPU_MODEL).as_bytes(),
+            b"AMD RYZEN 7 9800X3D"
+        );
+        assert_eq!(metric_value(snapshot, M::GPU_POWER).as_bytes(), b"177.6 W");
+        assert_eq!(metric_value(snapshot, M::CPU_CLOCK).as_bytes(), b"5225 MHz");
+        assert_eq!(metric_value(snapshot, M::VRAM).as_bytes(), b"8319 MiB");
+        assert_eq!(metric_value(snapshot, M::CPU_POWER).as_bytes(), b"-- W");
+        assert_eq!(
+            metric_value(snapshot, M::GRAPHICS_API).as_bytes(),
+            b"VULKAN"
+        );
+    }
+
     use super::*;
 
     /// Render one linear-light renderer color as an sRGB hex triplet for the
@@ -4114,7 +4182,7 @@ mod tests {
             hardware.is_none(),
             "the hardware block is not decodable here"
         );
-        let menu = menu.expect("the menu block decodes at file offset 48");
+        let menu = menu.expect("the menu block decodes after the hardware snapshot");
         assert!(menu.visible);
         assert_eq!(menu.revision, 2);
         // The same revision never reports again, even under eager polling.
@@ -4196,6 +4264,7 @@ mod tests {
     fn plan_is_bounded_and_has_optional_external_telemetry_row() {
         let base = OverlayPlan::new(
             OverlaySnapshot {
+                details: redunar_core::overlay_metrics::HardwareDetails::default(),
                 fps: Some(144),
                 frame_time_tenths_ms: Some(69),
                 one_percent_low_fps: Some(121),
@@ -4206,6 +4275,7 @@ mod tests {
         );
         let external = OverlayPlan::new(
             OverlaySnapshot {
+                details: redunar_core::overlay_metrics::HardwareDetails::default(),
                 cpu_percent: Some(42),
                 cpu_temperature_c: Some(61),
                 gpu_percent: Some(87),
@@ -4226,6 +4296,7 @@ mod tests {
     #[test]
     fn presets_are_compact_bounded_and_keep_fps_only_background_free() {
         let metrics = OverlaySnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             one_percent_low_fps: Some(121),
@@ -4269,6 +4340,7 @@ mod tests {
     #[test]
     fn metric_layouts_keep_the_same_selected_metrics_in_distinct_bounded_geometry() {
         let metrics = OverlaySnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             one_percent_low_fps: Some(121),
@@ -4346,7 +4418,12 @@ mod tests {
         );
         assert_eq!(
             detailed_ribbon.width,
-            RIBBON_BRAND_WIDTH + 8 * RIBBON_METRIC_WIDTH
+            RIBBON_BRAND_WIDTH
+                + redunar_core::overlay_metrics::LABELS
+                    .into_iter()
+                    .filter(|(bit, _)| redunar_core::OverlayMetricSet::DETAILED.contains(*bit))
+                    .map(|(bit, _)| redunar_core::overlay_metrics::ribbon_width(bit))
+                    .sum::<u32>()
         );
         assert!(short_ribbon.width < ribbon.width);
         assert!(ribbon.width < detailed_ribbon.width);
@@ -4355,6 +4432,7 @@ mod tests {
     #[test]
     fn branding_can_be_hidden_without_removing_metrics() {
         let snapshot = OverlaySnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             ..OverlaySnapshot::default()
@@ -4397,6 +4475,7 @@ mod tests {
 
         let detailed = OverlayPlan::new(
             OverlaySnapshot {
+                details: redunar_core::overlay_metrics::HardwareDetails::default(),
                 fps: Some(9_999),
                 frame_time_tenths_ms: Some(u16::MAX),
                 one_percent_low_fps: Some(9_999),
@@ -4503,7 +4582,7 @@ mod tests {
         );
         assert_eq!(parse_overlay_metrics(None), METRICS_COMPACT);
         assert_eq!(parse_overlay_metrics(Some("0")), METRICS_COMPACT);
-        assert_eq!(parse_overlay_metrics(Some("65535")), METRICS_COMPACT);
+        assert_eq!(parse_overlay_metrics(Some("4294967295")), METRICS_COMPACT);
         assert_eq!(
             parse_overlay_metrics(Some(&(METRIC_FPS | METRIC_GPU_LOAD).to_string())),
             METRIC_FPS | METRIC_GPU_LOAD
@@ -4526,6 +4605,7 @@ mod tests {
     #[test]
     fn custom_preset_uses_only_selected_metric_rows() {
         let metrics = OverlaySnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(120),
             gpu_percent: Some(80),
             ..OverlaySnapshot::default()
@@ -4612,6 +4692,7 @@ mod tests {
     #[test]
     fn hardware_values_round_from_tenths_and_keep_missing_values_distinct() {
         let snapshot = hardware_snapshot(OverlayHardwareTelemetry {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             revision: 2,
             corner: 0,
             preset: 0,
@@ -4636,6 +4717,7 @@ mod tests {
 
         let no_hardware = OverlayPlan::new(
             OverlaySnapshot {
+                details: redunar_core::overlay_metrics::HardwareDetails::default(),
                 fps: Some(120),
                 frame_time_tenths_ms: Some(83),
                 ..OverlaySnapshot::default()
@@ -4802,6 +4884,7 @@ mod tests {
         };
         let layout = std::env::var("REDUNAR_METRICS_REFERENCE_LAYOUT").unwrap_or_default();
         let snapshot = OverlaySnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             one_percent_low_fps: Some(118),

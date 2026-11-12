@@ -20,6 +20,7 @@ CPU, GPU, memory, drops, and backpressure separately.
 ## Collection rules
 
 - Discover sensors once and sample cached paths at 1 Hz.
+- Read CPU frequency and package-energy counters into bounded numeric buffers.
 - Read only the aggregate CPU row from `/proc/stat`, with a 4 KiB row limit.
 - Scan game processes on a bounded slower cadence or on lifecycle events.
 - Publish one bounded latest snapshot; do not enqueue one UI callback per sample.
@@ -35,6 +36,21 @@ CPU, GPU, memory, drops, and backpressure separately.
 NVML power sampling uses the driver's recent-sample buffer when available, with
 a bounded entry count and freshness limit. Driver-call time remains part of
 hardware sample latency and CPU measurements.
+
+The OpenGL metrics surface reuses its pixel allocation across refreshes. Panel
+colors are prepared once per fill on transparent pixels; overlapping surfaces
+retain the general blending path. Glyphs at their stored raster size use the
+same four gamma-adjusted coverage values directly, without interpolation. Other
+sizes retain bilinear sampling. Detailed renders more rows than Compact,
+and increased overlay scale increases raster work. Synthetic CPU preparation
+checks exclude driver, texture-upload, GPU, and game-presentation costs.
+
+The restricted CPU power helper samples only on request, at most once per
+second. It caches sensor paths and sends a bounded aggregate value. The normal
+hardware sampler polls its socket without waiting. It launches only when direct
+energy reads are denied. An idle connection performs no sampling, and closing
+the connection ends the helper. Failed startup is retried after 30 seconds;
+unreaped helpers prevent further starts.
 
 ## UI and scrolling
 

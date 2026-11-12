@@ -70,6 +70,8 @@ fi
 %attr(0755,root,root) /usr/bin/redunar-steam-launch
 %attr(0755,root,root) /usr/bin/libredunar_capture_vulkan.so
 %attr(0755,root,root) /usr/bin/libredunar_capture_opengl.so
+%attr(0755,root,root) /usr/libexec/redunar-cpu-power-helper
+%attr(0644,root,root) /usr/share/polkit-1/actions/com.redunar.cpu-power.policy
 %attr(0755,root,root) /usr/libexec/redunar-hotkey-helper
 %attr(0755,root,root) /usr/libexec/redunar-update-helper
 %attr(0644,root,root) /usr/share/polkit-1/actions/com.redunar.install-update.policy

@@ -24,6 +24,7 @@ required_artifacts=(
   "$release_root/redunar-steam-launch"
   "$release_root/libredunar_capture_vulkan.so"
   "$release_root/libredunar_capture_opengl.so"
+  "$release_root/redunar-cpu-power-helper"
   "$release_root/redunar-hotkey-helper"
   "$release_root/redunar-update-helper"
 )
@@ -63,6 +64,10 @@ install -m 0755 "$release_root/redunar-hotkey-helper" \
   "$destination/usr/libexec/redunar-hotkey-helper"
 install -m 0755 "$release_root/redunar-update-helper" \
   "$destination/usr/libexec/redunar-update-helper"
+install -m 0755 "$release_root/redunar-cpu-power-helper" \
+  "$destination/usr/libexec/redunar-cpu-power-helper"
+install -m 0644 packaging/com.redunar.cpu-power.policy \
+  "$destination/usr/share/polkit-1/actions/com.redunar.cpu-power.policy"
 install -m 0644 packaging/com.redunar.install-update.policy \
   "$destination/usr/share/polkit-1/actions/com.redunar.install-update.policy"
 
@@ -100,7 +105,7 @@ install -m 0644 "$native_root/licenses/libc/LICENSE-APACHE" "$destination/usr/sh
 install -m 0644 "$native_root/licenses/tauri-api/LICENSE-MIT" "$destination/usr/share/doc/redunar/LICENSE-Tauri-API-MIT.txt"
 install -m 0644 "$native_root/licenses/tauri-api/LICENSE-APACHE-2.0" "$destination/usr/share/doc/redunar/LICENSE-Tauri-API-APACHE-2.0.txt"
 
-for helper in "$destination/usr/libexec/redunar-hotkey-helper" "$destination/usr/libexec/redunar-update-helper"; do
+for helper in "$destination/usr/libexec/redunar-cpu-power-helper" "$destination/usr/libexec/redunar-hotkey-helper" "$destination/usr/libexec/redunar-update-helper"; do
   if [[ "$(stat -c '%a' "$helper")" != "755" ]]; then
     printf 'staged Tauri helper must have mode 0755: %s\n' "$helper" >&2
     exit 1

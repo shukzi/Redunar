@@ -897,7 +897,7 @@ fn parse_global_profile(line: &str, version: u8) -> Result<GlobalGameProfile, Ga
             OverlayMetricSet::default()
         } else {
             fields[4]
-                .parse::<u16>()
+                .parse::<u32>()
                 .ok()
                 .and_then(|bits| OverlayMetricSet::from_bits(bits).ok())
                 .ok_or_else(|| GameCatalogError::new("catalog overlay metrics are invalid"))?
@@ -1885,7 +1885,7 @@ mod tests {
     #[test]
     fn version_five_rejects_empty_or_unknown_custom_metric_sets() {
         let fixture = Fixture::new();
-        for bits in ["0", "65535"] {
+        for bits in ["0", "4294967295"] {
             let contents = format!(
                 "{CATALOG_HEADER_V5}\nnext\t1\nglobal\t1\t1\tcustom\t{bits}\ttop-left\t50\t0\t0\n"
             );
