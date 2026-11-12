@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 const STEAM_BROKER_SOCKET_FILE: &str = "steam-launch-v1.sock";
 const STEAM_WIRE_MAGIC: [u8; 8] = *b"RDSTML01";
-const STEAM_WIRE_VERSION: u16 = 5;
+const STEAM_WIRE_VERSION: u16 = 6;
 const REQUEST_BYTES: usize = 18;
 const MAX_PATH_BYTES: usize = 4_096;
 const MAX_RESPONSE_BYTES: usize = 5 * MAX_PATH_BYTES + 64;
@@ -881,7 +881,7 @@ fn encode_request(app_id: SteamAppId, process_id: u32) -> [u8; REQUEST_BYTES] {
 fn decode_request(bytes: &[u8]) -> Result<(SteamAppId, u32), SteamActivationError> {
     if bytes.len() != REQUEST_BYTES
         || bytes.get(..8) != Some(&STEAM_WIRE_MAGIC)
-        || read_u16(bytes, 8)? != STEAM_WIRE_VERSION
+        || !matches!(read_u16(bytes, 8)?, 5 | STEAM_WIRE_VERSION)
     {
         return Err(SteamActivationError::new(
             "unsupported Steam activation request",
@@ -938,7 +938,7 @@ fn encode_granted(environment: &SteamCaptureEnvironment) -> Result<Vec<u8>, Stea
 fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, SteamActivationError> {
     if bytes.len() < 11
         || bytes.get(..8) != Some(&STEAM_WIRE_MAGIC)
-        || read_u16(bytes, 8)? != STEAM_WIRE_VERSION
+        || !matches!(read_u16(bytes, 8)?, 5 | STEAM_WIRE_VERSION)
     {
         return Err(SteamActivationError::new(
             "unsupported Steam activation response",
@@ -973,8 +973,12 @@ fn decode_response(bytes: &[u8]) -> Result<Option<SteamCaptureEnvironment>, Stea
     let overlay_corner = decode_overlay_corner(take_u8(bytes, &mut cursor)?)?;
     let overlay_opacity = OverlayOpacity::new(take_u8(bytes, &mut cursor)?)
         .map_err(|_| SteamActivationError::new("invalid overlay opacity"))?;
-    let overlay_metrics = OverlayMetricSet::from_bits(take_u16(bytes, &mut cursor)?)
-        .map_err(|_| SteamActivationError::new("invalid overlay metrics"))?;
+    let overlay_metrics = OverlayMetricSet::from_bits(if read_u16(bytes, 8)? == 5 {
+        u32::from(take_u16(bytes, &mut cursor)?)
+    } else {
+        u32::from_le_bytes(take_array::<4>(bytes, &mut cursor)?)
+    })
+    .map_err(|_| SteamActivationError::new("invalid overlay metrics"))?;
     let overlay_telemetry_path = take_path(bytes, &mut cursor, true)?;
     let replay_frame_rate = match take_u8(bytes, &mut cursor)? {
         60 => ReplayFrameRate::Fps60,

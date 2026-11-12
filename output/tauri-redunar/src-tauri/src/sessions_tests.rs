@@ -250,6 +250,8 @@ fn session_timeline_without_game_identity_records_cpu_and_omits_gpu() {
         hardware: Some(Arc::new(SystemSnapshot {
             memory: None,
             cpu: CpuSnapshot {
+                clock_mhz: None,
+                power_watts: None,
                 vendor: "AuthenticAMD".into(),
                 model: "Fixture CPU".into(),
                 logical_cpus: 8,

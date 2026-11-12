@@ -1,3 +1,4 @@
+import {metricNames,overlayMetrics} from '../ui/overlay-metrics.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -45,8 +46,8 @@ test('History renders a scrubber with FPS, temperatures, and hardware load',()=>
  const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
  assert.match(source,/from '.\/history-timeline.mjs'/);
  assert.match(source,/data-history-cursor/);
- assert.match(source,/CPU temperature/);
- assert.match(source,/GPU temperature/);
+ assert.ok(metricNames.includes('CPU temperature'));
+ assert.ok(metricNames.includes('GPU temperature'));
  assert.match(source,/Calculated from saved frame times/);
  assert.match(css,/\.history-moment-grid/);
  assert.match(css,/\.history-cursor-line/);
@@ -168,7 +169,7 @@ test('global overlay preview includes both native metric layouts',()=>{
  assert.doesNotMatch(previewSource,/In-game overlay layout/);
  assert.match(previewSource,/preset==='FPS only'/);
  assert.match(previewSource,/144/);
- assert.match(previewSource,/6\.9/);
+ assert.equal(overlayMetrics.find(([name])=>name==='Frame time')[2],'6.9 MS');
  assert.doesNotMatch(previewSource,/\^C/);
 });
 test('global preview applies select changes and keeps FPS only on one row',()=>{

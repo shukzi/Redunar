@@ -32,6 +32,17 @@ tools/check-tauri-release.sh
 Use the package-specific checks in `tools/`, `packaging/`, and
 `output/tauri-redunar/` when the change affects those inputs.
 
+Opt-in synthetic overlay CPU measurements use isolated file fixtures and native
+render preparation without a game or graphics driver:
+
+```sh
+cargo test --locked --offline --release -p redunar-platform cached_cpu_sampling_latency --target-dir .redunar-build/checks/root -- --ignored --nocapture
+cargo test --locked --offline --release -p redunar-capture-vulkan -p redunar-capture-opengl cpu_latency --target-dir .redunar-build/checks/root -- --ignored --nocapture
+```
+
+These measurements do not establish live-game overhead or hardware sampling
+latency. Run them separately from ordinary validation to avoid timing contention.
+
 ## Test layers
 
 ### Unit and service fixtures
@@ -41,6 +52,13 @@ Cover valid and missing readings, malformed input, stale results, duplicate
 requests, cancellation, timeouts, device loss, ownership conflicts, restart,
 and cleanup failure. Private fixture state must remain outside user recordings
 and installed application state.
+
+CPU power checks cover bounded protocol parsing, delayed and partial replies,
+stale data, disconnects, retry limits, and helper rate limiting. Run the ignored
+`cpu_power_ipc_latency` platform test in release mode for socket overhead. Native
+package acceptance must verify helper mode 0755, policy mode 0644, root ownership,
+active-session authorization, rejected arguments, real readings, and helper exit
+on disconnect. Fresh-install and upgrade payloads must include both files.
 
 ### UI and WebKit checks
 

@@ -1126,14 +1126,16 @@ fn write_overlay_config(file: &File, revision: &AtomicU64, packed: u64) -> io::R
     let odd = next - 1;
     file.write_all_at(&odd.to_le_bytes(), 16)?;
     file.write_all_at(&odd.to_le_bytes(), 40)?;
+    file.write_all_at(&odd.to_le_bytes(), 144)?;
     set_overlay_hardware_edge_spacing(&mut bytes, unpack_overlay_edge_spacing(packed));
-    bytes[12] = u8::try_from(packed & 0xff).expect("masked corner fits");
+    bytes[12] = u8::try_from(packed & 3).expect("masked corner fits");
     bytes[13] = u8::try_from((packed >> 8) & 0xff).expect("masked preset fits");
     bytes[14..16].copy_from_slice(
         &u16::try_from((packed >> 16) & 0xffff)
             .expect("masked metrics fit")
             .to_le_bytes(),
     );
+    bytes[48..52].copy_from_slice(&unpack_overlay_metrics(packed).to_le_bytes());
     bytes[32] = u8::try_from((packed >> 32) & 0xff).expect("masked opacity fits");
     bytes[33] = u8::try_from((packed >> 40) & 0xff).expect("masked scale fits");
     bytes[36] = ((packed >> 48) & 0x03) as u8;
@@ -1142,6 +1144,7 @@ fn write_overlay_config(file: &File, revision: &AtomicU64, packed: u64) -> io::R
     bytes[39] = u8::from(((packed >> 48) & 0x04) != 0);
     bytes[16..24].copy_from_slice(&next.to_le_bytes());
     bytes[40..48].copy_from_slice(&next.to_le_bytes());
+    bytes[144..152].copy_from_slice(&next.to_le_bytes());
     file.write_all_at(&bytes, 0)
 }
 
@@ -1159,9 +1162,11 @@ fn write_overlay_replay_notice(
     let odd = next - 1;
     file.write_all_at(&odd.to_le_bytes(), 16)?;
     file.write_all_at(&odd.to_le_bytes(), 40)?;
+    file.write_all_at(&odd.to_le_bytes(), 144)?;
     bytes[34..36].copy_from_slice(&replay_saved_revision.to_le_bytes());
     bytes[16..24].copy_from_slice(&next.to_le_bytes());
     bytes[40..48].copy_from_slice(&next.to_le_bytes());
+    bytes[144..152].copy_from_slice(&next.to_le_bytes());
     file.write_all_at(&bytes, 0)
 }
 
@@ -1859,6 +1864,7 @@ fn create_overlay_telemetry_file(directory: &Path) -> io::Result<(PathBuf, File)
         .mode(0o600)
         .open(&path)?;
     let telemetry = OverlayHardwareTelemetry {
+        details: redunar_core::overlay_metrics::HardwareDetails::default(),
         revision: 2,
         corner: 0,
         preset: 0,
@@ -1922,14 +1928,16 @@ fn write_overlay_hardware(
     let odd_revision = next_revision - 1;
     file.write_all_at(&odd_revision.to_le_bytes(), 16)?;
     file.write_all_at(&odd_revision.to_le_bytes(), 40)?;
+    file.write_all_at(&odd_revision.to_le_bytes(), 144)?;
 
     let telemetry = OverlayHardwareTelemetry {
+        details: overlay_hardware_details(hardware, gpu),
         revision: next_revision,
-        corner: (packed_config & 0xff) as u8,
+        corner: (packed_config & 3) as u8,
         preset: ((packed_config >> 8) & 0xff) as u8,
         layout: ((packed_config >> 56) & 0x0f) as u8,
         palette: ((packed_config >> 60) & 0x0f) as u8,
-        metrics: ((packed_config >> 16) & 0xffff) as u16,
+        metrics: unpack_overlay_metrics(packed_config),
         opacity_percent: ((packed_config >> 32) & 0xff) as u8,
         scale_percent: ((packed_config >> 40) & 0xff) as u8,
         edge_spacing_px: unpack_overlay_edge_spacing(packed_config),
@@ -1970,7 +1978,7 @@ fn default_overlay_config() -> u64 {
 fn pack_overlay_config(
     corner: u8,
     preset: u8,
-    metrics: u16,
+    metrics: u32,
     opacity: u8,
     scale: u8,
     layout: u8,
@@ -1987,13 +1995,18 @@ fn pack_overlay_config(
     debug_assert!(spacing_code <= 0x1f);
     u64::from(corner)
         | (u64::from(preset) << 8)
-        | (u64::from(metrics) << 16)
+        | (u64::from(metrics & 0xffff) << 16)
+        | (u64::from(metrics >> 16) << 2)
         | (u64::from(opacity) << 32)
         | (u64::from(scale) << 40)
         | (u64::from(branding_visible) << 50)
         | (u64::from(spacing_code) << 51)
         | (u64::from(layout & 0x0f) << 56)
         | (u64::from(palette & 0x0f) << 60)
+}
+
+fn unpack_overlay_metrics(packed: u64) -> u32 {
+    ((packed >> 16) & 0xffff) as u32 | (((packed >> 2) & 1) as u32) << 16
 }
 
 fn unpack_overlay_edge_spacing(packed: u64) -> Option<u8> {
@@ -2036,6 +2049,36 @@ const fn overlay_palette_code(value: redunar_core::OverlayPalette) -> u8 {
         redunar_core::OverlayPalette::Amethyst => 5,
         redunar_core::OverlayPalette::Solar => 6,
         redunar_core::OverlayPalette::Rose => 7,
+    }
+}
+
+fn overlay_hardware_details(
+    hardware: Option<&redunar_core::SystemSnapshot>,
+    gpu: Option<&redunar_core::GpuSnapshot>,
+) -> redunar_core::overlay_metrics::HardwareDetails {
+    use redunar_core::overlay_metrics::{HardwareDetails, MetricText};
+    let number = |value: Option<f64>, scale: f64| {
+        value
+            .and_then(|value| metric_tenths(value * scale / 10.0, u16::MAX))
+            .map(u32::from)
+    };
+    HardwareDetails {
+        cpu_model: hardware
+            .map(|h| MetricText::model_name(&h.cpu.model))
+            .unwrap_or_default(),
+        gpu_model: gpu
+            .map(|g| MetricText::model_name(&g.model))
+            .unwrap_or_default(),
+        cpu_clock_mhz: number(hardware.and_then(|h| h.cpu.clock_mhz), 1.0),
+        gpu_clock_mhz: number(gpu.and_then(|g| g.clock_mhz), 1.0),
+        cpu_power_tenths: number(hardware.and_then(|h| h.cpu.power_watts), 10.0),
+        gpu_power_tenths: number(gpu.and_then(|g| g.power_watts), 10.0),
+        ram_mib: hardware
+            .and_then(|h| h.memory)
+            .and_then(|m| u32::try_from(m.used_bytes / 1_048_576).ok()),
+        vram_mib: gpu
+            .and_then(|g| g.vram_used_bytes)
+            .and_then(|v| u32::try_from(v / 1_048_576).ok()),
     }
 }
 
@@ -2226,6 +2269,7 @@ mod tests {
             )
             .unwrap()
         };
+        profile.overlay_metrics = redunar_core::OverlayMetricSet::DETAILED;
         for (visible, spacing) in [(false, 12), (true, 0), (false, 96)] {
             profile.overlay_visible = visible;
             profile.overlay_edge_spacing = OverlayEdgeSpacing::new(spacing).unwrap();
@@ -2235,6 +2279,10 @@ mod tests {
             capture.update_overlay_hardware(None).unwrap();
             assert_eq!(read().edge_spacing_px, wire_spacing);
             assert_eq!(read().metrics_visible, Some(visible));
+            assert_eq!(
+                read().metrics,
+                redunar_core::OverlayMetricSet::DETAILED.bits()
+            );
             assert_eq!(read().opacity_percent, profile.overlay_opacity.percent());
         }
         capture.publish_replay_saved_notice().unwrap();
@@ -2494,8 +2542,13 @@ mod tests {
         );
         let revision = AtomicU64::new(2);
         let hardware = SystemSnapshot {
-            memory: None,
+            memory: Some(redunar_core::MemorySnapshot {
+                used_bytes: 15_048 * 1_048_576,
+                total_bytes: 32_768 * 1_048_576,
+            }),
             cpu: CpuSnapshot {
+                clock_mhz: Some(5225.0),
+                power_watts: Some(65.6),
                 vendor: "AuthenticAMD".into(),
                 model: "Fixture CPU".into(),
                 logical_cpus: 8,
@@ -2513,10 +2566,10 @@ mod tests {
                 driver: None,
                 temperature_celsius: Some(71.05),
                 utilization_percent: Some(99.1),
-                clock_mhz: None,
-                vram_used_bytes: None,
+                clock_mhz: Some(2835.0),
+                vram_used_bytes: Some(8319 * 1_048_576),
                 vram_total_bytes: None,
-                power_watts: None,
+                power_watts: Some(177.6),
                 performance_level: None,
             }],
         };
@@ -2534,6 +2587,12 @@ mod tests {
         file.read_exact_at(&mut bytes, 0).expect("read telemetry");
         let decoded = decode_overlay_hardware_telemetry(&bytes).expect("decode telemetry");
         assert_eq!(decoded.revision, 4);
+        assert_eq!(decoded.details.cpu_clock_mhz, Some(5225));
+        assert_eq!(decoded.details.gpu_clock_mhz, Some(2835));
+        assert_eq!(decoded.details.cpu_power_tenths, Some(656));
+        assert_eq!(decoded.details.gpu_power_tenths, Some(1776));
+        assert_eq!(decoded.details.ram_mib, Some(15048));
+        assert_eq!(decoded.details.vram_mib, Some(8319));
         assert_eq!(decoded.cpu_utilization_tenths, Some(487));
         assert_eq!(decoded.cpu_temperature_tenths_celsius, Some(624));
         assert_eq!(decoded.gpu_utilization_tenths, Some(991));
@@ -2544,6 +2603,7 @@ mod tests {
             .expect("read Replay notice");
         let noticed = decode_overlay_hardware_telemetry(&bytes).expect("decode Replay notice");
         assert_eq!(noticed.revision, 6);
+        assert_eq!(noticed.details, decoded.details);
         assert_eq!(noticed.replay_saved_revision, 9);
 
         write_overlay_hardware(&file, &revision, None, None, default_overlay_config(), 9)
@@ -2552,6 +2612,10 @@ mod tests {
             .expect("read cleared telemetry");
         let cleared = decode_overlay_hardware_telemetry(&bytes).expect("decode cleared telemetry");
         assert_eq!(cleared.revision, 8);
+        assert_eq!(
+            cleared.details,
+            redunar_core::overlay_metrics::HardwareDetails::default()
+        );
         assert_eq!(cleared.replay_saved_revision, 9);
         assert_eq!(cleared.cpu_utilization_tenths, None);
         assert_eq!(cleared.gpu_utilization_tenths, None);

@@ -2,6 +2,7 @@
 
 mod game;
 pub mod overlay_font;
+pub mod overlay_metrics;
 
 pub use game::{
     EffectiveGameProfile, GameCatalog, GameId, GameIdentityError, GameLaunchConfig, GameMatchRule,
@@ -32,6 +33,10 @@ pub struct MemorySnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CpuSnapshot {
+    /// Maximum reported frequency across discovered CPU policies.
+    pub clock_mhz: Option<f64>,
+    /// Sum of readable package energy deltas over the sampling interval.
+    pub power_watts: Option<f64>,
     pub vendor: String,
     pub model: String,
     pub logical_cpus: usize,

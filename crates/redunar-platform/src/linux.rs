@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 mod drm;
 pub use drm::{DrmRenderDevice, unique_render_device};
 
+#[path = "linux_cpu_metrics.rs"]
+mod cpu_metrics;
+#[path = "cpu_power_reader.rs"]
+mod cpu_power_reader;
 #[path = "linux_cpu_temperature.rs"]
 mod cpu_temperature;
 
@@ -38,6 +42,8 @@ pub struct LinuxTelemetrySampler {
     memory_path: PathBuf,
     cpu_utilization: LinuxCpuUtilizationSampler,
     cpu_paths: CpuTelemetryPaths,
+    cpu_metrics: cpu_metrics::CpuMetrics,
+    cpu_power_reader: Option<cpu_power_reader::CpuPowerReader>,
     gpu_paths: Vec<GpuTelemetryPaths>,
     nvidia_nvml: Option<NvidiaNvml>,
     nvidia_diagnostics: NvidiaDiagnostics,
@@ -171,7 +177,13 @@ impl LinuxTelemetrySampler {
             .map(|gpu| discover_gpu_telemetry_paths(&sys_root, &gpu.card))
             .collect();
 
+        let cpu_metrics = cpu_metrics::CpuMetrics::discover(&sys_root);
+        let cpu_power_reader = (sys_root == Path::new("/sys")
+            && cpu_metrics.requires_privileged_reader())
+        .then(cpu_power_reader::CpuPowerReader::default);
         Ok(Self {
+            cpu_metrics,
+            cpu_power_reader,
             snapshot,
             memory_path: proc_root.join("meminfo"),
             cpu_utilization: LinuxCpuUtilizationSampler::new(proc_root),
@@ -212,6 +224,13 @@ impl LinuxTelemetrySampler {
             .as_ref()
             .and_then(read_millivalue);
         snapshot.cpu.utilization_percent = self.cpu_utilization.sample();
+        (snapshot.cpu.clock_mhz, snapshot.cpu.power_watts) = self.cpu_metrics.sample();
+        if snapshot.cpu.power_watts.is_none() {
+            snapshot.cpu.power_watts = self
+                .cpu_power_reader
+                .as_mut()
+                .and_then(cpu_power_reader::CpuPowerReader::sample);
+        }
         snapshot.cpu.governor = read_trimmed(&self.cpu_paths.governor);
         snapshot.cpu.energy_performance_preference =
             read_trimmed(&self.cpu_paths.energy_performance_preference);
@@ -286,6 +305,8 @@ impl LinuxHardwareProbe {
         let cpufreq = self.sys_root.join("devices/system/cpu/cpu0/cpufreq");
 
         Ok(CpuSnapshot {
+            clock_mhz: None,
+            power_watts: None,
             vendor: vendor.to_owned(),
             model: model.to_owned(),
             logical_cpus,

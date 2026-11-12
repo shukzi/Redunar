@@ -47,6 +47,11 @@ A new file on disk cannot update an already-running process.
   `libredunar_capture_opengl.so` beside the app, resolved into private
   per-launch graphics capture configuration.
 - `/usr/libexec/redunar-hotkey-helper`, running as the logged-in user.
+- `/usr/libexec/redunar-cpu-power-helper`, a fixed read-only package power endpoint
+  authorized through `com.redunar.cpu-power.policy` for active local sessions.
+  The package installs it without setuid/setgid bits. Fresh installations and
+  upgrades install the same helper and policy. Polkit observes policy changes
+  automatically. No sensor permission changes or persistent service are needed.
 - `/usr/libexec/redunar-update-helper` and
   `/usr/share/polkit-1/actions/com.redunar.install-update.policy`, for the
   explicitly authorized update installation described below.

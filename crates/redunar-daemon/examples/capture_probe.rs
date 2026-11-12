@@ -836,7 +836,7 @@ fn configure_overlay(
         overlay_branding: env::var("REDUNAR_CAPTURE_PROBE_BRANDING").ok().as_deref() != Some("0"),
         overlay_metrics: env::var("REDUNAR_CAPTURE_PROBE_METRICS")
             .ok()
-            .and_then(|value| value.parse::<u16>().ok())
+            .and_then(|value| value.parse::<u32>().ok())
             .and_then(|bits| OverlayMetricSet::from_bits(bits).ok())
             .unwrap_or_default(),
         overlay_corner: match env::var("REDUNAR_CAPTURE_PROBE_CORNER").ok().as_deref() {

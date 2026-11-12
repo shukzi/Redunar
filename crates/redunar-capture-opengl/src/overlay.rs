@@ -32,10 +32,8 @@ const TELEMETRY_INTERVAL_NS: u64 = 50_000_000;
 const MENU_TELEMETRY_INTERVAL_NS: u64 = 8_000_000;
 const REPLAY_SAVED_NOTICE_NS: u64 = 3_000_000_000;
 const FRAME_HISTORY_CAPACITY: usize = 240;
-const TELEMETRY_WIDTH: i32 = 300;
 const TELEMETRY_HEADER_HEIGHT: i32 = 25;
 const TELEMETRY_ROW_HEIGHT: i32 = 24;
-const RIBBON_METRIC_WIDTH: i32 = 89;
 const RIBBON_BRAND_WIDTH: i32 = 94;
 const RIBBON_HEIGHT: i32 = 44;
 const REPLAY_MENU_WIDTH: i32 = 520;
@@ -90,6 +88,7 @@ struct Palette {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct MetricSnapshot {
+    details: redunar_core::overlay_metrics::HardwareDetails,
     fps: Option<u16>,
     frame_time_tenths_ms: Option<u16>,
     one_percent_low_fps: Option<u16>,
@@ -143,6 +142,7 @@ impl FrameHistory {
         let one_count = self.length.div_ceil(100).max(1);
         let point_one_count = self.length.div_ceil(1_000).max(1);
         MetricSnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(clamp_metric(average)),
             frame_time_tenths_ms: Some(clamp_metric(u128::from(
                 self.intervals_ns[newest_index] / 100_000,
@@ -165,7 +165,7 @@ struct OverlayState {
     palette: Palette,
     preset: Preset,
     layout: Layout,
-    metrics: u16,
+    metrics: u32,
     scale_percent: u8,
     edge_spacing: OverlayEdgeSpacing,
     opacity_percent: u8,
@@ -241,6 +241,7 @@ impl OverlayState {
                 self.opacity_percent = telemetry.opacity_percent;
                 self.branding_visible = telemetry.branding_visible;
                 self.hardware.cpu_percent = telemetry.cpu_utilization_tenths.map(round_percent);
+                self.hardware.details = telemetry.details;
                 self.hardware.cpu_temperature_c =
                     telemetry.cpu_temperature_tenths_celsius.map(round_temp);
                 self.hardware.gpu_percent = telemetry.gpu_utilization_tenths.map(round_percent);
@@ -279,6 +280,7 @@ impl OverlayState {
     fn snapshot(&self) -> MetricSnapshot {
         let frame = self.history.summarize();
         MetricSnapshot {
+            details: self.hardware.details,
             cpu_percent: self.hardware.cpu_percent,
             cpu_temperature_c: self.hardware.cpu_temperature_c,
             gpu_percent: self.hardware.gpu_percent,
@@ -321,7 +323,7 @@ struct RenderConfig {
     palette: Palette,
     preset: Preset,
     layout: Layout,
-    metrics: u16,
+    metrics: u32,
     scale_percent: u8,
     edge_spacing: OverlayEdgeSpacing,
     opacity_percent: u8,
@@ -334,7 +336,7 @@ struct RenderCache {
     revision: u64,
     width: i32,
     height: i32,
-    metrics: u16,
+    metrics: u32,
     source_revision: u64,
     config: Option<RenderConfig>,
     config_menu: Option<ReplayMenuTelemetry>,
@@ -349,14 +351,21 @@ struct Canvas {
 
 impl Canvas {
     fn new(width: i32, height: i32) -> Self {
+        Self::reuse(width, height, Vec::new())
+    }
+
+    fn reuse(width: i32, height: i32, mut pixels: Vec<u8>) -> Self {
         let length = usize::try_from(width.max(0))
             .unwrap_or(0)
             .saturating_mul(usize::try_from(height.max(0)).unwrap_or(0))
             .saturating_mul(4);
+        pixels.truncate(length);
+        pixels.fill(0);
+        pixels.resize(length, 0);
         Self {
             width,
             height,
-            pixels: vec![0; length],
+            pixels,
         }
     }
 
@@ -382,6 +391,8 @@ impl Canvas {
         color: [f32; 4],
         border: [f32; 4],
     ) {
+        let empty_fill = color_on_transparent(color);
+        let empty_border = color_on_transparent(border);
         let radius = radius.min(width / 2).min(height / 2).max(1);
         for row in 0..height {
             for column in 0..width {
@@ -396,8 +407,29 @@ impl Canvas {
                     || column == 0
                     || row == height - 1
                     || column == width - 1;
-                self.blend_pixel(x + column, y + row, if edge { border } else { color });
+                self.blend_panel_pixel(
+                    x + column,
+                    y + row,
+                    if edge { border } else { color },
+                    if edge { empty_border } else { empty_fill },
+                );
             }
+        }
+    }
+
+    // The metric canvas starts transparent. Its large panel uses only two
+    // colors, so encode each once rather than taking three square roots per pixel.
+    fn blend_panel_pixel(&mut self, x: i32, y: i32, color: [f32; 4], empty: [u8; 4]) {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        let index = (usize::try_from(y).unwrap_or(0) * usize::try_from(self.width).unwrap_or(0)
+            + usize::try_from(x).unwrap_or(0))
+            * 4;
+        if self.pixels[index..index + 4] == [0; 4] {
+            self.pixels[index..index + 4].copy_from_slice(&empty);
+        } else {
+            self.blend_pixel(x, y, color);
         }
     }
 
@@ -425,6 +457,19 @@ impl Canvas {
         }
         self.pixels[index + 3] = normalized_byte(output_alpha);
     }
+}
+
+fn color_on_transparent(color: [f32; 4]) -> [u8; 4] {
+    let alpha = color[3].clamp(0.0, 1.0);
+    if alpha <= f32::EPSILON {
+        return [0; 4];
+    }
+    [
+        normalized_byte(color[0].clamp(0.0, 1.0).sqrt() * alpha),
+        normalized_byte(color[1].clamp(0.0, 1.0).sqrt() * alpha),
+        normalized_byte(color[2].clamp(0.0, 1.0).sqrt() * alpha),
+        normalized_byte(alpha),
+    ]
 }
 
 #[expect(
@@ -544,7 +589,8 @@ fn render_metrics_surface(
         || cache.metrics != metrics
         || cache.config != Some(config);
     if cache_needs_refresh {
-        let mut canvas = Canvas::new(width, height);
+        // Retain the bounded pixel allocation across the 4 Hz metric refresh.
+        let mut canvas = Canvas::reuse(width, height, std::mem::take(&mut cache.pixels));
         render_plan(
             &mut canvas,
             snapshot,
@@ -1134,7 +1180,7 @@ fn render_plan(
     canvas: &mut Canvas,
     snapshot: MetricSnapshot,
     config: RenderConfig,
-    metrics: u16,
+    metrics: u32,
     origin: (i32, i32),
     scale_percent: u32,
 ) {
@@ -1200,7 +1246,7 @@ fn render_ribbon(
     canvas: &mut Canvas,
     snapshot: MetricSnapshot,
     config: RenderConfig,
-    metrics: u16,
+    metrics: u32,
     origin: (i32, i32),
     scale: u32,
 ) {
@@ -1221,12 +1267,12 @@ fn render_ribbon(
             config.palette.accent,
         );
     }
-    let mut index = 0_i32;
+    let mut offset = 0_i32;
     for (bit, label) in metric_labels() {
         if metrics & bit == 0 {
             continue;
         }
-        let x = brand_width + 8 + index * RIBBON_METRIC_WIDTH;
+        let x = brand_width + 8 + offset;
         let value = metric_value(snapshot, bit);
         {
             clear_scaled_rect(
@@ -1251,7 +1297,7 @@ fn render_ribbon(
                 config.palette.text,
             );
         }
-        index += 1;
+        offset += i32::try_from(redunar_core::overlay_metrics::ribbon_width(bit)).unwrap_or(304);
     }
 }
 
@@ -1259,10 +1305,12 @@ fn render_telemetry(
     canvas: &mut Canvas,
     snapshot: MetricSnapshot,
     config: RenderConfig,
-    metrics: u16,
+    metrics: u32,
     origin: (i32, i32),
     scale: u32,
 ) {
+    let width =
+        i32::try_from(redunar_core::overlay_metrics::telemetry_width(metrics)).unwrap_or(400);
     let count = metric_count(metrics);
     if config.branding_visible {
         draw_text_scaled(
@@ -1281,7 +1329,7 @@ fn render_telemetry(
     draw_text_scaled(
         canvas,
         origin,
-        TELEMETRY_WIDTH - 8 - heading_width,
+        width - 8 - heading_width,
         4,
         heading,
         1,
@@ -1294,7 +1342,7 @@ fn render_telemetry(
             origin,
             3,
             24,
-            TELEMETRY_WIDTH - 3,
+            width - 3,
             1,
             scale,
             config.palette.divider,
@@ -1314,7 +1362,7 @@ fn render_telemetry(
             draw_text_scaled(
                 canvas,
                 origin,
-                TELEMETRY_WIDTH - 8 - value_width,
+                width - 8 - value_width,
                 y,
                 value.as_bytes(),
                 1,
@@ -1329,7 +1377,7 @@ fn render_telemetry(
                 origin,
                 8,
                 y + TELEMETRY_ROW_HEIGHT - 5,
-                TELEMETRY_WIDTH - 16,
+                width - 16,
                 1,
                 scale,
                 config.palette.divider,
@@ -1459,12 +1507,38 @@ fn draw_text_scaled(
     }
 }
 
+fn resampled_coverage(
+    raster: [u32; overlay_font::COVERAGE_WORDS],
+    column: i32,
+    row: i32,
+    width: i32,
+    height: i32,
+) -> f32 {
+    // At 200% each destination pixel exactly matches one stored source sample.
+    // Preserve the same gamma result while avoiding redundant interpolation and
+    // exponentiation for the four possible coverage values.
+    if width == overlay_font::COVERAGE_WIDTH.cast_signed()
+        && height == overlay_font::COVERAGE_HEIGHT.cast_signed()
+    {
+        static COVERAGE: LazyLock<[f32; 4]> = LazyLock::new(|| {
+            std::array::from_fn(|index| {
+                (f32::from(u8::try_from(index).unwrap_or(0)) / 3.0).powf(0.72)
+            })
+        });
+        let (Ok(x), Ok(y)) = (u32::try_from(column), u32::try_from(row)) else {
+            return 0.0;
+        };
+        return COVERAGE[usize::from(overlay_font::coverage_pixel(raster, x, y))];
+    }
+    interpolated_coverage(raster, column, row, width, height)
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    reason = "bounded glyph coordinates are converted to match Vulkan's normalized raster sampling"
+    reason = "bounded glyph coordinates match normalized raster sampling"
 )]
-fn resampled_coverage(
+fn interpolated_coverage(
     raster: [u32; overlay_font::COVERAGE_WORDS],
     column: i32,
     row: i32,
@@ -1534,7 +1608,7 @@ fn panel_origin(
     }
 }
 
-fn selected_metrics(snapshot: MetricSnapshot, config: RenderConfig) -> u16 {
+fn selected_metrics(snapshot: MetricSnapshot, config: RenderConfig) -> u32 {
     if config.preset == Preset::FpsOnly {
         return OverlayMetricSet::FPS;
     }
@@ -1559,7 +1633,7 @@ fn selected_metrics(snapshot: MetricSnapshot, config: RenderConfig) -> u16 {
     metrics
 }
 
-fn layout_extent(config: RenderConfig, metrics: u16) -> (i32, i32) {
+fn layout_extent(config: RenderConfig, metrics: u32) -> (i32, i32) {
     if config.preset == Preset::FpsOnly {
         return (
             116,
@@ -1573,37 +1647,34 @@ fn layout_extent(config: RenderConfig, metrics: u16) -> (i32, i32) {
                 RIBBON_BRAND_WIDTH
             } else {
                 0
-            } + count * RIBBON_METRIC_WIDTH,
+            } + metric_labels()
+                .into_iter()
+                .filter(|(bit, _)| metrics & *bit != 0)
+                .map(|(bit, _)| {
+                    i32::try_from(redunar_core::overlay_metrics::ribbon_width(bit)).unwrap_or(304)
+                })
+                .sum::<i32>(),
             RIBBON_HEIGHT,
         ),
         Layout::Telemetry => (
-            TELEMETRY_WIDTH,
+            i32::try_from(redunar_core::overlay_metrics::telemetry_width(metrics)).unwrap_or(400),
             TELEMETRY_HEADER_HEIGHT + count * TELEMETRY_ROW_HEIGHT,
         ),
     }
 }
 
-fn metric_count(metrics: u16) -> usize {
+fn metric_count(metrics: u32) -> usize {
     metric_labels()
         .into_iter()
         .filter(|(bit, _)| metrics & *bit != 0)
         .count()
 }
 
-fn metric_labels() -> [(u16, &'static [u8]); 8] {
-    [
-        (OverlayMetricSet::FPS, b"FPS"),
-        (OverlayMetricSet::FRAME_TIME, b"FRAME TIME"),
-        (OverlayMetricSet::ONE_PERCENT_LOW, b"1% LOW"),
-        (OverlayMetricSet::POINT_ONE_PERCENT_LOW, b"0.1% LOW"),
-        (OverlayMetricSet::GPU_LOAD, b"GPU LOAD"),
-        (OverlayMetricSet::GPU_TEMPERATURE, b"GPU TEMP"),
-        (OverlayMetricSet::CPU_LOAD, b"CPU LOAD"),
-        (OverlayMetricSet::CPU_TEMPERATURE, b"CPU TEMP"),
-    ]
+fn metric_labels() -> [(u32, &'static [u8]); 17] {
+    redunar_core::overlay_metrics::LABELS
 }
 
-fn metric_value(snapshot: MetricSnapshot, metric: u16) -> FixedText<20> {
+fn metric_value(snapshot: MetricSnapshot, metric: u32) -> FixedText<32> {
     let mut value = FixedText::default();
     match metric {
         OverlayMetricSet::FPS => {
@@ -1646,7 +1717,7 @@ fn metric_value(snapshot: MetricSnapshot, metric: u16) -> FixedText<20> {
             );
             value.push_bytes(b"^C");
         }
-        _ => value.push_bytes(b"--"),
+        _ => value.push_bytes(snapshot.details.value(metric, "OPENGL").as_bytes()),
     }
     value
 }
@@ -1698,10 +1769,10 @@ const fn layout_from_index(index: u8) -> Layout {
     }
 }
 
-fn metrics_from_environment() -> u16 {
+fn metrics_from_environment() -> u32 {
     env::var(OVERLAY_METRICS_ENV)
         .ok()
-        .and_then(|value| value.parse::<u16>().ok())
+        .and_then(|value| value.parse::<u32>().ok())
         .filter(|bits| *bits != 0 && *bits & !OverlayMetricSet::KNOWN == 0)
         .unwrap_or_else(|| OverlayMetricSet::COMPACT.bits())
 }
@@ -1930,10 +2001,147 @@ fn round_temp(tenths: u16) -> i16 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_size_glyph_sampling_matches_interpolation_bit_for_bit() {
+        for byte in 0..=127 {
+            for raster in [
+                redunar_core::overlay_font::coverage_raster(byte),
+                redunar_core::overlay_font::ui_coverage_raster(byte),
+            ] {
+                for row in 0..24 {
+                    for column in 0..18 {
+                        assert_eq!(
+                            super::resampled_coverage(raster, column, row, 18, 24).to_bits(),
+                            super::interpolated_coverage(raster, column, row, 18, 24).to_bits()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_panel_colors_match_general_blending_exactly() {
+        for palette_index in 0..8 {
+            let palette = palette_from_index(palette_index);
+            for mut color in [palette.panel, palette.divider, palette.accent] {
+                for alpha in [0.0, f32::EPSILON, 0.01, 0.6, 1.0] {
+                    color[3] = alpha;
+                    for background in [[0; 4], [120, 80, 20, 0], [120, 80, 20, 128], [255; 4]] {
+                        let mut reference = Canvas::new(1, 1);
+                        reference.pixels.copy_from_slice(&background);
+                        let mut prepared = Canvas::new(1, 1);
+                        prepared.pixels.copy_from_slice(&background);
+                        reference.blend_pixel(0, 0, color);
+                        prepared.blend_panel_pixel(0, 0, color, super::color_on_transparent(color));
+                        assert_eq!(prepared.pixels, reference.pixels);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn metric_canvas_reuses_storage_and_clears_old_pixels() {
+        let mut canvas = Canvas::new(400, 433);
+        canvas.pixels.fill(255);
+        let pointer = canvas.pixels.as_ptr();
+        let canvas = Canvas::reuse(400, 433, canvas.pixels);
+        assert_eq!(canvas.pixels.as_ptr(), pointer);
+        assert!(canvas.pixels.iter().all(|value| *value == 0));
+        let canvas = Canvas::reuse(300, 169, canvas.pixels);
+        assert_eq!(canvas.pixels.as_ptr(), pointer);
+        assert_eq!(canvas.pixels.len(), 300 * 169 * 4);
+    }
+
+    #[test]
+    #[ignore = "synthetic CPU rasterization measurement; run explicitly in an optimized build"]
+    fn metric_canvas_cpu_latency() {
+        for (preset, scale) in [
+            (Preset::Compact, 100_u8),
+            (Preset::Detailed, 100),
+            (Preset::Detailed, 200),
+        ] {
+            let config = RenderConfig {
+                corner: Corner::TopLeft,
+                palette: palette_from_index(0),
+                preset,
+                layout: Layout::Telemetry,
+                metrics: 0,
+                scale_percent: scale,
+                edge_spacing: OverlayEdgeSpacing::default(),
+                opacity_percent: 60,
+                branding_visible: true,
+            };
+            let snapshot = reference_snapshot();
+            let metrics = super::selected_metrics(snapshot, config);
+            let (width, height) = layout_extent(config, metrics);
+            let width = super::scale_value(width, u32::from(scale));
+            let height = super::scale_value(height, u32::from(scale));
+            let mut pixels = Vec::new();
+            let mut timings = Vec::with_capacity(100);
+            for index in 0..110 {
+                let start = std::time::Instant::now();
+                let mut canvas = Canvas::reuse(width, height, pixels);
+                render_plan(
+                    &mut canvas,
+                    snapshot,
+                    config,
+                    metrics,
+                    (0, 0),
+                    u32::from(scale),
+                );
+                std::hint::black_box(&canvas.pixels);
+                if index >= 10 {
+                    timings.push(start.elapsed().as_nanos());
+                }
+                pixels = canvas.pixels;
+            }
+            timings.sort_unstable();
+            println!(
+                "OpenGL CPU canvas {preset:?} at {scale}%: {} bytes, p50={} ns, p95={} ns, p99={} ns",
+                pixels.len(),
+                timings[49],
+                timings[94],
+                timings[98]
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_values_use_shared_units_and_keep_missing_values_unavailable() {
+        use redunar_core::{
+            OverlayMetricSet as M,
+            overlay_metrics::{HardwareDetails, MetricText},
+        };
+        let snapshot = MetricSnapshot {
+            details: HardwareDetails {
+                cpu_model: MetricText::new("AMD RYZEN 7 9800X3D"),
+                gpu_power_tenths: Some(1776),
+                cpu_clock_mhz: Some(5225),
+                vram_mib: Some(8319),
+                ..HardwareDetails::default()
+            },
+            ..MetricSnapshot::default()
+        };
+        assert_eq!(
+            metric_value(snapshot, M::CPU_MODEL).as_bytes(),
+            b"AMD RYZEN 7 9800X3D"
+        );
+        assert_eq!(metric_value(snapshot, M::GPU_POWER).as_bytes(), b"177.6 W");
+        assert_eq!(metric_value(snapshot, M::CPU_CLOCK).as_bytes(), b"5225 MHz");
+        assert_eq!(metric_value(snapshot, M::VRAM).as_bytes(), b"8319 MiB");
+        assert_eq!(metric_value(snapshot, M::CPU_POWER).as_bytes(), b"-- W");
+        assert_eq!(
+            metric_value(snapshot, M::GRAPHICS_API).as_bytes(),
+            b"OPENGL"
+        );
+    }
+
     use super::{
         Canvas, Corner, FixedText, FrameHistory, Layout, MetricSnapshot, OverlayEdgeSpacing,
         OverlayState, PANEL_MARGIN, Preset, REPLAY_MENU_HEIGHT, REPLAY_MENU_WIDTH, RenderConfig,
-        SAVED_NOTICE_HEIGHT, SAVED_NOTICE_WIDTH, draw_text_scaled, layout_extent,
+        SAVED_NOTICE_HEIGHT, SAVED_NOTICE_WIDTH, draw_text_scaled, layout_extent, metric_value,
         palette_from_index, panel_origin, render_plan, render_replay_menu, render_saved_notice,
     };
     use redunar_capture::{
@@ -2019,6 +2227,7 @@ mod tests {
             branding_visible: false,
         };
         let snapshot = MetricSnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             ..MetricSnapshot::default()
@@ -2057,6 +2266,7 @@ mod tests {
             branding_visible: false,
         };
         let snapshot = MetricSnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             ..MetricSnapshot::default()
@@ -2163,6 +2373,7 @@ mod tests {
         let mut bytes = [0_u8; OVERLAY_HARDWARE_TELEMETRY_BYTES];
         encode_overlay_hardware_telemetry(
             OverlayHardwareTelemetry {
+                details: redunar_core::overlay_metrics::HardwareDetails::default(),
                 revision: 2,
                 corner: 3,
                 preset: 2,
@@ -2230,6 +2441,11 @@ mod tests {
             return;
         };
         let surface = std::env::var("REDUNAR_OPENGL_CANVAS_SURFACE").unwrap_or_default();
+        let scale = std::env::var("REDUNAR_OPENGL_CANVAS_SCALE")
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(100)
+            .clamp(50, 200);
         let palette = palette_from_index(0);
         let (width, height, draw): (i32, i32, Box<dyn Fn(&mut Canvas)>) = match surface.as_str() {
             "menu" => (
@@ -2275,7 +2491,7 @@ mod tests {
                     preset: Preset::Detailed,
                     layout: Layout::Ribbon,
                     metrics: 0,
-                    scale_percent: 100,
+                    scale_percent: scale,
                     edge_spacing: OverlayEdgeSpacing::default(),
                     opacity_percent: 60,
                     branding_visible: true,
@@ -2283,10 +2499,17 @@ mod tests {
                 let metrics = redunar_core::OverlayMetricSet::KNOWN;
                 let (width, height) = layout_extent(config, metrics);
                 (
-                    width,
-                    height,
+                    super::scale_value(width, u32::from(scale)),
+                    super::scale_value(height, u32::from(scale)),
                     Box::new(move |canvas| {
-                        render_plan(canvas, reference_snapshot(), config, metrics, (0, 0), 100);
+                        render_plan(
+                            canvas,
+                            reference_snapshot(),
+                            config,
+                            metrics,
+                            (0, 0),
+                            u32::from(scale),
+                        );
                     }),
                 )
             }
@@ -2297,7 +2520,7 @@ mod tests {
                     preset: Preset::Detailed,
                     layout: Layout::Telemetry,
                     metrics: 0,
-                    scale_percent: 100,
+                    scale_percent: scale,
                     edge_spacing: OverlayEdgeSpacing::default(),
                     opacity_percent: 60,
                     branding_visible: true,
@@ -2305,10 +2528,17 @@ mod tests {
                 let metrics = redunar_core::OverlayMetricSet::KNOWN;
                 let (width, height) = layout_extent(config, metrics);
                 (
-                    width,
-                    height,
+                    super::scale_value(width, u32::from(scale)),
+                    super::scale_value(height, u32::from(scale)),
                     Box::new(move |canvas| {
-                        render_plan(canvas, reference_snapshot(), config, metrics, (0, 0), 100);
+                        render_plan(
+                            canvas,
+                            reference_snapshot(),
+                            config,
+                            metrics,
+                            (0, 0),
+                            u32::from(scale),
+                        );
                     }),
                 )
             }
@@ -2343,6 +2573,20 @@ mod tests {
 
     fn reference_snapshot() -> MetricSnapshot {
         MetricSnapshot {
+            details: redunar_core::overlay_metrics::HardwareDetails {
+                cpu_model: redunar_core::overlay_metrics::MetricText::model_name(
+                    "AMD Ryzen 7 9800X3D",
+                ),
+                gpu_model: redunar_core::overlay_metrics::MetricText::model_name(
+                    "NVIDIA GeForce RTX 5070",
+                ),
+                cpu_clock_mhz: Some(5225),
+                gpu_clock_mhz: Some(2835),
+                cpu_power_tenths: Some(656),
+                gpu_power_tenths: Some(1776),
+                ram_mib: Some(15048),
+                vram_mib: Some(8319),
+            },
             fps: Some(144),
             frame_time_tenths_ms: Some(69),
             one_percent_low_fps: Some(118),
@@ -2364,6 +2608,7 @@ mod tests {
         let mut bytes = vec![0_u8; OVERLAY_HARDWARE_TELEMETRY_BYTES + REPLAY_MENU_TELEMETRY_BYTES];
         encode_overlay_hardware_telemetry(
             OverlayHardwareTelemetry {
+                details: redunar_core::overlay_metrics::HardwareDetails::default(),
                 revision: 2,
                 corner: 0,
                 preset: 0,

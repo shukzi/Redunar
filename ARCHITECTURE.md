@@ -53,6 +53,14 @@ versioned private protocols, bounded queues, device identity, and release
 acknowledgements. Device loss, process replacement, stale results, and cleanup
 failure must not redirect data to a new session.
 
+CPU power uses direct readable counters or the fixed installed
+`redunar-cpu-power-helper` through polkit. The privileged endpoint accepts no
+arguments or paths and emits only aggregate package power. Active local sessions
+are authorized by the native package policy; inactive and remote sessions are
+denied. The sampler uses bounded nonblocking IPC, one outstanding request, stale
+response rejection, and a 30-second failure backoff. Disconnection ends the
+helper. A failed child must be reaped before a replacement can start.
+
 ## Source map
 
 Paths are relative to `output/tauri-redunar/`:

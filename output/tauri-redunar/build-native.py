@@ -25,6 +25,7 @@ run(["npm", "run", "build"], native)
 run(["cargo", "build", "--release", "--locked", "--offline", "-p", "redunar-capture-vulkan", "--lib", "--target-dir", str(runtime_target)], workspace)
 run(["cargo", "build", "--release", "--locked", "--offline", "-p", "redunar-capture-opengl", "--lib", "--target-dir", str(runtime_target)], workspace)
 run(["cargo", "build", "--release", "--locked", "--offline", "-p", "redunar-platform", "--bin", "redunar-steam-launch", "--target-dir", str(runtime_target)], workspace)
+run(["cargo", "build", "--release", "--locked", "--offline", "-p", "redunar-platform", "--bin", "redunar-cpu-power-helper", "--target-dir", str(runtime_target)], workspace)
 run(["cargo", "build", "--release", "--locked", "--offline", "-p", "redunar-hotkeys", "--bin", "redunar-hotkey-helper", "--target-dir", str(runtime_target)], workspace)
 release_environment = os.environ.copy()
 release_environment.setdefault(
@@ -39,7 +40,7 @@ run(
 
 destination = tauri_target / "release"
 hashes = {}
-for name in ("libredunar_capture_vulkan.so", "libredunar_capture_opengl.so", "redunar-steam-launch", "redunar-hotkey-helper"):
+for name in ("libredunar_capture_vulkan.so", "libredunar_capture_opengl.so", "redunar-steam-launch", "redunar-hotkey-helper", "redunar-cpu-power-helper"):
     source = runtime_target / "release" / name
     temporary = destination / f".{name}.stage"
     # Atomic replacement preserves the old inode if a running game still has

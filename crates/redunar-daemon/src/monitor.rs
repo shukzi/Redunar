@@ -466,6 +466,8 @@ mod tests {
             SystemSnapshot {
                 memory: None,
                 cpu: CpuSnapshot {
+                    clock_mhz: None,
+                    power_watts: None,
                     vendor: "AuthenticAMD".into(),
                     model: "Fixture CPU".into(),
                     logical_cpus: 8,

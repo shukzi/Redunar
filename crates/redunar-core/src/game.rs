@@ -71,7 +71,7 @@ pub enum OverlayPreset {
     Compact,
     /// Red FPS text only, with no background panel.
     FpsOnly,
-    /// Compact metrics plus 1% and 0.1% lows.
+    /// Compact metrics plus GPU and CPU package power.
     Detailed,
     /// User-selected metrics from a bounded built-in set.
     Custom,
@@ -103,25 +103,43 @@ pub enum OverlayPalette {
 
 /// Bounded metric-selection bits used only by the Custom overlay preset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OverlayMetricSet(u16);
+pub struct OverlayMetricSet(u32);
 
 impl OverlayMetricSet {
-    pub const FPS: u16 = 1 << 0;
-    pub const FRAME_TIME: u16 = 1 << 1;
-    pub const ONE_PERCENT_LOW: u16 = 1 << 2;
-    pub const POINT_ONE_PERCENT_LOW: u16 = 1 << 3;
-    pub const CPU_LOAD: u16 = 1 << 4;
-    pub const CPU_TEMPERATURE: u16 = 1 << 5;
-    pub const GPU_LOAD: u16 = 1 << 6;
-    pub const GPU_TEMPERATURE: u16 = 1 << 7;
-    pub const KNOWN: u16 = Self::FPS
+    pub const FPS: u32 = 1 << 0;
+    pub const FRAME_TIME: u32 = 1 << 1;
+    pub const ONE_PERCENT_LOW: u32 = 1 << 2;
+    pub const POINT_ONE_PERCENT_LOW: u32 = 1 << 3;
+    pub const CPU_LOAD: u32 = 1 << 4;
+    pub const CPU_TEMPERATURE: u32 = 1 << 5;
+    pub const GPU_LOAD: u32 = 1 << 6;
+    pub const GPU_TEMPERATURE: u32 = 1 << 7;
+    pub const GPU_MODEL: u32 = 1 << 8;
+    pub const GPU_POWER: u32 = 1 << 9;
+    pub const GPU_CLOCK: u32 = 1 << 10;
+    pub const VRAM: u32 = 1 << 11;
+    pub const CPU_MODEL: u32 = 1 << 12;
+    pub const CPU_POWER: u32 = 1 << 13;
+    pub const CPU_CLOCK: u32 = 1 << 14;
+    pub const RAM: u32 = 1 << 15;
+    pub const GRAPHICS_API: u32 = 1 << 16;
+    pub const KNOWN: u32 = Self::FPS
         | Self::FRAME_TIME
         | Self::ONE_PERCENT_LOW
         | Self::POINT_ONE_PERCENT_LOW
         | Self::CPU_LOAD
         | Self::CPU_TEMPERATURE
         | Self::GPU_LOAD
-        | Self::GPU_TEMPERATURE;
+        | Self::GPU_TEMPERATURE
+        | Self::GPU_MODEL
+        | Self::GPU_POWER
+        | Self::GPU_CLOCK
+        | Self::VRAM
+        | Self::CPU_MODEL
+        | Self::CPU_POWER
+        | Self::CPU_CLOCK
+        | Self::RAM
+        | Self::GRAPHICS_API;
     pub const COMPACT: Self = Self(
         Self::FPS
             | Self::FRAME_TIME
@@ -130,7 +148,7 @@ impl OverlayMetricSet {
             | Self::GPU_LOAD
             | Self::GPU_TEMPERATURE,
     );
-    pub const DETAILED: Self = Self(Self::KNOWN);
+    pub const DETAILED: Self = Self(Self::COMPACT.0 | Self::GPU_POWER | Self::CPU_POWER);
     pub const FPS_ONLY: Self = Self(Self::FPS);
 
     /// Construct a non-empty set containing only known metrics.
@@ -138,7 +156,7 @@ impl OverlayMetricSet {
     /// # Errors
     ///
     /// Returns [`OverlayMetricSetError`] for zero or unknown bits.
-    pub const fn from_bits(bits: u16) -> Result<Self, OverlayMetricSetError> {
+    pub const fn from_bits(bits: u32) -> Result<Self, OverlayMetricSetError> {
         if bits != 0 && bits & !Self::KNOWN == 0 {
             Ok(Self(bits))
         } else {
@@ -147,12 +165,12 @@ impl OverlayMetricSet {
     }
 
     #[must_use]
-    pub const fn bits(self) -> u16 {
+    pub const fn bits(self) -> u32 {
         self.0
     }
 
     #[must_use]
-    pub const fn contains(self, metric: u16) -> bool {
+    pub const fn contains(self, metric: u32) -> bool {
         self.0 & metric != 0
     }
 }
@@ -831,6 +849,12 @@ mod tests {
         assert_eq!(OverlayScale::new(49), None);
         assert_eq!(OverlayScale::new(136), None);
         assert_eq!(OverlayScale::new(201), None);
+        assert_eq!(OverlayMetricSet::DETAILED.bits().count_ones(), 8);
+        assert_eq!(
+            OverlayMetricSet::DETAILED.bits() & OverlayMetricSet::COMPACT.bits(),
+            OverlayMetricSet::COMPACT.bits()
+        );
+        assert!(OverlayMetricSet::DETAILED.contains(OverlayMetricSet::CPU_POWER));
         assert!(OverlayMetricSet::COMPACT.contains(OverlayMetricSet::FPS));
         assert!(!OverlayMetricSet::COMPACT.contains(OverlayMetricSet::ONE_PERCENT_LOW));
         assert_eq!(
@@ -839,6 +863,6 @@ mod tests {
             Ok(OverlayMetricSet::FPS | OverlayMetricSet::GPU_LOAD)
         );
         assert!(OverlayMetricSet::from_bits(0).is_err());
-        assert!(OverlayMetricSet::from_bits(1 << 15).is_err());
+        assert!(OverlayMetricSet::from_bits(1 << 31).is_err());
     }
 }

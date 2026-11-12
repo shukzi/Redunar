@@ -1,7 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
-pub const OVERLAY_HARDWARE_TELEMETRY_BYTES: usize = 48;
+pub const OVERLAY_HARDWARE_TELEMETRY_BYTES: usize = 152;
+const LEGACY_HARDWARE_BYTES: usize = 48;
 pub const REPLAY_MENU_TELEMETRY_BYTES: usize = 128;
 pub const REPLAY_SHORTCUT_LABEL_BYTES: usize = 40;
 /// Private menu ABI marker for Variable FPS; this is not a fixed 240 FPS rate.
@@ -10,6 +11,7 @@ pub const REPLAY_MENU_VARIABLE_FPS: u8 = 240;
 const MAGIC: [u8; 8] = *b"RDOVL001";
 const VERSION: u16 = 4;
 const EDGE_SPACING_VERSION: u16 = 5;
+const EXPANDED_VERSION: u16 = 6;
 const CPU_UTILIZATION_PRESENT: u16 = 1 << 0;
 const CPU_TEMPERATURE_PRESENT: u16 = 1 << 1;
 const GPU_UTILIZATION_PRESENT: u16 = 1 << 2;
@@ -276,7 +278,8 @@ pub struct OverlayHardwareTelemetry {
     pub preset: u8,
     pub layout: u8,
     pub palette: u8,
-    pub metrics: u16,
+    pub metrics: u32,
+    pub details: redunar_core::overlay_metrics::HardwareDetails,
     pub opacity_percent: u8,
     pub scale_percent: u8,
     pub edge_spacing_px: Option<u8>,
@@ -343,7 +346,29 @@ pub fn encode_overlay_hardware_telemetry(
     set_overlay_hardware_edge_spacing(output, telemetry.edge_spacing_px);
     output[12] = telemetry.corner;
     output[13] = telemetry.preset;
-    write_u16(output, 14, telemetry.metrics);
+    write_u16(
+        output,
+        14,
+        u16::try_from(telemetry.metrics & 0xffff).unwrap_or(0),
+    );
+    output[48..52].copy_from_slice(&telemetry.metrics.to_le_bytes());
+    output[52..84].copy_from_slice(&telemetry.details.cpu_model.0);
+    output[84..116].copy_from_slice(&telemetry.details.gpu_model.0);
+    for (index, value) in [
+        telemetry.details.cpu_clock_mhz,
+        telemetry.details.gpu_clock_mhz,
+        telemetry.details.cpu_power_tenths,
+        telemetry.details.gpu_power_tenths,
+        telemetry.details.ram_mib,
+        telemetry.details.vram_mib,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let offset = 116 + index * 4;
+        output[offset..offset + 4].copy_from_slice(&value.unwrap_or(u32::MAX).to_le_bytes());
+    }
+    write_u64(output, 144, telemetry.revision);
     output[32] = telemetry.opacity_percent;
     output[33] = telemetry.scale_percent;
     write_u16(output, 34, telemetry.replay_saved_revision);
@@ -361,18 +386,13 @@ pub fn encode_overlay_hardware_telemetry(
 }
 
 /// Set the version and optional edge spacing in an existing overlay snapshot.
-/// Keep legacy snapshots readable when using the default spacing.
+/// New snapshots use the expanded format. The decoder also accepts legacy blocks.
 pub fn set_overlay_hardware_edge_spacing(
     output: &mut [u8; OVERLAY_HARDWARE_TELEMETRY_BYTES],
     spacing_px: Option<u8>,
 ) {
-    let version = if spacing_px.is_some() {
-        EDGE_SPACING_VERSION
-    } else {
-        VERSION
-    };
-    write_u16(output, 8, version);
-    output[11] = spacing_px.unwrap_or(0);
+    write_u16(output, 8, EXPANDED_VERSION);
+    output[11] = spacing_px.unwrap_or(u8::MAX);
 }
 
 /// Decode one exact fixed-size snapshot and reject torn or non-canonical data.
@@ -384,7 +404,7 @@ pub fn set_overlay_hardware_edge_spacing(
 pub fn decode_overlay_hardware_telemetry(
     input: &[u8],
 ) -> Result<OverlayHardwareTelemetry, OverlayTelemetryError> {
-    if input.len() != OVERLAY_HARDWARE_TELEMETRY_BYTES {
+    if input.len() != OVERLAY_HARDWARE_TELEMETRY_BYTES && input.len() != LEGACY_HARDWARE_BYTES {
         return Err(OverlayTelemetryError::new(
             "overlay telemetry has invalid size",
         ));
@@ -395,8 +415,14 @@ pub fn decode_overlay_hardware_telemetry(
         ));
     }
     let (flags, edge_spacing_px) = match read_u16(input, 8) {
-        VERSION => (read_u16(input, 10), None),
-        EDGE_SPACING_VERSION => (u16::from(input[10]), Some(input[11])),
+        EXPANDED_VERSION if input.len() == OVERLAY_HARDWARE_TELEMETRY_BYTES => (
+            u16::from(input[10]),
+            (input[11] != u8::MAX).then_some(input[11]),
+        ),
+        VERSION if input.len() == LEGACY_HARDWARE_BYTES => (read_u16(input, 10), None),
+        EDGE_SPACING_VERSION if input.len() == LEGACY_HARDWARE_BYTES => {
+            (u16::from(input[10]), Some(input[11]))
+        }
         _ => {
             return Err(OverlayTelemetryError::new(
                 "overlay telemetry version is unsupported",
@@ -414,13 +440,44 @@ pub fn decode_overlay_hardware_telemetry(
             "overlay telemetry update is incomplete",
         ));
     }
+    let extended = read_u16(input, 8) == EXPANDED_VERSION;
+    if extended && (revision != read_u64(input, 144) || input[140..144] != [0; 4]) {
+        return Err(OverlayTelemetryError::new(
+            "overlay telemetry update is incomplete",
+        ));
+    }
+    if extended && (read_u32(input, 48) & 0xffff) != u32::from(read_u16(input, 14)) {
+        return Err(OverlayTelemetryError::new(
+            "overlay metric selections disagree",
+        ));
+    }
+    let mut details = redunar_core::overlay_metrics::HardwareDetails::default();
+    if extended {
+        details.cpu_model.0.copy_from_slice(&input[52..84]);
+        details.gpu_model.0.copy_from_slice(&input[84..116]);
+        let value = |offset| {
+            let v = read_u32(input, offset);
+            (v != u32::MAX).then_some(v)
+        };
+        details.cpu_clock_mhz = value(116);
+        details.gpu_clock_mhz = value(120);
+        details.cpu_power_tenths = value(124);
+        details.gpu_power_tenths = value(128);
+        details.ram_mib = value(132);
+        details.vram_mib = value(136);
+    }
     let telemetry = OverlayHardwareTelemetry {
+        details,
         revision,
         corner: input[12],
         preset: input[13],
         layout: input[37],
         palette: input[38],
-        metrics: read_u16(input, 14),
+        metrics: if extended {
+            read_u32(input, 48)
+        } else {
+            u32::from(read_u16(input, 14))
+        },
         opacity_percent: input[32],
         scale_percent: input[33],
         edge_spacing_px,
@@ -455,13 +512,44 @@ fn validate(telemetry: &OverlayHardwareTelemetry) -> Result<(), OverlayTelemetry
         || telemetry.preset > 3
         || telemetry.layout > 2
         || telemetry.palette > 7
-        || telemetry.metrics == 0
+        || redunar_core::OverlayMetricSet::from_bits(telemetry.metrics).is_err()
         || telemetry.opacity_percent > 100
         || !(50..=200).contains(&telemetry.scale_percent)
         || !telemetry.scale_percent.is_multiple_of(5)
     {
         return Err(OverlayTelemetryError::new(
             "overlay configuration is invalid",
+        ));
+    }
+    if telemetry
+        .edge_spacing_px
+        .is_some_and(|value| value > 96 || !value.is_multiple_of(4))
+    {
+        return Err(OverlayTelemetryError::new("invalid overlay edge spacing"));
+    }
+    for label in [telemetry.details.cpu_model, telemetry.details.gpu_model] {
+        let length = label.as_bytes().len();
+        if label
+            .as_bytes()
+            .iter()
+            .any(|b| !(b.is_ascii_graphic() || *b == b' '))
+            || label.0[length..].iter().any(|b| *b != 0)
+        {
+            return Err(OverlayTelemetryError::new("invalid hardware identity"));
+        }
+    }
+    if [
+        telemetry.details.cpu_clock_mhz,
+        telemetry.details.gpu_clock_mhz,
+        telemetry.details.cpu_power_tenths,
+        telemetry.details.gpu_power_tenths,
+        telemetry.details.ram_mib,
+        telemetry.details.vram_mib,
+    ]
+    .contains(&Some(u32::MAX))
+    {
+        return Err(OverlayTelemetryError::new(
+            "hardware value uses the unavailable sentinel",
         ));
     }
     for utilization in [
@@ -518,6 +606,14 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) {
     output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
+fn read_u32(input: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        input[offset..offset + 4]
+            .try_into()
+            .expect("checked input size"),
+    )
+}
+
 fn read_u16(input: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(input[offset..offset + 2].try_into().expect("validated u16"))
 }
@@ -551,6 +647,7 @@ mod tests {
 
     fn telemetry() -> OverlayHardwareTelemetry {
         OverlayHardwareTelemetry {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             revision: 2,
             corner: 0,
             preset: 0,
@@ -594,8 +691,56 @@ mod tests {
     }
 
     #[test]
+    fn expanded_metrics_round_trip_and_legacy_snapshots_remain_readable() {
+        use redunar_core::overlay_metrics::{HardwareDetails, MetricText};
+        let mut value = telemetry();
+        value.metrics = redunar_core::OverlayMetricSet::KNOWN;
+        value.details = HardwareDetails {
+            cpu_model: MetricText::new("AMD RYZEN 7 9800X3D"),
+            gpu_model: MetricText::new("NVIDIA GEFORCE RTX 5070"),
+            cpu_clock_mhz: Some(5225),
+            gpu_clock_mhz: Some(2835),
+            cpu_power_tenths: Some(656),
+            gpu_power_tenths: Some(1776),
+            ram_mib: Some(15048),
+            vram_mib: Some(8319),
+        };
+        let mut bytes = [0; OVERLAY_HARDWARE_TELEMETRY_BYTES];
+        encode_overlay_hardware_telemetry(value, &mut bytes).unwrap();
+        assert_eq!(decode_overlay_hardware_telemetry(&bytes), Ok(value));
+        bytes[144] ^= 2;
+        assert!(decode_overlay_hardware_telemetry(&bytes).is_err());
+        let mut legacy = [0; LEGACY_HARDWARE_BYTES];
+        legacy.copy_from_slice(&bytes[..LEGACY_HARDWARE_BYTES]);
+        write_u16(&mut legacy, 8, VERSION);
+        legacy[11] = 0;
+        write_u16(&mut legacy, 14, 255);
+        let decoded = decode_overlay_hardware_telemetry(&legacy).unwrap();
+        assert_eq!(decoded.metrics, 255);
+        assert_eq!(decoded.details, HardwareDetails::default());
+    }
+
+    #[test]
+    fn expanded_snapshot_rejects_conflicting_fields_and_noncanonical_labels() {
+        let mut value = telemetry();
+        let mut bytes = [0; OVERLAY_HARDWARE_TELEMETRY_BYTES];
+        encode_overlay_hardware_telemetry(value, &mut bytes).unwrap();
+        bytes[14] ^= 1;
+        assert!(decode_overlay_hardware_telemetry(&bytes).is_err());
+        encode_overlay_hardware_telemetry(value, &mut bytes).unwrap();
+        write_u16(&mut bytes, 8, VERSION);
+        assert!(decode_overlay_hardware_telemetry(&bytes).is_err());
+        encode_overlay_hardware_telemetry(value, &mut bytes).unwrap();
+        bytes[53] = b'A';
+        assert!(decode_overlay_hardware_telemetry(&bytes).is_err());
+        value.details.ram_mib = Some(u32::MAX);
+        assert!(encode_overlay_hardware_telemetry(value, &mut bytes).is_err());
+    }
+
+    #[test]
     fn missing_values_remain_distinct_from_zero() {
         let telemetry = OverlayHardwareTelemetry {
+            details: redunar_core::overlay_metrics::HardwareDetails::default(),
             revision: 4,
             corner: 1,
             preset: 2,
