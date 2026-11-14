@@ -7,14 +7,14 @@ current graph/inspector behavior.
 
 Plot every retained journal observation at its original elapsed time. Do not
 median-smooth values, move timestamps into buckets, invent start/end readings,
-or fill missing metrics with zero. Invalid/missing values break their series;
-an isolated valid observation remains visible.
+or fill missing metrics with zero. Invalid or missing values break their
+series. An isolated valid observation remains visible.
 
 New journal samples contain a capture-window average FPS and latest captured
 frame interval. They are not necessarily reciprocals. Session summaries come
-from native data rather than being recomputed from the rendered line. The bounded
-journal can reduce retention resolution on long sessions; the UI cannot recover
-unrecorded or discarded samples.
+from native data rather than being recomputed from the rendered line. The
+bounded journal may retain less detail during long sessions. The UI cannot
+recover unrecorded or discarded samples.
 
 Legacy frame-only records reconstruct the retained tail ending at session end:
 FPS = 1000 / frame interval in milliseconds. Use the retained duration when a
@@ -42,7 +42,8 @@ be in 0–100%, frame times must be positive, and FPS may be zero.
 
 The upper tick is a readable bound, not necessarily the exact recorded peak.
 Session-specific scaling helps reveal variation but does not normalize load or
-permit percentages above 100. Missing data must not manufacture a scale/readout.
+permit percentages above 100. Missing data must not produce a fabricated scale
+or reading.
 
 ## Time and selection
 
@@ -66,11 +67,13 @@ cards retain neutral text. This scope does not recolor unrelated CPU/GPU UI.
 User-requested metric switches can briefly interpolate presentation coordinates
 between compatible traces. `ui/history-motion.mjs` never changes the observations,
 timestamps, segment boundaries or exact destination markup. Axis labels change
-to the selected metric immediately; intermediate heights are transition geometry,
-not additional measurements. Scrubbing settles the transition before inspecting
+to the selected metric immediately. Intermediate heights represent the
+transition, not additional measurements. Scrubbing settles the transition
+before inspecting
 values. A sensor segment can morph from matching timestamps within one longer
 continuous source segment. Unmatched segments fade at their exact destination
-coordinates; no source gap is joined or timestamp interpolated. Missing sensors
+coordinates. No source gap is joined and no timestamp is interpolated. Missing
+sensors
 do not cancel transitions for other series. Isolated observations remain exact.
 Dense morphs temporarily use extrema from both shapes at recorded timestamps
 within the animation budget. They restore every original observation/attribute

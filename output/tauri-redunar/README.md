@@ -36,14 +36,14 @@ Release builds use the signed GitHub release channel:
 ## Runtime boundaries
 
 - Native data supplies Library, profiles, history, clips, and runtime status.
-- Drafts are separate from saved values; saves preserve inheritance and reject
+- Drafts are separate from saved values. Saves preserve inheritance and reject
   stale changes.
 - Supported launches prepare metrics and request Replay through capability
   checks. The overlay remains reversible while the runtime is prepared.
 - End session releases Redunar resources without killing the game. Quit cleans
   up the session and exits.
-- The Replay menu is rendered inside the captured game; the in-app preview is a
-  configuration surface only.
+- The capture backend renders the Replay menu inside the game. The in-app
+  preview is for configuration only.
 - The service exposes no arbitrary privileged commands and never runs the UI as
   root.
 

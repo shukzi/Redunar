@@ -11,8 +11,8 @@
   <url type="homepage">https://redunar.com/</url>
   <description>
     <p>
-      Redunar is a Linux app for Steam gameplay, with instant replays and
-      in-game metrics on compatible graphics hardware.
+      Redunar provides instant replay and in-game metrics for Steam games
+      on Linux with compatible graphics hardware.
     </p>
     <p>
       It keeps game profiles, measurements, and recorded media on the user's
@@ -44,7 +44,7 @@
           <li>Add more overlay hardware metrics and a restricted CPU power reader.</li>
           <li>Use eight metrics in Detailed and simplify the metric controls.</li>
           <li>Reduce OpenGL overlay rendering work at 200% scale without changing visual quality.</li>
-          <li>Add confirmed permanent deletion and Clear bin actions for trashed recordings.</li>
+          <li>Add permanent deletion and Clear bin actions for trashed recordings, with confirmation before deletion.</li>
           <li>Improve completed-session FPS statistics.</li>
         </ul>
       </description>
@@ -54,7 +54,7 @@
         <ul>
           <li>Keep the Diagnostics panel steady when it opens or closes.</li>
           <li>Keep the last Diagnostics results when a refresh fails. Clear the error when new results arrive.</li>
-          <li>Fix the line that flickered below notifications.</li>
+          <li>Fix the flickering line below notifications.</li>
           <li>Ignore invalid readings in live system metrics and in History.</li>
           <li>Clear unfinished updates to saved replay game labels at startup. Keep the previous labels and recordings.</li>
         </ul>

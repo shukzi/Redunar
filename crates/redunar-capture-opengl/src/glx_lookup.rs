@@ -1,4 +1,4 @@
-//! Preserve handle-specific GLX targets that our global hooks cannot forward.
+//! Preserve handle-specific GLX targets that the global hooks cannot forward.
 
 use super::{
     GlxDestroyContext, GlxSwapBuffers, NEXT_GLX_DESTROY_CONTEXT, NEXT_GLX_SWAP_BUFFERS,
@@ -35,7 +35,7 @@ fn lookup_result(
     next: Option<*mut c_void>,
     hook: *mut c_void,
 ) -> *mut c_void {
-    // A handle-specific lookup can see an RTLD_LOCAL GLX provider that our
+    // A handle-specific lookup can see an RTLD_LOCAL GLX provider that the
     // RTLD_NEXT forwarding cannot see, or a different provider. Substituting
     // the hook would drop the application's call or send it to the wrong
     // library. Preserve that exact target; capture remains optional. Do not

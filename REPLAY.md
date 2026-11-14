@@ -8,8 +8,8 @@ rules; [PERFORMANCE.md](PERFORMANCE.md) owns resource budgets.
 
 Supported launches from Redunar or the configured native Steam wrapper request
 Replay automatically. There is no separate global or per-game Off selector.
-Unsupported hardware or launch paths expose an unavailable or failed state and
-do not claim that a buffer exists.
+Unsupported hardware or launch paths report an unavailable or failed state
+without claiming that a buffer exists.
 
 Recording settings are locked during the owned game session. The default is
 60 FPS and Balanced quality. Variable FPS timestamps accepted game presents
@@ -63,7 +63,8 @@ fallback.
 
 Capture begins after encoder readiness. Accepted frames retain their timestamps.
 A rolling save starts at a retained keyframe, so actual duration can be shorter
-than the selected history window. Inspect the media result during acceptance.
+than the selected history window. Inspect the resulting media during
+acceptance checks.
 
 Disk-spool pressure is repaired from the bounded in-memory Replay window in
 timestamp order. The window is capped at 256 MiB, and transient queue pressure
@@ -104,9 +105,9 @@ fabricated samples.
 
 Playback reads only validated Redunar clip paths. The original recording remains
 untouched during trimming and export. Export supports MKV/MP4, cancellation,
-bounded size limits, free-space checks, and atomic destination creation. A
-failed export leaves the original clip and temporary files are cleaned only when
-owned by Redunar.
+bounded size limits, free-space checks, and atomic destination creation. If an
+export fails, the original clip remains intact. Redunar cleans up only its own
+temporary files.
 
 History stores bounded session measurements and clip metadata. Filenames,
 favorites, and the recoverable clip trash ledger preserve inode and path checks.
@@ -118,7 +119,7 @@ Confirmation expires after five minutes and cannot be reused. Permanent deletion
 removes media and its owned thumbnails. Merely moving a clip to the bin does not
 free disk space.
 
-Readers cap file size and record count; writes use private temporary files,
+Readers cap file size and record count. Writes use private temporary files,
 atomic replacement, and directory synchronization.
 
 The optional clip-to-game ledger retains the newest 512 valid entries, with an

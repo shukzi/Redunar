@@ -17,7 +17,7 @@ if [[ ! -f "$layer" ]]; then
   exit 1
 fi
 
-# Compile our finite Vulkan 1.1 scene rather than relying on distro vkcube's
+# Compile the project's finite Vulkan 1.1 scene rather than relying on distro vkcube's
 # unstated API version. This is a manual hardware runner, not a package input.
 fixture_dir="$workspace_root/.redunar-build/native/fixtures"
 mkdir -p "$fixture_dir"

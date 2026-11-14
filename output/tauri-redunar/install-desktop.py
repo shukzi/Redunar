@@ -64,7 +64,7 @@ installed_icon.write_bytes(icon.read_bytes())
 installed_tray_icon.write_bytes(icon.read_bytes())
 entry_contents = (
     "[Desktop Entry]\nType=Application\nName=Redunar\n"
-    "Comment=App for instant replay and in-game metrics.\n"
+    "Comment=Instant replay and in-game metrics.\n"
     f'Exec="{executable}"\nIcon={APP_ID}\n'
     f"StartupWMClass={APP_ID}\nTerminal=false\nCategories=Game;\n"
     f"StartupNotify=true\n{MARKER}\n"

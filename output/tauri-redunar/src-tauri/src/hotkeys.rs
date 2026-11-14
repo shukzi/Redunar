@@ -268,15 +268,15 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
             HelperEvent::MenuOpened => {
                 // The helper owns the whole in-game menu session: it toggles
                 // the daemon state, captures mice, and streams pointer events.
-                // The panel is rendered into the captured game by the Vulkan
-                // layer, so there is no desktop window to open here.
+                // The Vulkan layer renders the panel inside the captured game,
+                // so no desktop window needs to open here.
                 state.last_action = Some("Replay menu opened".into());
                 state.message = None;
             }
             HelperEvent::MenuOpenedWithoutPointer => {
                 state.last_action = Some("Replay menu opened · View only".into());
                 state.message = Some(
-                    "Pointer control is unavailable for this session. Press the assigned Replay menu shortcut again to close it; save shortcuts remain active."
+                    "Pointer control is unavailable in this session. To close the Replay menu, press its assigned shortcut again. Save shortcuts still work."
                         .into(),
                 );
             }

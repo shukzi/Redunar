@@ -1,17 +1,17 @@
 # Packaging contract
 
 Production Tauri packaging, reviewed October 24, 2026. The active package
-is `redunar-app`, with version/release owned by
+is `redunar-app`, with its version and release defined in
 [`redunar-app.spec`](redunar-app.spec).
 
 ## Build and verify
 
 Use [the release procedure](../docs/RELEASING.md) for qualification before
-publication. Compatibility binaries now live under
+publication. Compatibility binaries live under
 `.redunar-build/linux/native/tauri/release` and their source/hash records under
 `.redunar-build/linux`. Packaging verifies the completed build manifest before
-staging. `REDUNAR_RELEASE_ROOT` is an explicit absolute-path override for a
-deliberate alternative payload; it does not establish compatibility validation.
+staging. `REDUNAR_RELEASE_ROOT` accepts an absolute path to a deliberately selected
+alternative payload. Using it does not establish compatibility validation.
 
 
 From the repository root:
@@ -80,8 +80,9 @@ Package scripts must not install a global Vulkan layer, edit Steam settings,
 start monitoring, change hardware policy, or make network requests.
 
 Steam Launch Options are derived from the verified absolute wrapper path. Keep
-that path representable safely by the existing bridge format. Wrapper presence
-is not proof the game is configured; verify its saved local options read-only.
+that path representable safely by the existing bridge format. The wrapper
+being present does not prove that the game is configured. Verify its saved local
+options without changing them.
 
 ## Runtime dependencies
 
@@ -133,8 +134,8 @@ checks. It runs through POSIX `sh`, including Debian/Ubuntu's `dash`; the
 Arch dependency path preserves each package as a literal argument and reuses
 an installed PipeWire or PulseAudio provider.
 
-The installer accepts no prompts of its own. It may still require the normal
-sudo or doas authentication required for a system installation. It downloads
+The installer has no prompts of its own. A system installation may still
+require normal sudo or doas authentication. It downloads
 one asset, `SHA256SUMS`, and `SHA256SUMS.sig` over HTTPS. OpenSSL verifies the
 manifest with the public key embedded in the rendered installer before the
 selected package checksum is trusted.
@@ -194,8 +195,8 @@ installation/runtime validation on those systems.
 files, a `VERSION` file matching the Tauri and RPM package versions,
 `SHA256SUMS`, and its RSA/SHA-256 signature. The native updater requires
 `VERSION` to have an entry in the signed manifest before offering a package.
-The build requires a private-key
-path and refuses a key that does not match
+The build requires the path to a private key and rejects a key that does not
+match
 [`release-signing-public.pem`](release-signing-public.pem). The private key stays
 outside the source tree. The installer authenticates the manifest before using
 its checksum, and corrupted assets or signatures fail before package installation.

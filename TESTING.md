@@ -17,8 +17,8 @@ tools/validate.sh release
 
 `quick` runs formatting, syntax, frontend and workspace checks. `full` adds
 Rust tests and strict Clippy. `release` adds compatibility builds and package
-release gates. The Tauri workspace is validated through these commands rather
-than a root-only Cargo check.
+release gates. These commands also validate the Tauri workspace. A root-only
+Cargo check does not cover it.
 
 Focused checks include:
 
@@ -68,9 +68,9 @@ preservation, polling, overlay settings, playback controls, and unavailable
 states. Inspect the effective stylesheet order and the actual built resources.
 Do not use synthetic values as native measurements.
 
-Generic WebKit fixtures support X11 or a private GTK Broadway display. Broadway
-uses a process-local DPI setting when no monitor is attached; desktop settings
-stay unchanged. The trusted pointer fixture still requires X11.
+Generic WebKit fixtures support X11 or a private GTK Broadway display. When no
+monitor is attached, Broadway uses a process-local DPI setting and leaves
+desktop settings unchanged. The trusted pointer fixture still requires X11.
 The `output/tauri-redunar/tests/layout-webview.py` fixture covers populated rails,
 long History sessions, plot boundaries at wide and narrow window sizes, and
 dialog overflow using the production stylesheet order.
@@ -133,7 +133,7 @@ window changes, exit, and relaunch when affected.
 Keep current evidence concise and objective: scope, exact build or commit,
 commands or run conditions, result, and limitations. Do not claim support from
 detection alone. Keep dated implementation reports and private test notes out
-of the public source tree; release notes should summarize only the release they
+of the public source tree. Release notes summarize only the release they
 belong to.
 
 ## Safety boundaries

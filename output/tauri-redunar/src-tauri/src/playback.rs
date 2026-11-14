@@ -24,8 +24,8 @@ const PREPARE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_PREPARE_DIAGNOSTICS: usize = 8192;
 const PREPARE_SIZE_ALLOWANCE: u64 = 4 * 1024 * 1024;
 const PLAYER_TEMP_PREFIX: &str = "redunar-player-";
-// Fresh preparations are actively written by this process; a copy is only
-// swept when it predates this window, which also protects a second
+// This process actively writes fresh preparations. Only copies that predate
+// this window are swept, which also protects a second
 // instance that is mid-startup before the control socket exists.
 const STALE_PLAYER_COPY: Duration = Duration::from_secs(60 * 60);
 
@@ -329,7 +329,7 @@ fn private_temporary_directory() -> io::Result<PathBuf> {
             .collect::<String>();
         // Playback copies can be hundreds of MiB. /tmp is commonly a bounded
         // RAM filesystem with per-user quotas, even while it reports free space.
-        // Keep only our private, removable copy in Linux's large-file temp area.
+        // Keep only Redunar's private, removable copy in Linux's large-file temp area.
         let path = Path::new("/var/tmp").join(format!("redunar-player-{token}"));
         let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
@@ -349,7 +349,7 @@ fn private_temporary_directory() -> io::Result<PathBuf> {
 
 /// Remove playback copies that a previous Redunar process owned but never
 /// deleted because it crashed or was killed mid-playback. Only directories
-/// matching our exact private naming, owned by this uid, and untouched for
+/// matching Redunar's exact private naming, owned by this uid, and untouched for
 /// longer than STALE_PLAYER_COPY are removed, so a copy this process or a
 /// starting second instance is actively writing is never swept. Failures are
 /// ignored: the copy is bounded, disposable, and startup must not fail
@@ -379,7 +379,7 @@ fn sweep_stale_playback_copies_in(root: &Path) {
         else {
             continue;
         };
-        // Our tokens are exactly 32 lowercase hex characters from /dev/urandom.
+        // Tokens contain exactly 32 lowercase hex characters from /dev/urandom.
         if suffix.len() != 32
             || !suffix
                 .bytes()

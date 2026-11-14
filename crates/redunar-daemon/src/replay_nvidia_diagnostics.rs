@@ -67,7 +67,7 @@ fn failure_lines(stage: Stage, error: &VulkanVideoDeviceError) -> Vec<String> {
                 let (reason, result) = probe_reason(blocker);
                 let mut message = line(stage, reason, result);
                 if let VulkanVideoProbeBlocker::MissingDeviceExtension(extension) = blocker {
-                    // Only specification identifiers we request may cross this
+                    // Only requested specification identifiers may cross this
                     // boundary, never arbitrary driver strings or device names.
                     let safe = match *extension {
                         "VK_KHR_video_queue"

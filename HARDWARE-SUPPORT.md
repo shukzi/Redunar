@@ -22,8 +22,9 @@ GPU, driver, game, or display configuration.
 NVIDIA recording uses Vulkan Video H.264. The Vulkan and OpenGL producers attach
 the current game's device and driver identity to each source. The encoder must
 match those identities before importing frames; Redunar never silently selects
-another GPU. The qualified NVIDIA evidence covers the RTX 2060 SUPER path and
-its tested Fedora driver/build. It does not guarantee every NVIDIA GPU or
+another GPU. NVIDIA qualification covers the RTX 2060 SUPER path with the
+tested Fedora driver and build. It does not establish support for every NVIDIA
+GPU or
 hybrid topology.
 
 The OpenGL bridge uses bounded GPU buffers and synchronization. It does not
@@ -57,8 +58,9 @@ the complete desktop or compositor scanout. Variable FPS has resolution-based
 admission limits and may drop frames under load. No claim covers every
 fullscreen, compositor, or game configuration.
 
-Audio records the mixed default system output and may include other programs.
-Pure ALSA output capture and game-only audio isolation are unsupported claims.
+Audio capture records the mixed default system output, which may include sound
+from other programs. Pure ALSA output capture and game-only audio isolation are
+unsupported.
 
 ## Failure behavior
 

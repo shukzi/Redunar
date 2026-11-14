@@ -5,7 +5,7 @@ body:
     attributes:
       value: |
         Search [existing issues](https://github.com/shukzi/Redunar/issues) before submitting a new suggestion.
-        Explain the problem and the outcome you need. Suggestions are welcome; implementation and delivery dates are not guaranteed.
+        Explain the problem and the outcome you need. Suggestions are welcome. Implementation and delivery dates are not guaranteed.
         Reports are public. Remove personal data, tokens, private recordings, and local filesystem paths from any text or attachments.
   - type: textarea
     id: problem

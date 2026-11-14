@@ -42,8 +42,8 @@ Requires:       %{_libdir}/gstreamer-1.0/libgstlibav.so
 %global debug_package %{nil}
 
 %description
-Redunar's native Tauri workspace for Steam gameplay capture and in-game metrics
-on Linux with supported graphics hardware.
+Redunar captures Steam gameplay and shows in-game metrics on Linux with
+supported graphics hardware.
 
 %prep
 %setup -q -n redunar-app-package-root

@@ -1,8 +1,9 @@
 # Runtime performance contract
 
-Redunar measures games; its own work must remain bounded and must not claim an
-FPS improvement. Budgets below are engineering targets. A pass applies only to
-the exact build, hardware, driver, workload, and test duration recorded with it.
+Redunar measures game performance. Its own work must remain bounded, and it
+must not claim an FPS improvement. Budgets below are engineering targets. A
+pass applies only to the exact build, hardware, driver, workload, and test
+duration recorded with it.
 
 ## Budgets
 
@@ -49,8 +50,8 @@ The restricted CPU power helper samples only on request, at most once per
 second. It caches sensor paths and sends a bounded aggregate value. The normal
 hardware sampler polls its socket without waiting. It launches only when direct
 energy reads are denied. An idle connection performs no sampling, and closing
-the connection ends the helper. Failed startup is retried after 30 seconds;
-unreaped helpers prevent further starts.
+the connection ends the helper. Failed startup is retried after 30 seconds. A
+helper must be reaped before another can start.
 
 ## UI and scrolling
 
@@ -101,8 +102,9 @@ No interpolation or percentile estimate is used.
 A min-heap retains at most 100,000 slow intervals. Its allocation is bounded to
 1 MiB, plus a maximum 800,000-byte vector used only for final sorting. Ordinary
 snapshots do not clone or sort this heap. Exact 1% lows cover up to 10 million
-frames and exact 0.1% lows up to 100 million. An exhausted tail yields no value;
-whole-session count and duration remain available. The worker releases the
+frames and exact 0.1% lows up to 100 million. If the retained tail is
+exhausted, its low FPS value remains unavailable. Whole-session count and
+duration remain available. The worker releases the
 accumulator at teardown. This bound is separate from encoded Replay storage.
 
 The journal retains integer totals and compatible optional summary fields.
@@ -125,9 +127,10 @@ The rolling history is capped at 15 minutes. Saved duration can be shorter when
 the first retained keyframe occurs after the requested start. History and
 session records have fixed size and count limits. The encoded in-memory Replay
 repair window is capped at 256 MiB, and the disk spool queue is capped at 32
-MiB of payload. Transient spool pressure is repaired from the in-memory window;
-storage failures stop disk-history publication instead of publishing a silent
-gap while live capture continues in the bounded RAM window. Degraded disk
+MiB of payload. The in-memory window repairs transient spool pressure. Storage
+failures stop disk-history publication to avoid silent gaps, while live
+capture continues
+in the bounded RAM window. Degraded disk
 history does not copy packet metadata for unused spool submissions. Temporary media
 and cache files are cleaned only when Redunar owns them.
 

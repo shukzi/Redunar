@@ -216,7 +216,7 @@ impl CaptureSessionConfig {
     /// Sweep capture-session directories left behind by a previous Redunar
     /// instance that crashed or was killed before its cleanup ran. Callers
     /// must confirm that no other live instance owns the backend session
-    /// first; every directory matching our exact private naming is then
+    /// first; every directory matching Redunar's exact private naming is then
     /// stale by definition. Foreign names, non-directories, and entries
     /// owned by another uid are never touched, and unlinking a socket still
     /// held open by a surviving game only removes the path. Returns the
@@ -225,7 +225,7 @@ impl CaptureSessionConfig {
     pub fn sweep_stale_session_directories(&self) -> usize {
         let current_uid = process_uid();
         // The runtime root's owner is the session user; refuse to sweep a
-        // directory we do not own.
+        // directory owned by another user.
         let root_owner = fs::metadata(&self.runtime_root)
             .ok()
             .map(|metadata| metadata.uid());

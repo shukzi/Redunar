@@ -285,7 +285,7 @@ fn replay_unavailable_copy(
             | ReplaySourceRejection::InvalidStructure,
         ) => "This game's graphics surface cannot be recorded. Try another display mode.",
         None if active_game && phase == redunar_daemon::ReplayPhase::Unavailable => {
-            "Replay hardware is unavailable for this session. Check GPU and driver support; metrics remain available."
+            "Replay hardware is unavailable in this session. Check GPU and driver support. Metrics remain available."
         }
         None => "Launch a supported game through Redunar to start Replay.",
     }

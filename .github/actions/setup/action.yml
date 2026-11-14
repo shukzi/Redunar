@@ -1,5 +1,5 @@
 name: Set up Redunar checks
-description: Install build dependencies and fetch the two locked Rust workspaces.
+description: Install build dependencies and fetch locked dependencies for both Rust workspaces.
 runs:
   using: composite
   steps:

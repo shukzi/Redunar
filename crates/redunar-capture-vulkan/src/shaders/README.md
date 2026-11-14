@@ -15,7 +15,7 @@ for panel transparency and one fixed-layout antialiased glyph pipeline:
 - dynamic viewport and scissor state constrain the draw to the panel;
 - dynamic constant-alpha blending applies the saved 0–100% opacity;
 - `glyph.vert` maps one bounded glyph viewport without buffers or descriptors;
-- `glyph.frag` reads one genuine 18x24 antialiased raster from 27 explicitly
+- `glyph.frag` reads one 18x24 antialiased raster from 27 explicitly
   named scalar push-constant words. It reconstructs that 2x source at the
   saved fractional overlay scale, so 200% text no longer enlarges 9x12 bitmap
   squares; and
@@ -38,7 +38,7 @@ The generated coverage table lives in `redunar-core`. Regenerate it with
 and the proportional menu table with `tools/generate-overlay-ui-font.py` and
 Noto Sans Regular. Both render a 16-row (mono) or 14-row (UI) cap inside the
 18x24 canvas at the overlay's original baseline, keeping quiet space above and
-below every stroke; the installed runtime does not load fonts, allocate an
+below every stroke. The installed runtime does not load fonts, allocate an
 atlas, or compile shaders.
 
 The checked-in `.spv` files were compiled from these adjacent sources with

@@ -15,7 +15,7 @@ the expected and actual behavior. If you cannot reproduce a problem reliably,
 describe what happened and how often. For suggestions, explain the problem you
 want to solve, your current workaround, and the outcome you would find useful.
 
-Reports are public. Share only relevant, redacted diagnostics; omit personal
+Reports are public. Share only relevant, redacted diagnostics. Omit personal
 data, tokens, private recordings, and local filesystem paths. Report suspected
 security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
@@ -94,9 +94,9 @@ access; no application installation or runtime acceptance is part of bootstrap.
 The compatibility builder copies Git-visible working files into a temporary
 snapshot, including uncommitted edits and non-ignored new files. It excludes
 ignored caches/private files, refuses source symlinks, and never deletes host
-Cargo targets. Its source manifest hashes the actual copied files. One
-compatibility build and one validation run per checkout are enforced with locks.
-Independent worktrees have independent outputs. Each container runs the exact
+Cargo targets. Its source manifest hashes the actual copied files. Locks allow
+only one compatibility build and one validation run per checkout. Independent
+worktrees have independent outputs. Each container runs the exact
 image ID produced by its own build; cancellation stops its container before
 removing the source snapshot. Dependency download caches may be shared; mutable
 frontend/build/package outputs must not be shared.
@@ -154,8 +154,9 @@ review changes, including the final integrated tree before release.
 
 Keep commits small and descriptive. Merge an accepted pull request into `main`,
 retaining its useful history or using one reviewed squash commit. Do not
-force-push shared history. Revert a faulty integration with a new commit; persisted data may need a
-separate compatible recovery path. Remove a branch/worktree only after checking
+force-push shared history. Revert a faulty integration with a new commit.
+Persisted data may need a separate compatible recovery path. Remove a
+branch/worktree only after checking
 for uncommitted work and confirming its result is retained.
 
 ## Documentation and releases

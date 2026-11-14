@@ -92,7 +92,7 @@ test('Desktop launcher metadata uses the production tooltip copy',()=>{
  const tauri=JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json',import.meta.url),'utf8'));
  const installer=readFileSync(new URL('../install-desktop.py',import.meta.url),'utf8');
  assert.match(desktop,/^Name=Redunar$/m);
- assert.match(desktop,/^Comment=App for instant replay and in-game metrics\.$/m);
+ assert.match(desktop,/^Comment=Instant replay and in-game metrics\.$/m);
  assert.match(desktop,/^Icon=com\.redunar\.Redunar$/m);
  assert.match(installer,/TRAY_ICON_NAME = "com\.redunar\.redunar"/);
  assert.match(installer,/installed_tray_icon = icon_dir \/ f"\{TRAY_ICON_NAME\}\.png"/);
@@ -101,7 +101,7 @@ test('Desktop launcher metadata uses the production tooltip copy',()=>{
  assert.match(metainfo,/<id>com\.redunar\.Redunar<\/id>/);
  assert.match(metainfo,/<launchable type="desktop-id">com\.redunar\.Redunar\.desktop<\/launchable>/);
  assert.match(installer,/APP_ID = "com\.redunar\.Redunar"/);
- assert.match(installer,/Comment=App for instant replay and in-game metrics\./);
+ assert.match(installer,/Comment=Instant replay and in-game metrics\./);
  assert.doesNotMatch(desktop,/^Name=.*Tauri|^Comment=.*Tauri|^Comment=.*native gaming workspace/m);
 });
 test('Embedded sidebar product version is generated from the package version',()=>{
