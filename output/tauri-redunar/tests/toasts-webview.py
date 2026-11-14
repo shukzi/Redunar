@@ -1,4 +1,4 @@
-"""Toast stack expiry and dismissal in production WebKit with private updates."""
+"""Production notification pills with isolated commands and controlled wall time."""
 import webview_fixture as harness
 from webview_fixture import *
 
@@ -12,133 +12,141 @@ bridge.updateMessage='Cannot check for newer updates. Verified update 0.1.1 is s
 const originalInvoke=window.__TAURI_INTERNALS__.invoke;
 window.__TAURI_INTERNALS__.invoke=async(command,args={})=>command==='check_for_updates'?
   (bridge.calls.push({command,args}),{current_version:'0.1.0',latest_version:'0.1.1',state:'available',message:bridge.updateMessage}):originalInvoke(command,args);
+const fixtureRealNow=Date.now;
+window.fixtureWallOffset=0;Date.now=()=>fixtureRealNow()+fixtureWallOffset;
 window.fixtureToast=(message,options)=>q('#toast')[Symbol.for('redunar.toast-owner')](message,options);
-window.liveToasts=()=>qa('.toast-card:not([aria-hidden="true"])');
+window.liveToasts=()=>qa('.toast-card');
 window.clearToasts=()=>liveToasts().forEach(card=>card.querySelector('button').click());
-window.resumeToastClock=()=>{
- q('#workspace').focus({preventScroll:true});
- q('#toast').dispatchEvent(new PointerEvent('pointerleave',{pointerType:'mouse'}));
- window.dispatchEvent(new Event('focus'));
-};
-window.exitFrame=(card,time=100)=>{
- const animation=card.getAnimations()[0];check(animation,'exit animation');animation.pause();animation.currentTime=time;return animation;
-};
+window.foregroundToast=()=>{q('#workspace').focus({preventScroll:true});window.dispatchEvent(new Event('focus'));};
 """
 manager.add_script(WebKit2.UserScript.new(extra,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
-
-def pixels_below_front(name, bounds):
-    frame = GdkPixbuf.Pixbuf.new_from_file(str(ARTIFACTS / (name + '.png')))
-    scale_x, scale_y = frame.get_width() / bounds['width'], frame.get_height() / bounds['height']
-    left, right = round((bounds['left'] + 20) * scale_x), round((bounds['right'] - 20) * scale_x)
-    top = round((bounds['bottom'] + 2) * scale_y)
-    assert top < frame.get_height() and left < right, bounds
-    stride, channels, pixels = frame.get_rowstride(), frame.get_n_channels(), frame.get_pixels()
-    return [pixels[row * stride + left * channels:row * stride + right * channels]
-            for row in range(top, frame.get_height())]
 
 try:
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#settings')
     wait_for("typeof q==='function'&&q('[data-action=check-for-updates]')&&!q('[data-action=check-for-updates]').disabled")
-    js("window.dispatchEvent(new Event('focus'));fixtureToast('Update available. Open Settings to install it.',{duration:1100});")
-    pump(700)
-    js("click('[data-action=check-for-updates]')")
-    wait_for("liveToasts().some(card=>card.textContent.includes('Verified update 0.1.1'))")
-    wait_for("q('.toast-card[aria-hidden=true]')")
-    js("window.expiring=q('.toast-card[aria-hidden=true]');window.expiryMotion=exitFrame(expiring,100)")
-    snap('update-expiry-midpoint')
-    test('An older update notification expires without crossing below the stack', "check(expiring.getBoundingClientRect().bottom<=q('#toast').getBoundingClientRect().bottom+1,'departing card spills below the active update');check(liveToasts().length===1&&liveToasts()[0].textContent.includes('Verified update 0.1.1'),'verified update stays readable');check(bridge.calls.some(call=>call.command==='check_for_updates'),'real update action used');expiryMotion.finish();")
-    pump(80)
-    test('Expired backing surfaces and their animation jobs are removed', "check(!expiring.isConnected&&!q('.toast-card[aria-hidden=true]'),'no ghost backing card');check(liveToasts().length===1,'current toast retained');click('[data-action=check-for-updates]');")
-    pump(100)
-    test('Repeating the same update response refreshes one notification', "check(liveToasts().length===1&&!q('.toast-card[aria-hidden=true]'),'deduplicated response');fixtureToast('Another settings change',{duration:10000});")
-    pump(1000)
-    test('A shorter notification retains the approved collapsed stack above it', "const front=liveToasts().find(card=>card.dataset.behind==='false'),back=liveToasts().find(card=>card.dataset.behind==='true');check(front&&back,'two stacked cards');check(back.getBoundingClientRect().bottom<front.getBoundingClientRect().bottom,'backing card remains above');q('#toast').dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}));")
-    pump(900)
-    test('Expanded cards stay readable and independently dismissible', "check(q('#toast').dataset.expanded==='true','stack unfolds');check(liveToasts().every(card=>!card.inert&&card.dataset.behind==='false'),'expanded controls usable');window.older=liveToasts()[0];window.olderBottom=older.getBoundingClientRect().bottom;older.querySelector('button').click();window.olderExit=exitFrame(older,150);check(older.getBoundingClientRect().bottom<=olderBottom+1,'older expanded card fades in place');olderExit.finish();")
-    pump(80)
-    js("q('#toast').dispatchEvent(new PointerEvent('pointerleave',{pointerType:'mouse'}));fixtureToast('Latest notification',{duration:10000})")
-    pump(1000)
-    test('Dismissing the front of a remaining stack leaves no strip beneath it', "window.front=liveToasts().at(-1);front.querySelector('button').click();window.frontExit=exitFrame(front,100);check(front.getBoundingClientRect().bottom<=q('#toast').getBoundingClientRect().bottom+1,'front exit crosses stack baseline');frontExit.finish();")
-    pump(80)
-    test('The last toast retains its normal downward dismissal', "window.last=liveToasts()[0];last.querySelector('button').click();window.lastExit=exitFrame(last,100);check(last.getBoundingClientRect().bottom>q('#toast').getBoundingClientRect().bottom,'last card leaves toward edge');check(lastExit.effect.getTiming().duration===200,'bounded exit');lastExit.finish();")
-    pump(80)
-    test('The viewport clears completely after the last exit', "check(q('#toast').hidden&&!q('.toast-card'),'no empty viewport or lingering surface');")
-    js("fixtureToast('A toast that starts leaving alone',{duration:10000});resumeToastClock()")
-    pump(650)
-    js("""
-     window.leaving=liveToasts()[0];leaving.querySelector('button').click();
-     window.leavingMotion=exitFrame(leaving,100);
-     fixtureToast('A new toast arrives during the exit',{duration:10000});
+    js("foregroundToast();click('[data-action=check-for-updates]')")
+    wait_for("liveToasts()[0]?.textContent.includes('Verified update 0.1.1')")
+    pump(180)
+    test('Real update responses use one outlined bottom-center pill', """
+     const card=liveToasts()[0],box=card.getBoundingClientRect(),css=getComputedStyle(card);
+     check(liveToasts().length===1,'one current pill');
+     check(Math.abs((box.left+box.right)/2-innerWidth/2)<1,'centered in window');
+     check(css.borderTopColor==='rgb(82, 82, 82)'&&css.backgroundColor==='rgb(22, 22, 22)','outlined graphite');
+     check(!q('.toast-progress')&&!q('.toast-icon'),'no countdown or leading icon');
+     check(box.width<=560&&box.height>=38,'compact bounded surface');
+     check(bridge.calls.some(call=>call.command==='check_for_updates'),'production action used');
+     clearToasts();fixtureToast('Settings saved',{type:'success'});
     """)
-    pump(850)
-    bounds = json.loads(js("""
-     const front=liveToasts()[0].getBoundingClientRect();
-     check(leaving.getBoundingClientRect().bottom>front.bottom+2,'the previous toast is still below the front');
-     return JSON.stringify({left:front.left,right:front.right,bottom:front.bottom,width:innerWidth,height:innerHeight});
-    """))
-    snap('replacement-overlap')
-    js("leavingMotion.finish()")
-    wait_for("!leaving.isConnected")
-    snap('replacement-reference')
-    assert pixels_below_front('replacement-overlap', bounds) == pixels_below_front('replacement-reference', bounds), 'A departing toast painted below its replacement'
-    checks.append('A toast already leaving cannot paint beneath its replacement')
-    js('clearToasts()');pump(250)
-    js("fixtureToast('Countdown in progress',{duration:4000});resumeToastClock()")
-    wait_for("liveToasts()[0]?.querySelector('.toast-progress').getAnimations().length===1")
-    pump(650)
-    test('An unrelated notification does not restart a running countdown',"""
-     const bar=liveToasts()[0].querySelector('.toast-progress');
-     const countdown=bar.getAnimations()[0];check(countdown,'countdown is running');
-     fixtureToast('Another notification',{duration:10000});
-     check(bar.getAnimations().includes(countdown),'same countdown animation remains active');
-     clearToasts();
+    pump(180);snap('outlined-pill-settings')
+    test('A duplicate refreshes the same mounted pill without another animation', """
+     window.previousPill=liveToasts()[0];fixtureToast('Settings saved',{type:'success'});
+     check(liveToasts().length===1&&liveToasts()[0]===previousPill,'mounted message reused');
+     check(previousPill.getAnimations().length===0,'no repeated entrance');
+     window.staleDismiss=previousPill.querySelector('button');
+     fixtureToast('Latest message');staleDismiss.click();
+     check(liveToasts().length===1&&liveToasts()[0].textContent.includes('Latest message'),'stale dismiss cannot remove replacement');
     """)
-    pump(250)
-    js("fixtureToast('Dismiss a partially completed countdown',{duration:4000});resumeToastClock()")
-    wait_for("liveToasts()[0]?.querySelector('.toast-progress').getAnimations().length===1")
-    pump(650)
-    test('The countdown stays at its painted width while a toast leaves',"""
-     const card=liveToasts()[0],bar=card.querySelector('.toast-progress');
-     const fraction=()=>new DOMMatrix(getComputedStyle(bar).transform).a;
-     const before=fraction();check(before>.1&&before<.95,'countdown is partway through');
-     card.querySelector('button').click();
-     const exit=exitFrame(card,100);
-     check(Math.abs(fraction()-before)<.015,'countdown does not jump on exit');
-     exit.finish();
+    test('Bursts leave no backing surfaces, outgoing animations, or queue', """
+     for(let i=0;i<100;i++)fixtureToast('Message '+i);
+     check(liveToasts().length===1&&liveToasts()[0].textContent.includes('Message 99'),'latest only');
+     check(q('#toast').children.length===1,'bounded DOM');
+     fixtureWallOffset+=10000;window.dispatchEvent(new Event('focus'));
+     check(q('#toast').hidden&&!liveToasts().length,'no backlog after expiry');
     """)
-    pump(80)
-    js("fixtureToast('Keep this notification',{duration:10000})")
-    pump(650)
-    js("fixtureToast('Dismiss before the entrance finishes',{duration:10000})")
-    wait_for("liveToasts().length===2&&Number(getComputedStyle(liveToasts().at(-1)).opacity)>.15&&liveToasts().at(-1).getBoundingClientRect().bottom>q('#toast').getBoundingClientRect().bottom+2")
-    test('An entering toast cannot leave a strip beneath the remaining stack',"""
-     const card=liveToasts().at(-1);
-     card.querySelector('button').click();
-     const exit=exitFrame(card,100);
-     check(card.getBoundingClientRect().bottom<=q('#toast').getBoundingClientRect().bottom+1,'outgoing card stays above the stack baseline');
-     exit.finish();clearToasts();
+    test('Notification content remains literal text', """
+     const text='<img src=x onerror="throw Error(1)">';fixtureToast(text,{type:'error'});
+     check(q('.toast-message').textContent===text&&!q('#toast img'),'text cannot become markup');
+     check(liveToasts()[0].getAttribute('role')==='alert','error announced');clearToasts();
     """)
-    pump(250)
-    route('library');js("click('[data-action=add-game]');fixtureToast('Dialog notification',{duration:10000})");pump(1000)
-    test('Dialog notifications stay in the top layer', "check(q('#toast').parentElement===q('#dialog'),'dialog owns notification');click('#dialog [data-close]');")
+    test('Keyboard dismissal restores the invoking control', """
+     const origin=q('[data-action=check-for-updates]');origin.focus();
+     fixtureToast('Keyboard message');q('.toast-dismiss').focus();
+     q('.toast-dismiss').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+     check(q('#toast').hidden&&!liveToasts().length,'Escape removes pill immediately');
+     check(document.activeElement===origin,'invoking focus restored');
+    """)
+    test('A foreground reading hold releases immediately when the window loses focus', """
+     foregroundToast();fixtureToast('Read this',{type:'success'});
+     q('#toast').dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}));
+     fixtureWallOffset+=10000;
+    """)
+    pump(1100)
+    test('Reading never extends a background deadline', """
+     check(liveToasts().length===1,'foreground reading retained');
+     window.dispatchEvent(new Event('blur'));
+     check(q('#toast').hidden&&!liveToasts().length,'expired hold cleared on blur');
+     window.dispatchEvent(new Event('focus'));
+     check(q('#toast').hidden,'no old message on return');
+    """)
+    test('A focused pill also expires on blur without moving focus back into the app', """
+     foregroundToast();fixtureToast('Focused reading');q('.toast-dismiss').focus();
+     fixtureWallOffset+=10000;window.dispatchEvent(new Event('blur'));
+     check(q('#toast').hidden&&!liveToasts().length,'focused hold cleared');
+     check(document.activeElement!==q('[data-action=check-for-updates]'),'background expiry does not steal focus');
+    """)
+    window.hide();pump(100)
+    js("fixtureToast('Created in background',{duration:1000})")
+    pump(1300)
+    window.show_all();pump(180)
+    test('A message created in the hidden WebKit view expires before returning', "check(q('#toast').hidden&&!liveToasts().length,'no hidden backlog');")
+    test('Page-cache restoration rechecks delayed expiry before displaying anything', """
+     foregroundToast();fixtureToast('Before page cache');
+     window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
+     fixtureWallOffset+=10000;
+     window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
+     check(q('#toast').hidden&&!liveToasts().length,'expired cached page cleared');
+     fixtureToast('Fresh after return');check(liveToasts().length===1,'owner retained for cached page');clearToasts();
+    """)
+    route('library');js("fixtureToast('Existing before dialog',{duration:6000});click('[data-action=add-game]')")
+    wait_for("q('#toast').parentElement===q('#dialog')")
+    test('Opening a dialog moves an existing pill into its top layer', "check(q('#dialog').open&&!q('#toast').hidden,'existing notification stays visible');click('#dialog [data-close]');")
     wait_for("q('#toast').parentElement===document.body")
-    test('Closing a dialog keeps its notification visible in the document', "check(!q('#dialog').open&&!q('#toast').hidden,'closed dialog releases visible notification');check(liveToasts()[0].textContent.includes('Dialog notification'),'message retained');clearToasts();")
-    pump(250)
-    js("click('[data-action=add-game]');fixtureToast('Previous dialog');click('#dialog [data-close]');click('[data-action=add-game]');fixtureToast('Reopened dialog');")
-    pump(80)
-    test('A stale close event cannot move a reopened dialog notification behind it', "check(q('#dialog').open&&q('#toast').parentElement===q('#dialog'),'current dialog retains ownership');click('#dialog [data-close]');")
+    test('Rapid dialog close and reopen keeps current ownership', """
+     click('[data-action=add-game]');click('#dialog [data-close]');click('[data-action=add-game]');
+     fixtureToast('Reopened dialog');
+    """)
+    pump(180)
+    test('A stale close cannot put a new dialog pill behind it', "check(q('#dialog').open&&q('#toast').parentElement===q('#dialog'),'current dialog retains pill');click('#dialog [data-close]');")
     wait_for("q('#toast').parentElement===document.body")
-    js('clearToasts()');pump(250)
+    js('clearToasts()');route('global')
+    wait_for("q('[data-global=overlay]')&&!q('[data-global=overlay]').disabled")
+    js("q('[data-global=overlay]').click();fixtureToast('Draft remains pending',{duration:6000})")
+    pump(220)
+    test('The pill clears actual Save and Discard actions without changing the draft', """
+     const bar=q('[data-action=save-global]').closest('.change-save-bar'),pill=liveToasts()[0].getBoundingClientRect();
+     check(document.body.dataset.unsaved==='true'&&bar,'real draft visible');
+     check(pill.bottom<bar.getBoundingClientRect().top,'notification above draft actions');
+     check(q('[data-global=overlay]').checked!==values.overlay,'draft retained');
+    """)
+    snap('outlined-pill-draft')
+    js("click('[data-action=discard-global]')");pump(180)
+    test('Discard retains the saved setting and clears only the draft bar', "check(q('[data-global=overlay]').checked===values.overlay,'saved setting restored');check(document.body.dataset.unsaved!=='true','draft cleared');clearToasts();")
+    window.resize(480,800);pump(250)
+    js("fixtureToast('A_long_unbroken_message_'.repeat(12),{type:'error',duration:6000})");pump(180)
+    test('Long messages and dismissal fit a narrow window', """
+     const box=liveToasts()[0].getBoundingClientRect(),close=q('.toast-dismiss').getBoundingClientRect();
+     check(box.left>=15&&box.right<=innerWidth-15,'pill fits narrow window');
+     check(close.left>=box.left&&close.right<=box.right,'dismiss fits pill');
+     check(document.documentElement.scrollWidth<=innerWidth,'no horizontal overflow');clearToasts();
+    """)
+    window.resize(1440,1000);pump(180)
     Gtk.Settings.get_default().set_property('gtk-enable-animations',False)
     wait_for("matchMedia('(prefers-reduced-motion: reduce)').matches")
     pump(250)
-    test('Reduced motion removes stacked and last notifications immediately', """
-     fixtureToast('Reduced one');fixtureToast('Reduced two');clearToasts();
-     const retained=qa('.toast-card').map(card=>({text:card.textContent,hidden:card.getAttribute('aria-hidden'),motions:card.getAnimations().length}));
-     check(q('#toast').hidden&&!retained.length,'retained cards: '+JSON.stringify(retained));
+    test('Reduced motion has no entrance or retained exit animation', """
+     fixtureToast('Reduced motion');check(getComputedStyle(liveToasts()[0]).animationName==='none','no CSS entrance: '+JSON.stringify({animation:getComputedStyle(liveToasts()[0]).animationName,reduce:matchMedia('(prefers-reduced-motion: reduce)').matches,normal:matchMedia('(prefers-reduced-motion: no-preference)').matches}));
+     check(liveToasts()[0].getAnimations().length===0,'no animation');
+     clearToasts();check(q('#toast').hidden&&!liveToasts().length,'no retained outgoing surface');
+    """)
+    test('Page disposal disconnects ownership and rejects late notifications', """
+     window.lateToastOwner=q('#toast')[Symbol.for('redunar.toast-owner')];
+     fixtureToast('Before disposal');
+     window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:false}));
+     lateToastOwner('Late async result');
+     check(!q('#toast')[Symbol.for('redunar.toast-owner')]&&q('#toast').hidden&&!liveToasts().length,'disposed owner stays stopped');
      check(bridge.errors.length===0,bridge.errors.join('; '));
     """)
     (ARTIFACTS/'toasts-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
-    print(f'PASS: {len(checks)} toast checks. Screenshots: {ARTIFACTS}')
+    print(f'PASS: {len(checks)} pill checks. Screenshots: {ARTIFACTS}')
 finally:
     window.destroy();server.shutdown()

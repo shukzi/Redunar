@@ -74,8 +74,11 @@ stay unchanged. The trusted pointer fixture still requires X11.
 The `output/tauri-redunar/tests/layout-webview.py` fixture covers populated rails,
 long History sessions, plot boundaries at wide and narrow window sizes, and
 dialog overflow using the production stylesheet order.
-The `output/tauri-redunar/tests/toasts-webview.py` fixture covers update-response
-notifications, stack expiry and dismissal, dialog ownership, and reduced motion.
+The `output/tauri-redunar/tests/toasts-webview.py` fixture covers outlined
+notification pills, replacement, foreground reading holds, background expiry,
+focus restoration, dialog ownership, draft-bar clearance, and reduced motion.
+The matching store tests use controlled clocks and delayed callbacks to cover
+system sleep, clock changes, stale timers, bounded bursts, and disposal.
 The `output/tauri-redunar/tests/interactions-webview.py` fixture covers native
 scrollbar presses and drags, saved toggles, refresh feedback, and microphone
 control availability. Platform pointer events are delivered only to its isolated
