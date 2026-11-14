@@ -1,43 +1,36 @@
-/* The notification viewport owns placement; individual cards own surfaces. */
+/* One outlined pill. The viewport keeps it above draft actions and dialogs. */
 html:not([data-page="replay-menu"]) #toast.toast-viewport {
-  position: fixed; z-index: 110; inset: auto 24px 24px auto;
-  width: min(384px,calc(100vw - 48px)); max-width: none; min-height: 0;
+  position: fixed; z-index: 110; inset: auto auto 24px 50%;
+  width: max-content; max-width: min(560px,calc(100vw - 32px)); min-height: 0;
   margin: 0; padding: 0; border: 0; border-radius: 0;
   background: transparent; color: var(--text); box-shadow: none;
-  transform: none; pointer-events: none; text-align: left;
+  transform: translateX(-50%); pointer-events: none; text-align: left;
 }
 #toast.toast-viewport[hidden] { display: none; }
-/* Allow the stack to extend up, but never paint below its front card. */
-#toast.toast-viewport[data-clip-to-front] { clip-path: inset(-100vh -100vw var(--toast-bottom-clip,0px) -100vw); }
 html:not([data-page="replay-menu"]) body[data-unsaved=true] #toast.toast-viewport { bottom: 112px; }
 .toast-card {
-  position: absolute; right: 0; bottom: 0; box-sizing: border-box;
-  width: 100%; overflow: hidden; border: 1px solid #3b3b3b; border-radius: 16px;
-  background: #181818; color: #eee; transform-origin: bottom center;
+  box-sizing: border-box; max-width: 100%; border: 1px solid #525252;
+  border-radius: 20px; background: #161616; color: #e9e9e9;
   pointer-events: auto; box-shadow: none;
 }
-.toast-content { display: flex; align-items: center; gap: 12px; padding: 16px; transition: opacity 200ms ease-out; }
-.toast-card[data-behind=true] .toast-content { opacity: 0; }
-.toast-message { flex: 1; min-width: 0; margin: 0; font: 12px/1.65 var(--sans); overflow-wrap: anywhere; }
-.toast-icon { display: flex; align-items: center; flex: none; color: #bbb; }
-.toast-icon > svg { width: 18px; height: 18px; }
-.toast-card[data-type=error] .toast-icon,.toast-card[data-type=warning] .toast-icon { color: #ef777f; }
+.toast-content { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 16px; min-height: 38px; }
+.toast-message { flex: 1; min-width: 0; margin: 0; color: inherit; font: 500 12px/18px var(--sans); overflow-wrap: anywhere; }
+.toast-card[data-type=error],.toast-card[data-type=warning] { border-color: #a1575e; }
 .toast-dismiss {
-  position: relative;
-  display: grid; place-items: center; flex: none; width: 28px; height: 28px;
-  padding: 5px; border: 1px solid transparent; border-radius: 8px;
-  background: transparent; color: #939393; cursor: pointer;
-  transition: background-color 140ms ease,color 140ms ease,border-color 140ms ease;
+  display: grid; place-items: center; flex: none; width: 24px; height: 24px;
+  padding: 5px; border: 1px solid transparent; border-radius: 50%;
+  background: transparent; color: #a7a7a7; cursor: pointer;
 }
-.toast-dismiss::after { content: ''; position: absolute; inset: -8px; }
-.toast-dismiss svg { width: 14px; height: 14px; }
-.toast-dismiss:hover { background: #292929; border-color: #404040; color: #eee; }
+.toast-dismiss svg { width: 13px; height: 13px; }
+.toast-dismiss:hover { background: #292929; color: #eee; }
 .toast-dismiss:focus-visible { outline: 2px solid #ef777f; outline-offset: 2px; }
-.toast-progress { position: absolute; bottom: 0; left: 0; width: 100%; height: 2px; background: #777; transform-origin: left; pointer-events: none; }
-.toast-card[data-type=error] .toast-progress,.toast-card[data-type=warning] .toast-progress { background: #c44b55; }
-.toast-card[data-behind=true] .toast-progress { visibility: hidden; }
 @media(max-width:700px){
-  html:not([data-page="replay-menu"]) #toast.toast-viewport { right: 16px; bottom: 16px; width: min(384px,calc(100vw - 32px)); }
+  html:not([data-page="replay-menu"]) #toast.toast-viewport { bottom: 16px; }
   html:not([data-page="replay-menu"]) body[data-unsaved=true] #toast.toast-viewport { bottom: 164px; }
 }
-@media(prefers-reduced-motion:reduce){.toast-content,.toast-dismiss{transition:none}}
+@media(pointer:coarse){.toast-dismiss{width:36px;height:36px}.toast-content{min-height:44px}}
+@media(prefers-reduced-motion:no-preference){
+  .toast-card { animation: toast-pill-enter 140ms ease-out; }
+  @keyframes toast-pill-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+}
+#toast[data-reduced-motion=true] .toast-card { animation: none; }
