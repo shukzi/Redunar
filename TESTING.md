@@ -97,6 +97,18 @@ encoder readiness, resize, device loss, backpressure, timestamp order, media
 decodability, audio, and shutdown. OpenGL ES/EGL Replay and Flatpak capture
 remain outside this acceptance path.
 
+The daemon session fixtures cover failed initial Replay starts, fresh-frame
+encoder recovery, status polling, repeated cleanup, failed acknowledgements and
+worker panic. Audio startup is injected in these fixtures, so successful fake
+video encoding does not open an audio device. The ignored
+`paced_fifteen_minute_pipeline_survives_repeated_storage_stalls` test is the
+paced synthetic endurance check. It reports retained duration, segment resyncs,
+queue pressure and sampled process RSS:
+
+```sh
+TMPDIR=/tmp cargo test --locked --offline -p redunar-daemon paced_fifteen_minute_pipeline_survives_repeated_storage_stalls --target-dir .redunar-build/checks/root -- --ignored --nocapture
+```
+
 ### Package and installed-runtime checks
 
 Build the exact package affected by the change. Compare its executable,

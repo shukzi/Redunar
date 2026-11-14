@@ -19,8 +19,11 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+mod cleanup_tests;
 mod microphone;
 mod saved_notice;
+mod startup;
 
 const REPLAY_EXPORT_WAIT: Duration = Duration::from_millis(250);
 /// First wait before the pump re-arms a replacement recorder after a
@@ -159,6 +162,7 @@ struct CoordinatorInner {
 #[derive(Default)]
 struct CoordinatorState {
     completed_statistics: Option<crate::SessionFrameSummary>,
+    replay_startup: startup::ReplayStartup,
     status: GameSessionStatus,
     request: Option<GameSessionRequest>,
     capture: Option<CaptureSessionHandle>,
@@ -173,7 +177,14 @@ struct CoordinatorState {
 struct ReplayExportPump {
     stop: Arc<AtomicBool>,
     source: Arc<dyn ReplayFrameSource>,
-    worker: Option<JoinHandle<Result<(), ReplayRuntimeError>>>,
+    worker: Option<JoinHandle<ReplayPumpExit>>,
+    shutdown_result: Option<Result<(), ReplayRuntimeError>>,
+    pending_releases: VecDeque<u64>,
+}
+
+struct ReplayPumpExit {
+    shutdown: Result<(), ReplayRuntimeError>,
+    pending_releases: VecDeque<u64>,
 }
 
 pub(crate) trait ReplayFrameSource: Send + Sync {
@@ -241,12 +252,28 @@ impl ReplayExportPump {
     fn stop_and_join(&mut self) -> Result<(), ReplayRuntimeError> {
         self.stop.store(true, Ordering::Release);
         self.source.wake();
-        let Some(worker) = self.worker.take() else {
-            return Ok(());
-        };
-        worker
-            .join()
-            .map_err(|_| ReplayRuntimeError::new("Replay export worker panicked"))?
+        if let Some(worker) = self.worker.take() {
+            match worker.join() {
+                Ok(exit) => {
+                    self.shutdown_result = Some(exit.shutdown);
+                    self.pending_releases = exit.pending_releases;
+                }
+                Err(_) => {
+                    self.shutdown_result = Some(Err(ReplayRuntimeError::new(
+                        "Replay export worker panicked",
+                    )));
+                }
+            }
+        }
+        let releases = release_sequences(&mut self.pending_releases, [], |sequence| {
+            self.source.release(sequence)
+        });
+        let queued = self.source.drain_and_release();
+        self.shutdown_result
+            .clone()
+            .unwrap_or(Ok(()))
+            .and(releases)
+            .and(queued)
     }
 }
 
@@ -634,16 +661,43 @@ impl ProductionGameSessionCoordinator {
             + Sync
             + 'static,
     {
+        self.start_replay_export_pump_for_generation(
+            settings,
+            readiness,
+            pipeline_factory,
+            backend_factory,
+            None,
+        )
+    }
+
+    pub(crate) fn start_replay_export_pump_for_generation<P, B>(
+        &self,
+        settings: ReplaySettings,
+        readiness: ReplayBackendReadiness,
+        pipeline_factory: P,
+        backend_factory: B,
+        expected_generation: Option<u64>,
+    ) -> Result<(), ReplayRuntimeError>
+    where
+        P: Fn(&DmaBufReplayFrame) -> Result<ReplayHardwarePipeline, String> + Send + Sync + 'static,
+        B: Fn(&DmaBufReplayFrame) -> Result<Box<dyn HardwareEncoderBackend>, String>
+            + Send
+            + Sync
+            + 'static,
+    {
         crate::replay_runtime::validate_production_readiness(readiness)?;
-        let endpoint = {
+        let (endpoint, generation) = {
             let state = lock_unpoisoned(&self.inner.state);
             validate_replay_session_state(&state)?;
+            let generation =
+                expected_generation.unwrap_or_else(|| state.replay_startup.generation());
+            validate_replay_generation(&state, generation)?;
             if state.replay_pump.is_some() {
                 return Err(ReplayRuntimeError::new(
                     "an Instant Replay export worker is already active",
                 ));
             }
-            state
+            let endpoint = state
                 .capture
                 .as_ref()
                 .ok_or_else(|| {
@@ -651,7 +705,8 @@ impl ProductionGameSessionCoordinator {
                         "Instant Replay requires the game frame-transfer runtime",
                     )
                 })?
-                .replay_export_endpoint()
+                .replay_export_endpoint();
+            (endpoint, generation)
         };
         self.start_replay_frame_pump(
             settings,
@@ -659,6 +714,7 @@ impl ProductionGameSessionCoordinator {
             Arc::new(endpoint),
             pipeline_factory,
             backend_factory,
+            generation,
         )
     }
 
@@ -669,6 +725,7 @@ impl ProductionGameSessionCoordinator {
         source: Arc<dyn ReplayFrameSource>,
         pipeline_factory: P,
         backend_factory: B,
+        generation: u64,
     ) -> Result<(), ReplayRuntimeError>
     where
         P: Fn(&DmaBufReplayFrame) -> Result<ReplayHardwarePipeline, String> + Send + Sync + 'static,
@@ -681,6 +738,7 @@ impl ProductionGameSessionCoordinator {
         {
             let state = lock_unpoisoned(&self.inner.state);
             validate_replay_session_state(&state)?;
+            validate_replay_generation(&state, generation)?;
             if state.replay_pump.is_some() {
                 return Err(ReplayRuntimeError::new(
                     "an Instant Replay export worker is already active",
@@ -694,9 +752,17 @@ impl ProductionGameSessionCoordinator {
         let replay = self.inner.replay.clone();
         let pipeline_factory = Arc::new(pipeline_factory);
         let backend_factory = Arc::new(backend_factory);
+        let (start, ready) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("redunar-replay-export".to_owned())
             .spawn(move || {
+                // Do no runtime work until this exact session commits the pump.
+                if ready.recv().is_err() {
+                    return ReplayPumpExit {
+                        shutdown: Ok(()),
+                        pending_releases: VecDeque::new(),
+                    };
+                }
                 run_replay_export_pump(
                     worker_stop,
                     worker_source,
@@ -706,6 +772,7 @@ impl ProductionGameSessionCoordinator {
                     readiness,
                     pipeline_factory,
                     backend_factory,
+                    start_game_audio_worker,
                 )
             })
             .map_err(|error| {
@@ -714,10 +781,14 @@ impl ProductionGameSessionCoordinator {
         let mut state = lock_unpoisoned(&self.inner.state);
         // The session may have ended while the OS created the thread. Refuse
         // attachment and synchronously stop the worker in that rare race.
-        if validate_replay_session_state(&state).is_err() || state.replay_pump.is_some() {
+        if validate_replay_session_state(&state).is_err()
+            || validate_replay_generation(&state, generation).is_err()
+            || state.replay_pump.is_some()
+        {
             stop.store(true, Ordering::Release);
             source.wake();
             drop(state);
+            drop(start);
             let _ = worker.join();
             return Err(ReplayRuntimeError::new(
                 "the game session ended before Replay could start",
@@ -727,7 +798,12 @@ impl ProductionGameSessionCoordinator {
             stop,
             source,
             worker: Some(worker),
+            shutdown_result: None,
+            pending_releases: VecDeque::new(),
         });
+        // The receiver is already waiting. Sending cannot wait on GTK or a
+        // recorder lock, and the pump is owned before it consumes any frame.
+        let _ = start.send(());
         Ok(())
     }
 
@@ -747,8 +823,8 @@ impl ProductionGameSessionCoordinator {
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))?;
         let result = self.inner.replay.submit_frame(sequence, frame);
         let mut state = lock_unpoisoned(&self.inner.state);
-        collect_and_release_replay_exports(&mut state, &self.inner.replay);
-        result
+        let releases = collect_and_release_replay_exports(&mut state, &self.inner.replay);
+        result.and(releases)
     }
 
     /// Publish a launch only after the shell-free child spawn succeeded.
@@ -764,6 +840,14 @@ impl ProductionGameSessionCoordinator {
         capture: Option<CaptureSessionHandle>,
         replay: ReplayRuntimeStatus,
     ) -> Result<(), GameSessionError> {
+        if !matches!(
+            self.status().phase,
+            GameSessionPhase::Idle | GameSessionPhase::Ended
+        ) {
+            return Err(GameSessionError::new(
+                "another daemon-owned game session is already active",
+            ));
+        }
         // Flush any clip that committed after the end-of-session attribution
         // pass (a save finishing during shutdown) while the previous game
         // name is still published, so it cannot be re-attributed to the
@@ -792,6 +876,7 @@ impl ProductionGameSessionCoordinator {
         let capture_attached = capture.is_some();
         state.request = Some(request.clone());
         state.completed_statistics = None;
+        state.replay_startup.reset();
         state.capture = capture;
         state.noticed_save_revision = replay_status.completed_save_revision;
         state.recorded_save_revision = replay_status.completed_save_revision;
@@ -923,41 +1008,20 @@ impl ProductionGameSessionCoordinator {
     /// Release only the fail-open capture/overlay transport while the game
     /// itself remains active (for example, a forwarded Steam launch whose
     /// capture activation expired).
-    pub fn stop_capture(&self) {
-        self.close_replay_menu();
-        let mut replay_pump = lock_unpoisoned(&self.inner.state).replay_pump.take();
-        if let Some(pump) = replay_pump.as_mut() {
-            let _ = pump.stop_and_join();
-        } else {
-            let _ = self.inner.replay.shutdown();
-        }
-        let capture = {
-            let mut state = lock_unpoisoned(&self.inner.state);
-            collect_and_release_replay_exports(&mut state, &self.inner.replay);
-            state.status.metrics = stop_optional(state.status.metrics);
-            state.status.overlay = stop_optional(state.status.overlay);
-            state.status.replay = stop_optional(state.status.replay);
-            bump(&mut state.status);
-            state.capture.take()
-        };
-        if let Some(mut capture) = capture {
-            let summary = capture.finish_statistics();
-            lock_unpoisoned(&self.inner.state).completed_statistics = Some(summary);
-        }
+    /// # Errors
+    /// Returns an error while Replay resources or acknowledgements remain owned.
+    pub fn stop_capture(&self) -> Result<(), GameSessionError> {
+        self.release_capture(false)
     }
 
-    /// Stop all optional session resources and publish a terminal state.
+    /// Stop optional resources. Failed cleanup retains its transport and state
+    /// so repeated End or Quit requests cannot turn a failure into success.
     ///
     /// # Errors
-    ///
-    /// Returns [`GameSessionError`] when Replay cleanup cannot complete.
+    /// Returns an error until Replay cleanup completes safely.
     pub fn end(&self) -> Result<(), GameSessionError> {
-        // One final attribution pass before the session stops so a save that
-        // completed since the last supervisor poll is still labeled with this
-        // game. Later drains fall back to session-history window matching.
         self.flush_completed_clip_attribution();
-        self.close_replay_menu();
-        let mut replay_pump = {
+        {
             let mut state = lock_unpoisoned(&self.inner.state);
             if matches!(
                 state.status.phase,
@@ -966,41 +1030,112 @@ impl ProductionGameSessionCoordinator {
                 return Ok(());
             }
             state.status.phase = GameSessionPhase::Ending;
-            state.status.metrics = stop_optional(state.status.metrics);
-            state.status.overlay = stop_optional(state.status.overlay);
-            state.status.replay = stop_optional(state.status.replay);
+            state.replay_startup.reset();
             bump(&mut state.status);
-            state.replay_pump.take()
-        };
+        }
+        self.release_capture(true)
+    }
 
-        let replay_cleanup = replay_pump.as_mut().map_or_else(
+    fn release_capture(&self, ending: bool) -> Result<(), GameSessionError> {
+        self.close_replay_menu();
+        let mut pump = lock_unpoisoned(&self.inner.state).replay_pump.take();
+        if let Some(pump) = pump.as_mut() {
+            // Join before finalizing receiver statistics. The result remains in
+            // the pump, including failed GPU attestation and panic quarantine.
+            let _ = pump.stop_and_join();
+        }
+        let mut state = lock_unpoisoned(&self.inner.state);
+        if let Some(capture) = state.capture.as_mut() {
+            let summary = capture.finish_statistics();
+            state.completed_statistics = Some(summary);
+        }
+        // Intake has stopped. Drain once more so a late queued export cannot
+        // outlive a successful teardown. Only completed GPU inputs are ACKed.
+        let cleanup = pump.as_mut().map_or_else(
             || self.inner.replay.shutdown(),
             ReplayExportPump::stop_and_join,
         );
-        let capture = {
-            let mut state = lock_unpoisoned(&self.inner.state);
-            collect_and_release_replay_exports(&mut state, &self.inner.replay);
-            state.capture.take()
-        };
-        if let Some(mut capture) = capture {
-            let summary = capture.finish_statistics();
-            lock_unpoisoned(&self.inner.state).completed_statistics = Some(summary);
-        }
-
-        let mut state = lock_unpoisoned(&self.inner.state);
-        state.status.phase = GameSessionPhase::Ended;
-        match replay_cleanup {
+        let releases = collect_and_release_replay_exports(&mut state, &self.inner.replay);
+        let queued = state.capture.as_ref().map_or(Ok(()), |capture| {
+            capture
+                .replay_export_endpoint()
+                .drain_and_release()
+                .map_err(|error| ReplayRuntimeError::new(error.to_string()))
+        });
+        let result = cleanup.and(releases).and(queued);
+        state.status.metrics = stop_optional(state.status.metrics);
+        state.status.overlay = stop_optional(state.status.overlay);
+        state.status.replay = stop_optional(state.status.replay);
+        match &result {
             Ok(()) => {
+                state.capture.take();
                 state.status.failure = None;
-                bump(&mut state.status);
-                Ok(())
+                if ending {
+                    state.status.phase = GameSessionPhase::Ended;
+                }
             }
             Err(error) => {
+                state.replay_pump = pump;
+                state.status.replay = GameSessionComponentState::Failed;
                 state.status.failure =
                     Some(format!("Game-session cleanup did not complete: {error}"));
-                bump(&mut state.status);
-                Err(GameSessionError::new(error.to_string()))
             }
+        }
+        bump(&mut state.status);
+        result.map_err(|error| GameSessionError::new(error.to_string()))
+    }
+
+    pub(crate) fn configure_idle_replay(&self, settings: ReplaySettings, available: bool) {
+        let state = lock_unpoisoned(&self.inner.state);
+        if matches!(
+            state.status.phase,
+            GameSessionPhase::Idle | GameSessionPhase::Ended
+        ) {
+            if available {
+                self.inner.replay.configure_validation_candidate(settings);
+            } else {
+                self.inner.replay.configure_unavailable(settings);
+            }
+        }
+    }
+
+    pub(crate) fn claim_replay_start(&self, now: Instant) -> Option<u64> {
+        if self.inner.replay.teardown_incomplete() {
+            return None;
+        }
+        let mut state = lock_unpoisoned(&self.inner.state);
+        if validate_replay_session_state(&state).is_err()
+            || state.replay_pump.is_some()
+            || state.status.failure.is_some()
+        {
+            return None;
+        }
+        state.replay_startup.claim(now)
+    }
+
+    pub(crate) fn replay_start_matches(&self, expected: Option<u64>) -> bool {
+        let state = lock_unpoisoned(&self.inner.state);
+        expected.is_none_or(|generation| validate_replay_generation(&state, generation).is_ok())
+    }
+
+    pub(crate) fn finish_replay_start(&self, generation: u64, now: Instant, success: bool) {
+        let mut state = lock_unpoisoned(&self.inner.state);
+        if state.replay_startup.finish(generation, now, success)
+            && matches!(
+                state.status.phase,
+                GameSessionPhase::Launching | GameSessionPhase::Running
+            )
+        {
+            state.status.replay = if success {
+                if state.status.replay == GameSessionComponentState::Active {
+                    GameSessionComponentState::Active
+                } else {
+                    GameSessionComponentState::Pending
+                }
+            } else {
+                GameSessionComponentState::Failed
+            };
+            bump(&mut state.status);
         }
     }
 }
@@ -1026,7 +1161,8 @@ fn run_replay_export_pump(
     readiness: ReplayBackendReadiness,
     pipeline_factory: ReplayPipelineFactory,
     backend_factory: ReplayBackendFactory,
-) -> Result<(), ReplayRuntimeError> {
+    start_audio: fn(Arc<AtomicBool>, ProductionReplayRuntime, u64) -> Option<JoinHandle<()>>,
+) -> ReplayPumpExit {
     let mut dimensions = None;
     let mut recording_start_ns = 0;
     // One recording failure is recoverable: the pump reports the failure,
@@ -1183,8 +1319,7 @@ fn run_replay_export_pump(
             // It survives recorder re-arms, so re-arming never spawns a second
             // system-audio consumer.
             if audio_worker.is_none() {
-                audio_worker =
-                    start_game_audio_worker(Arc::clone(&stop), replay.clone(), frame.timestamp_ns);
+                audio_worker = start_audio(Arc::clone(&stop), replay.clone(), frame.timestamp_ns);
             }
             if microphone_worker.is_some() {
                 // A recorder re-arm resets ingestion state, while this session
@@ -1317,9 +1452,12 @@ fn run_replay_export_pump(
             "Replay event=shutdown_failed stage=export_release reason=acknowledgement_failed",
         );
     }
-    let result = shutdown.and(releases).and(queued_releases);
+    let result = shutdown.clone().and(releases).and(queued_releases);
     crate::diagnostic_log::log(shutdown_event(&result));
-    result
+    ReplayPumpExit {
+        shutdown,
+        pending_releases,
+    }
 }
 
 fn encoder_ready_timestamp(frame: &DmaBufReplayFrame, ready_ns: Option<u64>) -> u64 {
@@ -1600,6 +1738,18 @@ fn publish_replay_component(
     }
 }
 
+fn validate_replay_generation(
+    state: &CoordinatorState,
+    generation: u64,
+) -> Result<(), ReplayRuntimeError> {
+    if state.replay_startup.generation() != generation {
+        return Err(ReplayRuntimeError::new(
+            "Replay startup belongs to an earlier game session",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_replay_session_state(state: &CoordinatorState) -> Result<(), ReplayRuntimeError> {
     if !matches!(
         state.status.phase,
@@ -1629,21 +1779,26 @@ fn validate_replay_session_state(state: &CoordinatorState) -> Result<(), ReplayR
 fn collect_and_release_replay_exports(
     state: &mut CoordinatorState,
     replay: &ProductionReplayRuntime,
-) {
+) -> Result<(), ReplayRuntimeError> {
     for sequence in replay.take_completed_exports() {
         if !state.pending_replay_releases.contains(&sequence) {
             state.pending_replay_releases.push_back(sequence);
         }
     }
     let Some(capture) = state.capture.as_ref() else {
-        return;
+        return if state.pending_replay_releases.is_empty() {
+            Ok(())
+        } else {
+            Err(ReplayRuntimeError::new(
+                "Replay completion transport is unavailable",
+            ))
+        };
     };
-    while let Some(sequence) = state.pending_replay_releases.front().copied() {
-        if capture.release_replay_export(sequence).is_err() {
-            break;
-        }
-        state.pending_replay_releases.pop_front();
-    }
+    release_sequences(&mut state.pending_replay_releases, [], |sequence| {
+        capture
+            .release_replay_export(sequence)
+            .map_err(|error| ReplayRuntimeError::new(error.to_string()))
+    })
 }
 
 fn requested_state(requested: bool, available: bool) -> GameSessionComponentState {
@@ -1688,6 +1843,12 @@ fn stop_optional(state: GameSessionComponentState) -> GameSessionComponentState 
 }
 
 fn apply_capture_snapshot(state: &mut CoordinatorState, snapshot: &crate::CaptureSnapshot) {
+    if matches!(
+        state.status.phase,
+        GameSessionPhase::Ending | GameSessionPhase::Ended
+    ) {
+        return;
+    }
     let request = state.request.as_ref();
     let metrics_requested = request.is_some_and(|request| request.metrics.is_enabled());
     let overlay_requested = request.is_some_and(|request| request.overlay.is_enabled());
@@ -2061,6 +2222,7 @@ mod tests {
                     ReplayBackendReadiness::fully_verified(),
                     Arc::new(|_| Err("fixture backend initialization failed".to_owned())),
                     Arc::new(|_| Err("replacement must not be requested".to_owned())),
+                    |_, _, _| None,
                 )
             })
         };
@@ -2068,6 +2230,8 @@ mod tests {
             stop,
             source: Arc::new(endpoint.clone()),
             worker: Some(worker),
+            shutdown_result: None,
+            pending_releases: VecDeque::new(),
         };
         endpoint.enqueue_for_test(crate::capture_session::ReplayExportMetadata {
             sequence: 1,
@@ -2117,6 +2281,7 @@ mod tests {
                 ReplayBackendReadiness::fully_verified(),
                 Arc::new(|_| panic!("no encoder without fresh export")),
                 Arc::new(|_| panic!("no replacement without fresh export")),
+                |_, _, _| None,
             )
         });
         endpoint.reject_source_for_test(
@@ -2135,6 +2300,8 @@ mod tests {
             stop,
             source: Arc::new(endpoint),
             worker: Some(worker),
+            shutdown_result: None,
+            pending_releases: VecDeque::new(),
         };
         pump.stop_and_join().unwrap();
         assert!(lock_unpoisoned(&acknowledgements).is_empty());

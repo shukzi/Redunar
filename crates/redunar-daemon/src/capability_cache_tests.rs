@@ -7,6 +7,82 @@ use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(5);
 
+#[test]
+fn active_replay_failure_survives_status_polls_without_rediscovery() {
+    let state =
+        std::env::temp_dir().join(format!("redunar-recovery-status-{}", std::process::id()));
+    let service = counting_service(state.clone());
+    let session = service.game_session_coordinator();
+    session
+        .begin(
+            crate::GameSessionRequest {
+                game_id: None,
+                game_name: "Fixture".into(),
+                metrics: true.into(),
+                overlay: true.into(),
+                replay: true.into(),
+            },
+            None,
+            ReplayRuntimeStatus::unavailable(ReplaySettings::default()),
+        )
+        .unwrap();
+    session.replay_runtime().fail(ReplayFailure::EncoderFailed);
+    for _ in 0..2 {
+        let status = service.replay_runtime_status().unwrap();
+        assert_eq!(status.phase, crate::ReplayPhase::Failed);
+        assert_eq!(status.last_failure, Some(ReplayFailure::EncoderFailed));
+    }
+    assert_eq!(service.capability_discovery_revision(), 0);
+    session.end().unwrap();
+    drop(session);
+    drop(service);
+    let _ = std::fs::remove_dir_all(state);
+}
+
+#[test]
+fn a_status_read_started_while_idle_cannot_clear_a_new_sessions_failure() {
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let resume = Mutex::new(resume);
+    let state = std::env::temp_dir().join(format!("redunar-recovery-race-{}", std::process::id()));
+    let service = fixture_service(state.clone(), move || {
+        entered.send(()).unwrap();
+        resume.lock().unwrap().recv_timeout(WAIT).unwrap();
+        snapshot(1)
+    });
+    let reading = service.clone();
+    let reader = thread::spawn(move || reading.replay_runtime_status().unwrap());
+    started.recv_timeout(WAIT).unwrap();
+    let session = service.game_session_coordinator();
+    session
+        .begin(
+            crate::GameSessionRequest {
+                game_id: None,
+                game_name: "Fixture".into(),
+                metrics: true.into(),
+                overlay: true.into(),
+                replay: true.into(),
+            },
+            None,
+            ReplayRuntimeStatus::unavailable(ReplaySettings::default()),
+        )
+        .unwrap();
+    session.replay_runtime().fail(ReplayFailure::EncoderFailed);
+    release.send(()).unwrap();
+    assert_eq!(
+        reader.join().unwrap().last_failure,
+        Some(ReplayFailure::EncoderFailed)
+    );
+    assert_eq!(
+        session.replay_runtime().status().phase,
+        crate::ReplayPhase::Failed
+    );
+    session.end().unwrap();
+    drop(session);
+    drop(service);
+    let _ = std::fs::remove_dir_all(state);
+}
+
 pub(super) fn snapshot(revision: u64) -> CapabilitySnapshot {
     let reason = format!("fixture capability {revision}");
     CapabilitySnapshot {

@@ -65,7 +65,9 @@ outside that page does not load its graphs. The first visit and explicit
 refresh read saved history off the window thread. Keep loaded data for return
 visits. Stop periodic webview refreshes while the window is hidden and resume
 on return. Native monitoring, session supervision, and shortcuts run
-independently.
+independently. Initial Replay worker startup retries also belong to native
+supervision. They serialize attempts with a 500 ms to 10 second backoff and
+stop when the session ends or cleanup cannot safely release GPU ownership.
 
 Scrollbar styling uses one path per engine. WebKit uses the existing pseudo
 rules without a competing `scrollbar-color` override, so pressed native overlay
@@ -119,7 +121,8 @@ session records have fixed size and count limits. The encoded in-memory Replay
 repair window is capped at 256 MiB, and the disk spool queue is capped at 32
 MiB of payload. Transient spool pressure is repaired from the in-memory window;
 storage failures stop disk-history publication instead of publishing a silent
-gap while live capture continues in the bounded RAM window. Temporary media
+gap while live capture continues in the bounded RAM window. Degraded disk
+history does not copy packet metadata for unused spool submissions. Temporary media
 and cache files are cleaned only when Redunar owns them.
 
 ## Measurement procedure
