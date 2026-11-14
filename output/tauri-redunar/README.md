@@ -50,6 +50,8 @@ Release builds use the signed GitHub release channel:
 ## Verification
 
 Run the automated fixtures and native probes in [TESTING.md](../../TESTING.md).
+The UI suite runner lists browser suites, checks their prerequisites and records
+results against the exact built source.
 Use [REAL-GAME-TESTING.md](../../REAL-GAME-TESTING.md) for a supported native
 Steam run. A browser or synthetic pass does not establish codec, GPU,
 compositor, or real-game support.

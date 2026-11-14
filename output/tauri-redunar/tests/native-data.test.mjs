@@ -237,17 +237,19 @@ test('Replay workspace aligns to content and limits the desktop clip rail to fou
 });
 test('Replay opening uses the preview queue and playback controls wait for media readiness',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
+ const player=readFileSync(new URL('../ui/replay-player.mjs',import.meta.url),'utf8');
  const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
  assert.match(source,/const prioritized=\[selectedClip,.*:visible\)/);
  // Queue bounds and entry timing are exercised by the behavioral fixtures.
  assert.match(source,/clipPreviews\.request\(prioritized\.map/);
- assert.match(source,/videoReady=false;playRequested=false;updatePlayerUi\(\);/);
- assert.match(source,/toggle\.disabled=!videoReady\|\|exporting/);
- assert.match(source,/if\(!videoReady\|\|video\.readyState<1\)return;/);
- assert.match(source,/function togglePlayback\(\)/);
- assert.match(source,/document\.addEventListener\('pointerup',event=>\{[\s\S]*suppressPlayerToggleClickUntil=performance\.now\(\)\+500;[\s\S]*togglePlayback\(\);/);
+ assert.match(player,/videoReady=false;playRequested=false;updatePlayerUi\(\);/);
+ assert.match(player,/toggle\.disabled=!videoReady\|\|exporting/);
+ assert.match(player,/if\(!videoReady\|\|video\.readyState<1\)return;/);
+ assert.match(player,/function togglePlayback\(\)/);
+ assert.match(source,/document\.addEventListener\('pointerup',event=>player\.pointerToggle\(event\)\)/);
+ assert.match(player,/function pointerToggle\(event\)\{[\s\S]*suppressPlayerToggleClickUntil=performance\.now\(\)\+500;togglePlayback\(\);/);
  assert.match(source,/id="clip-play-toggle" class="icon-button player-toggle" type="button"/);
- assert.match(source,/const needsSeek=Math\.abs\(video\.currentTime-wanted\)>\.25;[\s\S]*try\{await video\.play\(\);break;\}/);
+ assert.match(player,/const needsSeek=Math\.abs\(video\.currentTime-wanted\)>\.25;[\s\S]*try\{await video\.play\(\);break;\}/);
  assert.match(css,/\.player-controls \.icon-button\{color:#eee8ef;font-size:11px;width:42px;min-width:42px;height:34px/);
 });
 test('Native shell owns compact portable window chrome',()=>{

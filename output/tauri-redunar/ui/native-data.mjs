@@ -3,6 +3,7 @@ import { validHistoryValue } from './history-timeline.mjs';
 
 // Runtime data crosses one explicit boundary. Never reuse the sandbox fixtures
 // or a cached observation after a failed native request.
+export const clamp = (value,min,max)=>Math.max(min,Math.min(max,value));
 export const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 export const measurement = (value, digits=0) => number(value) === null ? '—' : value.toFixed(digits);
 export const duration = value => number(value) === null ? '—' : `${Math.floor(value/60)}m ${Math.floor(value%60)}s`;
@@ -10,18 +11,31 @@ export function visibleSession(status) {
   return status && status.phase === 'Ended' && !status.can_end && !status.launch_locked ? null : status ?? null;
 }
 
-const profileDraftKeys = ['overlay','preset','layout','palette','branding','position','edgeSpacing','scale','opacity','metrics','captureMetrics','replay','fps','quality','format'];
+// Each editable field belongs to one draft scope. Tab markers and save
+// feedback share these groups so a new field cannot lose its draft marker.
+export const profileDraftGroups = Object.freeze(Object.fromEntries(Object.entries({
+  appearance: ['layout','palette','branding','position','edgeSpacing','scale','opacity'],
+  metrics: ['preset','metrics'],
+  visibility: ['overlay'],
+  session: ['captureMetrics'],
+  replay: ['replay','fps','quality','format'],
+}).map(([scope,keys])=>[scope,Object.freeze(keys)])));
+const profileDraftKeys = Object.values(profileDraftGroups).flat();
+export const overrideDraftKeys = Object.freeze([...profileDraftGroups.visibility,...profileDraftGroups.session]);
 const normalizedMetrics = value => [...(Array.isArray(value)?value:[])].sort();
-export function profileDraftChanged(current,saved) {
-  return profileDraftKeys.some(key=>key==='metrics'
+export function draftFieldChanged(current,saved,key) {
+  return key==='metrics'
     ? JSON.stringify(normalizedMetrics(current?.[key]))!==JSON.stringify(normalizedMetrics(saved?.[key]))
-    : current?.[key]!==saved?.[key]);
+    : current?.[key]!==saved?.[key];
+}
+export function profileDraftChanged(current,saved) {
+  return profileDraftKeys.some(key=>draftFieldChanged(current,saved,key));
 }
 export function shortcutDraftChanged(current,saved) {
   return JSON.stringify(Array.isArray(current)?current:[])!==JSON.stringify(Array.isArray(saved)?saved:[]);
 }
 export function overrideDraftChanged(current,saved) {
-  return ['overlay','captureMetrics'].some(key=>
+  return overrideDraftKeys.some(key=>
     (Object.hasOwn(current||{},key)?current[key]:null)!==(Object.hasOwn(saved||{},key)?saved[key]:null));
 }
 
@@ -46,5 +60,5 @@ export function profilePayload(draft, shortcuts) {
   return {...draft,shortcuts};
 }
 export function overridePayload(overrides) {
-  return Object.fromEntries(['overlay','captureMetrics'].map(key=>[key,Object.hasOwn(overrides,key)?overrides[key]:null]));
+  return Object.fromEntries(overrideDraftKeys.map(key=>[key,Object.hasOwn(overrides,key)?overrides[key]:null]));
 }

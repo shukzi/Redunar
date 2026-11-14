@@ -153,6 +153,11 @@ mod tests {
             peer,
         )
     }
+    fn disconnect_peer(peer: UnixStream) {
+        // Make EOF observable even if a child temporarily retains this endpoint.
+        peer.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(peer);
+    }
     #[test]
     fn delayed_partial_stale_and_closed_responses_are_bounded() {
         let (mut client, mut peer) = fixture();
@@ -171,9 +176,21 @@ mod tests {
         client.stop().wait().unwrap();
         let (mut client, peer) = fixture();
         client.sample(now).unwrap();
-        drop(peer);
+        disconnect_peer(peer);
         assert!(client.sample(now).is_err());
         client.stop().wait().unwrap();
+    }
+    #[test]
+    fn peer_disconnect_is_visible_with_another_descriptor_open() {
+        let (mut client, peer) = fixture();
+        let retained_peer = peer.try_clone().unwrap();
+        let now = Instant::now();
+        client.sample(now).unwrap();
+        disconnect_peer(peer);
+        let result = client.sample(now);
+        drop(retained_peer);
+        client.stop().wait().unwrap();
+        assert!(result.is_err(), "closed peer was not detected: {result:?}");
     }
     #[test]
     fn malformed_response_retires_child_and_backoff_prevents_respawn() {

@@ -24,8 +24,8 @@ Focused checks include:
 
 ```sh
 node --test output/tauri-redunar/tests/*.test.mjs
-cargo test --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets
-cargo clippy --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets --target-dir .redunar-build/checks/tauri
+cargo clippy --locked --offline --manifest-path output/tauri-redunar/src-tauri/Cargo.toml --all-targets --target-dir .redunar-build/checks/tauri -- -D warnings
 tools/check-tauri-release.sh
 ```
 
@@ -67,6 +67,42 @@ Verify native scroll behavior, focus, keyboard operation, reduced motion, draft
 preservation, polling, overlay settings, playback controls, and unavailable
 states. Inspect the effective stylesheet order and the actual built resources.
 Do not use synthetic values as native measurements.
+
+The UI suite runner lists tests and prerequisites without launching them:
+
+```sh
+python3 tools/test-ui.py --list
+```
+
+Build the frontend, then run the required groups or named suites:
+
+```sh
+npm --prefix output/tauri-redunar run build
+python3 tools/test-ui.py --preflight --group generic --group media
+python3 tools/test-ui.py --group generic --group media
+python3 tools/test-ui.py --group pointer
+python3 tools/test-ui.py --suite overlay-metrics --suite player-updates
+```
+
+Generic and media groups use a private Broadway display. Media checks also need
+FFmpeg, FFprobe and WebKit codecs. Trusted-pointer tests use a private Xvfb
+server and never fall back to the host display. The runner creates private
+configuration, cache and runtime directories for each suite. It does not install
+dependencies, contact an update service, open a microphone or launch the app.
+
+The build records its working-source and asset hashes in
+`.redunar-build/ui-build.json`. The runner rejects stale source or changed
+assets, holds the checkout's validation lock, and bounds each suite's runtime.
+Results and screenshots go to a unique `.redunar-build/reports/ui/` directory.
+Results distinguish passed, failed, blocked and unselected tests. Exit 1 reports
+failure; exit 2 reports blocked prerequisites. A blocked group is not a pass.
+Native capture probes remain separate opt-in commands.
+
+Shared WebKit suites use an explicit `WebviewFixture` context. Imports start no
+window or server. Each context owns its artifacts, callback deadlines and
+cleanup. The synthetic native handler map rejects unexpected commands and
+malformed arguments. Unexpected commands fail the suite even when the UI catches
+the rejection. Scenario-specific commands must have explicit handlers.
 
 Generic WebKit fixtures support X11 or a private GTK Broadway display. When no
 monitor is attached, Broadway uses a process-local DPI setting and leaves

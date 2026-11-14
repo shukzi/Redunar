@@ -1,3 +1,5 @@
+import {draftFieldChanged,profileDraftGroups} from './native-data.mjs';
+
 // Pure presentation and filtering for the native workspace.
 export const escapeHtml = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export function recordingAudio(status) {
@@ -6,8 +8,9 @@ export function recordingAudio(status) {
  return `<span class="recording-audio ${status.audio_active?'':'audio-warning'}" data-audio-state="${status.audio_active?'active':'unavailable'}">${status.audio_active?'System audio capturing':'Waiting for system audio'}</span><span class="recording-audio ${microphone==='unavailable'?'audio-warning':''}" data-microphone-status data-audio-state="${microphone==='active'?'active':microphone==='unavailable'?'unavailable':'inactive'}">${micText}</span>`;
 }
 export function dirtyGlobalTabs(draft,saved,shortcutDirty) {
- const changed=key=>JSON.stringify(key==='metrics'?[...(draft[key]||[])].sort():draft[key])!==JSON.stringify(key==='metrics'?[...(saved[key]||[])].sort():saved[key]);
- return {overlay:['overlay','preset','layout','palette','branding','position','scale','opacity','metrics','captureMetrics'].some(changed),replay:['fps','quality','format'].some(changed),shortcuts:shortcutDirty};
+ const changed=key=>draftFieldChanged(draft,saved,key);
+ const overlayGroups=['appearance','metrics','visibility','session'];
+ return {overlay:overlayGroups.some(scope=>profileDraftGroups[scope].some(changed)),replay:profileDraftGroups.replay.some(changed),shortcuts:shortcutDirty};
 }
 const options=(values,current)=>values.map(([value,label])=>`<option value="${escapeHtml(value)}" ${String(current)===String(value)?'selected':''}>${escapeHtml(label)}</option>`).join('');
 export function historyFiltersMarkup(sessions,filters) {

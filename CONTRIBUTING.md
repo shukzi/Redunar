@@ -95,8 +95,10 @@ The compatibility builder copies Git-visible working files into a temporary
 snapshot, including uncommitted edits and non-ignored new files. It excludes
 ignored caches/private files, refuses source symlinks, and never deletes host
 Cargo targets. Its source manifest hashes the actual copied files. Locks allow
-only one compatibility build and one validation run per checkout. Independent
-worktrees have independent outputs. Each container runs the exact
+only one compatibility build and one validation run per checkout.
+Frontend builds also record the working-source and asset hashes for the UI
+fixture runner. Rebuild after changing source before running those fixtures.
+Independent worktrees have independent outputs. Each container runs the exact
 image ID produced by its own build; cancellation stops its container before
 removing the source snapshot. Dependency download caches may be shared; mutable
 frontend/build/package outputs must not be shared.
