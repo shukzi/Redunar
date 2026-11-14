@@ -1,7 +1,7 @@
 # Redunar architecture
 
 Redunar is a Tauri desktop application with a shared Rust service. The webview
-renders state and requests typed commands; native code owns sessions, hardware,
+renders state and requests typed commands. Native code owns sessions, hardware,
 media, permissions, persistence, and cleanup.
 
 ## Runtime boundaries
@@ -17,8 +17,8 @@ Capture components: Vulkan layer, OpenGL interposer, audio, hotkeys, Steam bridg
     bounded same-user protocols and literal process arguments
 ```
 
-The service is linked into the Tauri process; it is not a required standalone
-D-Bus daemon. A second launch cannot take over an active session. Hidden webviews
+The service runs inside the Tauri process. A separate D-Bus daemon is not
+required. A second launch cannot take over an active session. Hidden webviews
 do not stop native supervision or shortcuts. The webview cannot write hardware,
 choose arbitrary playback paths, run privileged commands, or decide that
 capture succeeded.
@@ -48,16 +48,17 @@ bounded activation messages, not commands or arbitrary paths.
 | Tauri host | Typed commands, windows, tray, update handoff, supervision, and cleanup |
 | Webview | Presentation, drafts, validation messages, and user requests |
 
-Capture and Replay state is coordinated by the shared service. Producers use
+The shared service coordinates capture and Replay state. Producers use
 versioned private protocols, bounded queues, device identity, and release
 acknowledgements. Device loss, process replacement, stale results, and cleanup
 failure must not redirect data to a new session.
 
 CPU power uses direct readable counters or the fixed installed
 `redunar-cpu-power-helper` through polkit. The privileged endpoint accepts no
-arguments or paths and emits only aggregate package power. Active local sessions
-are authorized by the native package policy; inactive and remote sessions are
-denied. The sampler uses bounded nonblocking IPC, one outstanding request, stale
+arguments or paths and emits only aggregate package power. The native package
+policy authorizes active local sessions and denies inactive and remote
+sessions. The sampler uses bounded nonblocking IPC, one outstanding request,
+stale
 response rejection, and a 30-second failure backoff. Disconnection ends the
 helper. A failed child must be reaped before a replacement can start.
 
@@ -122,9 +123,9 @@ ends Redunar after cleanup.
 ## Metrics, capture, and overlay
 
 The shared service caches capture-runtime and encoder discovery for capability
-reads. Routine diagnostics polling reuses that snapshot; an explicit
-diagnostics refresh and capture retry request fresh evidence. Explicit
-invalidation makes the next capability read discover again.
+reads. Routine diagnostics polling reuses that snapshot. An explicit diagnostics
+refresh or capture retry requests fresh evidence. Explicit
+invalidation triggers discovery on the next capability read.
 Discovery, refresh and invalidation are serialized separately from live monitor,
 session and Replay state, whose readings continue to update independently.
 
@@ -139,8 +140,8 @@ synchronization. NVIDIA uses a UUID-matched Vulkan bridge; AMD/RADV keeps its
 existing path. OpenGL ES/EGL Replay, Flatpak capture, late attachment, and
 software-video fallback are unsupported.
 
-The overlay, in-game Replay menu, and save notice are rendered by the active
-capture backend. Overlay visibility is reversible and independent from the
+The active capture backend renders the overlay, in-game Replay menu, and
+save notice. Overlay visibility is reversible and independent from the
 metrics preset. The webview preview is a configuration surface, not the
 in-game menu.
 
@@ -163,8 +164,9 @@ The installer helper applies the same nonblocking file checks before copying
 user-owned input into its private installation snapshot.
 
 The updater verifies signed release metadata, version, and package checksums
-before retaining a package. Settings requests checks or installation; the
-webview cannot select a package path or command. Installation and restart remain
+before retaining a package. Settings can request a check or installation. The
+webview cannot select a package path or command. Installation and restart
+remain
 separate operations.
 
 ## Privilege and failure boundaries

@@ -2612,7 +2612,7 @@ unsafe fn destroy_partial_contexts(
 unsafe fn destroy_queue_resources(device: &DeviceState, queue: &QueueState) {
     let handle = device.device_address as VkDevice;
     // Vulkan requires applications to finish queue work before device
-    // destruction. We never wait here; teardown follows that ownership rule.
+    // destruction. This path never waits; teardown follows that ownership rule.
     for context in queue.contexts {
         if context.fence != 0 {
             // SAFETY: handles belong to this live device.

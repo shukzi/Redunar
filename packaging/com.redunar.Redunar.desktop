@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Redunar
-Comment=App for instant replay and in-game metrics.
+Comment=Instant replay and in-game metrics.
 Exec=redunar-tauri
 Icon=com.redunar.Redunar
 Terminal=false

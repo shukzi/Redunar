@@ -373,9 +373,9 @@ unsafe extern "C" fn interposed_dlsym(handle: *mut c_void, symbol: *const c_char
     }
     // .NET P/Invoke resolves SDL entry points against a specific dlopen
     // handle, bypassing ordinary LD_PRELOAD symbol interposition. Preserve the
-    // handle-specific target before returning our launch-scoped wrapper. Some
+    // handle-specific target before returning the launch-scoped wrapper. Some
     // loaders first resolve the dlopen/dlsym functions themselves this way;
-    // return our forwarding wrappers for those two function pointers so later
+    // return the forwarding wrappers for those two function pointers so later
     // library and SDL-symbol lookups remain observable and interceptable.
     // SAFETY: dlsym requires a valid NUL-terminated symbol name.
     match unsafe { CStr::from_ptr(symbol) }.to_bytes() {
@@ -1055,7 +1055,7 @@ fn real_dlsym() -> Option<Dlsym> {
     *REAL_DLSYM.get_or_init(|| {
         let next_handle = (-1_isize) as *mut c_void;
         // SAFETY: glibc exposes dlsym at GLIBC_2.2.5 on supported x86_64 Linux
-        // targets. Using dlvsym avoids recursing through our exported dlsym.
+        // targets. Using dlvsym avoids recursing through the exported dlsym wrapper.
         let address = unsafe { dlvsym(next_handle, c"dlsym".as_ptr(), c"GLIBC_2.2.5".as_ptr()) };
         if address.is_null() {
             None
@@ -1070,7 +1070,7 @@ fn real_dlopen() -> Option<Dlopen> {
     *REAL_DLOPEN.get_or_init(|| {
         let next_handle = (-1_isize) as *mut c_void;
         // SAFETY: glibc exposes dlopen at GLIBC_2.2.5 on supported x86_64
-        // Linux targets. The versioned lookup bypasses our exported wrapper.
+        // Linux targets. The versioned lookup bypasses the exported wrapper.
         let address = unsafe { dlvsym(next_handle, c"dlopen".as_ptr(), c"GLIBC_2.2.5".as_ptr()) };
         if address.is_null() {
             None

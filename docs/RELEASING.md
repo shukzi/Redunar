@@ -28,8 +28,8 @@ tools/prepare-release.sh vMAJOR.MINOR.PATCH
 This requires a clean source tree with the specified tag at HEAD, runs full
 validation and the release gate, and prepares unsigned packages under
 `.redunar-build/candidates/<tag>-<commit>/`. Existing candidates are not overwritten.
-An interrupted candidate is explicitly incomplete; inspect and preserve evidence
-before removing only that incomplete directory for a deliberate retry.
+An interrupted candidate remains incomplete. Inspect and preserve its evidence
+before deliberately removing only that incomplete directory for a retry.
 
 Record the exact commit, source-manifest hash, environment, artifact hashes,
 automated results, manual acceptance scope, known limitations, and state-format
@@ -49,7 +49,7 @@ installed executable and sidecars. Do not mix a candidate's results with a
 different local package.
 
 `tools/check-installed-tauri-runtime.sh` is an RPM-only convenience check. It
-selects an RPM under `target/packages`; ensure that selection is the exact
+selects an RPM under `target/packages`. Confirm that it selected the exact
 qualified package before using it. It does not verify Arch or DEB installations
 and does not replace checking the selected package's resources and permissions.
 

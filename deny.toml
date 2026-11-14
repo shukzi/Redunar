@@ -1,5 +1,5 @@
 # Redunar's current release target is x86_64 Linux. Keep the license graph
-# aligned with the artifacts we actually distribute instead of accepting
+# aligned with Redunar's distributed artifacts instead of accepting
 # dependencies that are reachable only on unsupported hosts.
 [graph]
 targets = ["x86_64-unknown-linux-gnu"]

@@ -250,7 +250,7 @@ pub fn open_replay_folder() -> Result<(), String> {
         .replay_save_directory()
         .map_err(|e| e.to_string())?;
     if !path.is_dir() {
-        return Err("No replay folder exists yet. It is created when a clip is saved.".into());
+        return Err("No replay folder exists yet. Redunar creates it when a clip is saved.".into());
     }
     let mut child = std::process::Command::new("xdg-open")
         .arg(path)

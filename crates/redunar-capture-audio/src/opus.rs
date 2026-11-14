@@ -68,7 +68,7 @@ pub struct OpusEncoder {
     strerror: StrError,
 }
 
-// The encoder is owned and used by one audio worker thread.
+// One audio worker thread owns and uses the encoder.
 unsafe impl Send for OpusEncoder {}
 
 impl OpusEncoder {

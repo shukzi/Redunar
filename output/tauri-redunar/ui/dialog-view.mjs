@@ -9,7 +9,7 @@ export function dialogHeader(title, kind = 'standard', {titleId = 'dialog-title'
 }
 
 export function restartConfirmationContent() {
- return '<p>Your settings have changed but are not saved.</p><p class="dialog-supporting">Choose whether to keep editing, restart without those changes, or save them before restarting.</p><div class="dialog-actions"><button class="button" type="button" data-close>Keep editing</button><button class="button" type="button" data-action="discard-and-restart">Restart without saving</button><button class="button primary" type="button" data-action="save-and-restart">Save changes &amp; restart</button></div>';
+ return '<p>You have unsaved settings.</p><p class="dialog-supporting">Choose whether to keep editing, restart without those changes, or save them before restarting.</p><div class="dialog-actions"><button class="button" type="button" data-close>Keep editing</button><button class="button" type="button" data-action="discard-and-restart">Restart without saving</button><button class="button primary" type="button" data-action="save-and-restart">Save changes &amp; restart</button></div>';
 }
 
 export function exportCompleteContent({fileName, destination, duration, size}) {

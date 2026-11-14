@@ -1670,13 +1670,47 @@ mod tests {
     }
 
     fn wait_for_segments(spool: &ReplaySegmentSpool, count: u32) {
-        for _ in 0..100 {
-            if spool.stats().active_segments >= count {
-                return;
-            }
-            thread::sleep(Duration::from_millis(2));
+        let pause = spool.pause_worker();
+        assert!(
+            spool.stats().active_segments >= count,
+            "Replay spool did not commit {count} segments"
+        );
+        drop(pause);
+    }
+
+    #[test]
+    fn segment_wait_accepts_progress_after_a_delayed_worker() {
+        let root = fixture();
+        let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds30))
+            .expect("open spool");
+        let pause = spool.pause_worker();
+        for second in [0, 2, 4] {
+            spool
+                .try_submit(packet(second * NANOSECONDS_PER_SECOND, true))
+                .expect("queue keyframe");
         }
-        panic!("Replay spool did not commit {count} segments");
+        let resume = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            drop(pause);
+        });
+        let result = thread::scope(|scope| scope.spawn(|| wait_for_segments(&spool, 2)).join());
+        resume.join().unwrap();
+        spool.shutdown();
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn segment_wait_rejects_a_partial_segment() {
+        let root = fixture();
+        let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds30))
+            .expect("open spool");
+        spool.try_submit(packet(0, true)).expect("queue keyframe");
+        let result = thread::scope(|scope| scope.spawn(|| wait_for_segments(&spool, 1)).join());
+        spool.shutdown();
+        assert_eq!(spool.stats().active_segments, 0);
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

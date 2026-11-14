@@ -4,7 +4,7 @@ The canonical application icon is `redunar-logo.svg`: the Comet R mark on a
 black rounded-square background. The mark has a deliberate leftward optical
 offset to balance the visual weight of the crescent.
 
-Raster exports are provided at 16, 32, 48, 64, 128, 256, 512, and 1024 pixels.
+Raster exports are available at 16, 32, 48, 64, 128, 256, 512, and 1024 pixels.
 The SVG remains the source of truth for future exports. Render each raster
 size directly from the SVG with antialiasing to retain its smooth curves.
 

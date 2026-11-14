@@ -1,13 +1,13 @@
 # Redunar interface contract
 
-This document defines the current Tauri interface. Source lives in
-`output/tauri-redunar/ui/`; native behavior is documented in
+This document defines the current Tauri interface. Interface source lives in
+`output/tauri-redunar/ui/`. Native behavior is documented in
 `ARCHITECTURE.md`, `REPLAY.md`, and `HARDWARE-SUPPORT.md`.
 
 ## Shell and visual language
 
 The main navigation contains Overview, Library, Global settings, Instant Replay,
-History, and Settings. The expanded sidebar centers the Redunar wordmark; the
+History, and Settings. The expanded sidebar centers the Redunar wordmark. The
 collapsed sidebar uses the Comet R mark. Every navigation control has an
 accessible label and an explicit collapse or expand action. The sidebar control
 keeps its panel frame and divider fixed; only its chevron moves and reverses
@@ -79,8 +79,9 @@ History and microphone refresh actions show progress inside the button, followed
 by a short check or failure indication. Duplicate actions do not start another read.
 History refresh retains the selected session and list position. Microphone input
 and Refresh inputs are visibly disabled while the microphone is off or a game
-owns the setting. Input selection adds no changing description; the controls
-retain an accessible explanation of their requirements. Errors and loading
+owns the setting. Selecting an input does not change its description. The
+controls retain an accessible explanation of their requirements. Errors and
+loading
 remain separate.
 
 Setting descriptions and action names stay stable during ordinary edits.
@@ -92,7 +93,7 @@ Reduced motion disables these effects. Selection feedback and dismissal remain
 immediate. Reversing an action cancels stale completions and keeps the current
 painted state.
 
-Scrolling is owned by the WebKit engine. Do not intercept wheel events or add a
+WebKit owns scrolling. Do not intercept wheel events or add a
 JavaScript scroll animation. Keep nested scroll areas, high-resolution input,
 editing controls, focus, and scroll position native. Scrollbars use an inset
 graphite thumb and a reserved gutter so controls remain visible.
@@ -107,8 +108,9 @@ action footer. The standard dialog keeps its 540px width and 28px inset; the
 compact file form uses a 460px width and 24px inset. Each footer uses its shell's
 padding so short dialogs have no scrollbars. Long content wraps and scrolls
 vertically within the bounded dialog. Component styles defer to this shared
-shell and footer. The footer keeps secondary dismissal actions quiet while the primary action uses
-Redunar red. Discovery and settings forms reuse this shell. Clip copies use a 440px version
+shell and footer. The footer gives secondary dismissal actions less emphasis
+and uses Redunar red for the primary action. Discovery and settings forms
+reuse this shell. Clip copies use a 440px version
 with the same heading and action footer, a shared filename/format row, and a
 size field beside its label. A range switch appears only when both the entire
 clip and a selection are available. Compression retains its original bounds,
@@ -287,7 +289,7 @@ graphics API, CPU/GPU model and clock, RAM, and VRAM. Preset changes preserve th
 selection. Frame metrics and Hardware metrics are separate full-width sections
 with two columns. GPU and CPU controls align across the hardware columns.
 Load controls are labeled GPU load and CPU load. Only Graphics API has a short
-explanation beneath its metric label.
+explanation below its label.
 The overlay displays frame metrics and API first, then GPU metrics with VRAM,
 then CPU metrics with RAM. Hardware groups show model, load, temperature, power,
 and clock in that order.

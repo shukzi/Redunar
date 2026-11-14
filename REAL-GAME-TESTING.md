@@ -9,8 +9,8 @@ hardware, browser, and fixture tests.
 Record the build or package identifier, source commit, distribution, desktop
 session, GPU and driver, game, and test date. If using an installed package,
 compare the installed executable, sidecars, helpers, resources, and permissions
-with that exact package. A build or package alone does not prove installation
-or a fresh process.
+with that exact package. A build or package alone does not establish that it
+is installed or that a fresh process loaded it.
 
 Use one Redunar instance and one session coordinator. Do not run a game test against
 an already-owned live coordinator. Keep recordings and existing user data
@@ -20,8 +20,8 @@ outside disposable test state.
 
 1. Launch Redunar and confirm the game is detected with the intended profile.
 2. Launch the game through the supported native Steam path.
-3. Confirm the overlay and measurements show actual data or an honest
-   unavailable state.
+3. Confirm that the overlay and measurements show actual data or report
+   that the data is unavailable.
 4. Start Instant Replay, wait for a buffer, and save a short clip.
 5. Check the saved file, audio result, playback, trimming, export, and history.
 6. Exercise the configured shortcuts, window visibility, and any affected
