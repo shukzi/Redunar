@@ -9,6 +9,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -22,7 +23,7 @@ gi.require_version("WebKit2", "4.1")
 from gi.repository import GLib, Gtk, WebKit2
 
 NATIVE = Path(__file__).resolve().parents[1]
-ARTIFACTS = NATIVE.parents[1] / ".redunar-build/reports/replay-ui"
+ARTIFACTS = Path(os.environ.get("REDUNAR_UI_ARTIFACTS", NATIVE.parents[1] / ".redunar-build/reports/replay-ui"))
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 

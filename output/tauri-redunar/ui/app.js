@@ -1,3 +1,4 @@
+import {replayPlayer} from './replay-player.mjs';
 import {metricNames,presetMetrics,effectiveMetrics,overlayMetrics,metricWidth,telemetryWidth} from './overlay-metrics.mjs';
 import { trashBinMarkup, trashDeletionMarkup, trashDeletionResultMarkup } from './trash-bin.mjs';
 import {icon, mountShellIcons} from './icons.mjs';
@@ -32,10 +33,7 @@ import { clipVisibilityTracker } from './clip-visibility.mjs';
 import { replayStatusCopy } from './replay-menu-view.mjs';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { latestReplayRequest } from './replay-requests.mjs';
-import { renderReplayFilmstrip } from './replay-filmstrip.mjs';
-import { watchReplayLoading } from './replay-loading.mjs';
-import { mapGames, mapClips, mapSessions, mapDefaults, profilePayload, overridePayload, measurement, visibleSession, profileDraftChanged, shortcutDraftChanged, overrideDraftChanged } from './native-data.mjs';
+import { clamp, mapGames, mapClips, mapSessions, mapDefaults, profilePayload, overridePayload, measurement, visibleSession, profileDraftChanged, shortcutDraftChanged, overrideDraftChanged } from './native-data.mjs';
 import { enhancePrecisionSelects, focusPrecisionSelect, closePrecisionSelect } from './precision-selects.js';
 import { updatePrecisionSliders, updatePrecisionSlider, sliderValueMarkup } from './precision-sliders.js';
 import { loadGameArtwork } from './game-artwork.js';
@@ -98,13 +96,8 @@ let lastSlowRuntimeRefresh = 0;
 let diagnosticsGeneration = 0, diagnosticsFailed = false;
 const paintedDiagnostics = new WeakMap(), diagnosticsTransitions = new WeakSet();
 let shortcutStatus = {state:'Inactive',message:null,last_action:null};
-let playerDuration = 0, playerPosition = 0, pendingSeek = null, trimStart = 0, trimEnd = 0;
-let stopFilmstrip = null;
-let mediaEvents = null;
-let timelineDrag = null, suppressTimelineClick = false, playbackFrame = null;
-let pendingSeekTask = Promise.resolve(), cancelPendingSeek = null, seekGeneration = 0, mediaActionGeneration = 0, playRequested = false, suppressPlayerToggleClickUntil = 0;
 let exportCancellation = null, exportGeneration = 0;
-let exporting = false, exportPollTimer = null, thumbnailLoadTimer = null, videoReady = false;
+let exporting = false, exportPollTimer = null, thumbnailLoadTimer = null;
 const LIVE_TIMELINE_LIMIT = 240;
 let liveTimeline = {game:'',revision:null,values:[],times:[]};
 let replaySavePending=false,replaySavedUntil=0,replaySavedTimer=null;
@@ -120,10 +113,6 @@ const clipPreviews=clipPreviewLoader({call,thumbnailDataUri,updateMetadata:updat
 });
 const visibleClips=clipVisibilityTracker({changed:scheduleClipThumbnails});
 const installation = gameInstallation(call, updateObservedElements);
-const playbackRequests = latestReplayRequest(
- fileName=>call('clip_playback_path',{fileName}),
- ()=>call('cancel_clip_playback').catch(()=>{}),
-);
 const message = error => error instanceof Error ? error.message : String(error);
 const diagnosticDisplayStatus=()=>{const status=diagnosticStatus(preferences.diagnosticLogStatus,preferences.diagnosticLog);return status==='Logging is off.'?'':status;};
 const globalProfileChanged = () => profileDraftChanged(draft,defaults);
@@ -156,6 +145,11 @@ const route = () => location.hash.slice(1) || 'overview';
 const visiblePages = () => pages;
 const time = seconds => seconds == null || !Number.isFinite(seconds) ? '—' : `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(Math.floor(seconds%60)).padStart(2,'0')}`;
 const preciseTime = seconds => seconds == null || !Number.isFinite(seconds) ? '—' : `${String(Math.floor(seconds/60)).padStart(2,'0')}:${(seconds%60).toFixed(1).padStart(4,'0')}`;
+const player=replayPlayer({query:$,selected:clip,call,native,applyVolume:video=>listeningVolume.apply(video),
+ updateMetadata:updateClipMetadata,updateSlider:updatePrecisionSlider,setControlHint,icon,spinner:clipExportSpinner,
+ time,preciseTime,exporting:()=>exporting,notify});
+const {reset:resetPlayback,load:loadVideo,update:updatePlayerUi,seek:seekPlayer}=player;
+window.addEventListener('pagehide',resetPlayback);
 const pill = (text, cls='') => `<span class="pill ${cls}">${text}</span>`;
 const button = (text, action, primary=false, extra='') => `<button class="button ${primary?'primary':''}" data-action="${action}" ${extra}>${text}</button>`;
 function heading(_title, action='') {
@@ -855,19 +849,6 @@ function discoveryModal(candidates) {
  const hasImportable=candidates.some(c=>c.importable&&!alreadyImported(c));
  modal('Scan installed games',`<p>Choose the games to add to your library. Redunar finds installed games in Steam and your app menu. The scan changes nothing until you select Add selected games.</p><form id="discovery-form"><h3>Games found</h3><div class="discovery-list">${rows||'<p class="empty">No installed games were found.</p>'}</div><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit" ${hasImportable?'':'disabled'}>Add selected games</button></div></form>`);
 }
-function stopPlayback(){ const video=$('#clip-video');if(video)video.pause(); }
-function resetPlayback(){
- stopFilmstrip?.();stopFilmstrip=null;
- playbackRequests.invalidate();
- mediaEvents?.abort();mediaEvents=null;
- mediaActionGeneration++;seekGeneration++;
- if(cancelPendingSeek)cancelPendingSeek();
- cancelPendingSeek=null;pendingSeek=null;pendingSeekTask=Promise.resolve();
- stopPlayback();stopPlaybackTicker();
- const video=$('#clip-video');
- if(video){video.removeAttribute('src');video.load();}
- videoReady=false;playRequested=false;playerDuration=0;playerPosition=0;trimStart=0;trimEnd=0;timelineDrag=null;
-}
 function selectClip(id){
  if(id===selectedClip||!clips.some(item=>item.id===id))return;
  selectedClip=id;
@@ -1012,157 +993,6 @@ async function readSection(section, command, accept) {
   if(section==='history')sessions=[];
   return false;
  }
-}
-function loadVideo() {
- const selected=clip(), video=$('#clip-video');
- if(!selected||!video)return;
- listeningVolume.apply(video);
- video.dataset.clipId=selected.id;
- videoReady=false;playRequested=false;updatePlayerUi();
- stopPlaybackTicker();
- playbackRequests.request(selected.file_name,url=>{
-  if($('#clip-video')!==video)return;
-  mediaEvents=new AbortController();
-  const options={signal:mediaEvents.signal};
-  video.addEventListener('loadeddata',()=>{videoReady=true;$('#media-state-overlay').hidden=true;const item=clip();if(item){item.duration=Number.isFinite(video.duration)?video.duration:null;updateClipMetadata(item);}const specs=$('#clip-video-specs');if(specs)specs.textContent=video.videoWidth&&video.videoHeight?`${video.videoWidth} × ${video.videoHeight}${clip()?.metadata?.fps?' · '+measurement(clip().metadata.fps,1)+' avg recorded FPS':''}`:'';playerDuration=Number.isFinite(video.duration)?video.duration:0;playerPosition=0;pendingSeek=null;pendingSeekTask=Promise.resolve();cancelPendingSeek=null;mediaActionGeneration++;playRequested=false;trimStart=0;trimEnd=playerDuration;updatePlayerUi();stopFilmstrip=renderReplayFilmstrip(video,$('#clip-filmstrip'),$('#clip-preview-status'));},{...options,once:true});
-  video.addEventListener('timeupdate',()=>{if(handleTrimBoundary(video))return;if(pendingSeek===null&&Number.isFinite(video.currentTime))playerPosition=clamp(video.currentTime,trimStart,trimEnd||playerDuration);updatePlayerUi();},options);
-  video.addEventListener('seeked',()=>{if(pendingSeek===null){playerPosition=video.currentTime;updatePlayerUi();}},options);
-  video.addEventListener('play',()=>{playRequested=false;startPlaybackTicker();updatePlayerUi();},options);
-  video.addEventListener('pause',()=>{playRequested=false;stopPlaybackTicker();updatePlayerUi();},options);
-  video.addEventListener('ended',()=>{stopPlaybackTicker();if(trimEnd>0){playerPosition=trimEnd;updatePlayerUi();seekPlayer(trimStart);}else updatePlayerUi();},options);
-  video.addEventListener('error',()=>failVideoLoad(video,'This video could not be played. Retry or open the selected clip externally.'),{...options,once:true});
-  watchReplayLoading(video,mediaEvents.signal,()=>failVideoLoad(video,'The video did not finish loading. Retry or open the selected clip externally.'));
- $('#media-state-title').textContent='Loading local video…';
-  video.src=url;
- },error=>failVideoLoad(video,message(error)));
-}
-function failVideoLoad(video,note){
- if($('#clip-video')!==video)return;
- resetPlayback();
- $('#media-state-overlay').hidden=false;$('#media-state-title').textContent='Clip could not load';$('#media-state-detail').textContent=note;
- $('#retry-clip').hidden=false;
- const status=$('#clip-preview-status');status.hidden=true;status.textContent='Frame previews will load when playback is ready.';
- updatePlayerUi();
-}
-const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
-const timelinePercent=value=>playerDuration>0?clamp(value/playerDuration*100,0,100):0;
-function stopPlaybackTicker(){if(playbackFrame!==null){cancelAnimationFrame(playbackFrame);playbackFrame=null;}}
-function handleTrimBoundary(video){
- if(video.paused||trimEnd<=0||!Number.isFinite(video.currentTime)||video.currentTime<trimEnd-0.03)return false;
- video.pause();playerPosition=trimEnd;updatePlayerUi();seekPlayer(trimStart);return true;
-}
-function playbackTick(){
- const video=$('#clip-video');
- if(!video||video.paused||video.ended){playbackFrame=null;return;}
- if(handleTrimBoundary(video)){playbackFrame=null;return;}
- if(pendingSeek===null&&Number.isFinite(video.currentTime)){playerPosition=clamp(video.currentTime,trimStart,trimEnd||playerDuration);updatePlayerUi();}
- playbackFrame=requestAnimationFrame(playbackTick);
-}
-function startPlaybackTicker(){stopPlaybackTicker();playbackFrame=requestAnimationFrame(playbackTick);}
-function seekPlayer(value){
- const video=$('#clip-video');
- if(!video||!playerDuration)return Promise.resolve();
- const target=clamp(Number(value)||0,0,playerDuration);
- const previousCancel=cancelPendingSeek;
- const generation=++seekGeneration;
- if(previousCancel)previousCancel();
- playerPosition=target;pendingSeek=target;
- pendingSeekTask=new Promise(resolve=>{
-  let settled=false,timer=null,frameCallback=null;
-  const cleanup=()=>{video.removeEventListener('seeked',onSeeked);video.removeEventListener('error',onError);if(timer!==null)clearTimeout(timer);if(frameCallback!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(frameCallback);};
-  const finish=()=>{if(settled)return;settled=true;cleanup();if(generation===seekGeneration){cancelPendingSeek=null;playerPosition=target;pendingSeek=null;updatePlayerUi();}resolve();};
-  const onSeeked=()=>{if(Math.abs(video.currentTime-target)<=.25)finish();};
-  const onError=finish;
-  const watchFrame=()=>{if(!video.requestVideoFrameCallback)return;frameCallback=video.requestVideoFrameCallback((_,metadata)=>{frameCallback=null;if(Math.abs(video.currentTime-target)<=.25&&Math.abs(metadata.mediaTime-target)<=3)finish();else if(!settled)watchFrame();});};
-  cancelPendingSeek=finish;
-  video.addEventListener('seeked',onSeeked);video.addEventListener('error',onError,{once:true});watchFrame();timer=setTimeout(finish,1500);
- });
- try{video.currentTime=target;}catch(error){if(cancelPendingSeek)cancelPendingSeek();return Promise.reject(error);}
- updatePlayerUi();return pendingSeekTask;
-}
-async function playPlayer(video,generation){
- if(!videoReady||video.readyState<1)return;
- const wanted=playerPosition<trimStart||playerPosition>=trimEnd-.03?trimStart:playerPosition;
- const settlingSeek=pendingSeek!==null;
- // Keep the first play() call inside the user gesture. Waiting for an
- // asynchronous seek first makes WebKitGTK treat the request as autoplay.
- const needsSeek=Math.abs(video.currentTime-wanted)>.25;
- if(needsSeek){try{video.currentTime=wanted;}catch(error){throw error;}}
- for(let attempt=0;attempt<2;attempt++){
-  try{await video.play();break;}
-  catch(error){if(error?.name!=='AbortError'||attempt===1||generation!==mediaActionGeneration)throw error;await new Promise(resolve=>setTimeout(resolve,80));}
- }
- if(generation!==mediaActionGeneration)return;
- if(settlingSeek)await pendingSeekTask;
- if(generation!==mediaActionGeneration)return;
- // WebKitGTK can resolve `seeked` before its paused decoder is ready to resume.
- // Reconcile a seek that was already in flight without losing the original gesture.
- if(Math.abs(video.currentTime-wanted)>.25)await seekPlayer(wanted);
- if(generation!==mediaActionGeneration)return;
-}
-function setTimelineValue(kind,value,preview=true){if(!videoReady||!playerDuration||exporting)return;const minimumGap=Math.min(.1,playerDuration);if(kind==='start'){trimStart=clamp(value,0,Math.max(0,trimEnd-minimumGap));if(playerPosition<trimStart)playerPosition=trimStart;}else if(kind==='end'){trimEnd=clamp(value,Math.min(playerDuration,trimStart+minimumGap),playerDuration);if(playerPosition>trimEnd)playerPosition=trimEnd;}else playerPosition=clamp(value,trimStart,trimEnd);updatePlayerUi();if(preview)seekPlayer(kind==='start'?trimStart:kind==='end'?Math.max(trimStart,trimEnd-.01):playerPosition);}
-function togglePlayback(){
- const video=$('#clip-video');
- if(!video||!videoReady||exporting)return;
- if(!video.paused||playRequested){
-  playRequested=false;mediaActionGeneration++;video.pause();updatePlayerUi();return;
- }
- playRequested=true;
- const generation=++mediaActionGeneration;
- updatePlayerUi();
- playPlayer(video,generation).catch(error=>{
-  if(generation!==mediaActionGeneration)return;
-  playRequested=false;updatePlayerUi();
-  notify(error?.name==='AbortError'?'Playback did not resume. Select that point again.':message(error));
- });
-}
-function updatePlayerUi(){
- const seek=$('#player-seek');if(seek){seek.min=String(trimStart);seek.max=String(trimEnd);seek.value=String(pendingSeek??playerPosition);seek.disabled=!videoReady||exporting;updatePrecisionSlider(seek);}
- const video=$('#clip-video');if(!video)return;
- const text=(selector,value)=>{const element=$(selector);if(element&&element.textContent!==value)element.textContent=value;};
- // Playback ticks also refresh static trim bounds; retain unchanged attributes.
- const attribute=(element,name,value)=>{if(element.getAttribute(name)!==value)element.setAttribute(name,value);};
- text('#clip-time',`${time(playerPosition)} / ${time(playerDuration||video.duration||0)}`);
- const center=$('#center-play');if(center){const hidden=!videoReady||!video.paused||playRequested;if(center.hidden!==hidden)center.hidden=hidden;center.disabled=exporting;}
- const reset=$('[data-action="reset-trim"]');if(reset)reset.disabled=!videoReady||exporting||(trimStart===0&&trimEnd===playerDuration);
- const toggle=$('#clip-play-toggle');
- if(toggle){
-  const paused=video.paused&&!playRequested,label=paused?'Play clip':'Pause clip';
-  if(toggle.getAttribute('aria-label')!==label){toggle.innerHTML=icon(paused?'play':'pause');toggle.setAttribute('aria-label',label);setControlHint(toggle,label);}
-  toggle.disabled=!videoReady||exporting;
- }
- const exportButton=$('#export-clip-button');
- if(exportButton){
-  const adjusted=videoReady&&playerDuration>0&&(trimStart>0||trimEnd<playerDuration);
-  const selectable=adjusted&&trimEnd-trimStart>=.1;
-  exportButton.hidden=!adjusted;
-  exportButton.disabled=!native||!selectable||exporting;
-  const label=exporting?'Exporting…':'Export';
-  if(exportButton.textContent.trim()!==label)exportButton.innerHTML=`${exporting?clipExportSpinner():icon('download')} ${label}`;
- }
- text('#trim-start-value',videoReady?preciseTime(trimStart):'—');
- text('#trim-end-value',videoReady?preciseTime(trimEnd):'—');
- text('#clip-selected-duration',videoReady?preciseTime(Math.max(0,trimEnd-trimStart)):'—');
- const ruler=$('#clip-time-ruler');
- if(ruler&&ruler.dataset.duration!==String(playerDuration)){
-  ruler.dataset.duration=String(playerDuration);
-  ruler.querySelectorAll('span').forEach((label,index)=>{label.textContent=playerDuration>0?(playerDuration<6?preciseTime(playerDuration*index/6):time(playerDuration*index/6)):'—';});
- }
- const start=$('#trim-start-bar'),end=$('#trim-end-bar'),playhead=$('#clip-playhead'),selection=$('#trim-selection'),timeline=$('#clip-timeline');
- for(const [element,value,min,max] of [[start,trimStart,0,Math.max(0,trimEnd-.1)],[end,trimEnd,Math.min(playerDuration,trimStart+.1),playerDuration]]){
-  if(!element)continue;
-  element.disabled=!videoReady||exporting;
-  element.style.left=`${timelinePercent(value)}%`;
-  attribute(element,'aria-valuemin',String(min));attribute(element,'aria-valuemax',String(max));
-  attribute(element,'aria-valuenow',String(value.toFixed(2)));attribute(element,'aria-valuetext',preciseTime(value));
- }
- if(playhead)playhead.style.left=`${timelinePercent(playerPosition)}%`;
- if(timeline){
-  attribute(timeline,'aria-disabled',String(!videoReady||exporting));
-  attribute(timeline,'aria-valuemax',String(playerDuration));attribute(timeline,'aria-valuenow',String(playerPosition.toFixed(2)));attribute(timeline,'aria-valuetext',preciseTime(playerPosition));
-  timeline.style.setProperty('--trim-in',`${timelinePercent(trimStart)}%`);timeline.style.setProperty('--trim-out',`${timelinePercent(trimEnd)}%`);
- }
- if(selection){selection.style.left=`${timelinePercent(trimStart)}%`;selection.style.width=`${Math.max(0,timelinePercent(trimEnd)-timelinePercent(trimStart))}%`;}
 }
 
 function controlState(element,name,value){const next=Boolean(value);if(element[name]!==next)element[name]=next;}
@@ -1528,13 +1358,7 @@ const reloaders={
  'reload-preferences':()=>readSection('preferences','app_preferences',data=>{preferences.tray=data.close_to_tray;preferences.automaticUpdates=data.automatic_updates!==false;preferences.diagnosticLog=data.diagnostic_log===true;preferences.diagnosticLogPath=data.diagnostic_log_path||null;preferences.diagnosticLogStatus=data.diagnostic_log_status;loaded.preferences=true;}),
  'reload-replay-preferences':()=>readSection('replayPreferences','replay_preferences',data=>{replayPreferences=data;loaded.replayPreferences=true;}),
 };
-document.addEventListener('pointerup',event=>{
- const toggle=event.target.closest?.('[data-player="toggle"]');
- if(!toggle||toggle.disabled)return;
- event.preventDefault();
- suppressPlayerToggleClickUntil=performance.now()+500;
- togglePlayback();
-});
+document.addEventListener('pointerup',event=>player.pointerToggle(event));
 document.addEventListener('pointerdown',event=>{
  const resizeHandle=event.target.closest?.('[data-resize-direction]');
  if(!resizeHandle||!appWindow||event.button!==0)return;
@@ -1550,8 +1374,7 @@ document.addEventListener('click',event=>{
   request.catch(error=>notify(`Window action failed: ${message(error)}`));
   return;
  }
- const timeline=event.target.closest('#clip-timeline');
- if(timeline){if(suppressTimelineClick){suppressTimelineClick=false;return;}if(!event.target.closest('.timeline-handle')){const value=pointerTimelineValue(event);if(value!==null)setTimelineValue('seek',value,true);return;}}
+ if(player.timelineClick(event))return;
  const more=event.target.closest('.game-more');document.querySelectorAll('.game-more[open]').forEach(el=>{if(el!==more)setDisclosureOpen(el,false);});
  const target=event.target.closest('button,a');if(!target)return;
  if(more&&target.matches('button'))setDisclosureOpen(more,false,{immediate:true});
@@ -1622,8 +1445,8 @@ document.addEventListener('click',event=>{
  if(target.dataset.palette){if(busy||!loaded.global)return;draft.palette=target.dataset.palette;updateHud();return;}
  if(target.dataset.globalTab){globalTab=target.dataset.globalTab;if(route()==='global')render();return;}
  if(target.dataset.libraryTab){showLibraryTab(target.dataset.libraryTab);return;}
- if(target.dataset.action==='reset-trim'){if(videoReady&&!exporting){trimStart=0;trimEnd=playerDuration;seekPlayer(0);updatePlayerUi();}return;}
- if(target.dataset.player){const video=$('#clip-video');if(video){if(target.dataset.player==='toggle'){if(performance.now()<suppressPlayerToggleClickUntil){suppressPlayerToggleClickUntil=0;return;}togglePlayback();}if(target.dataset.player==='back')seekPlayer(clamp((pendingSeek??playerPosition)-5,trimStart,trimEnd));if(target.dataset.player==='forward'){const next=clamp((pendingSeek??playerPosition)+5,trimStart,trimEnd);if(next>=trimEnd-.01&& !video.paused)video.pause();seekPlayer(next);}updatePlayerUi();}return;}
+ if(target.dataset.action==='reset-trim'){player.resetTrim();return;}
+ if(target.dataset.player){player.transport(target.dataset.player);return;}
  const action=target.dataset.action;
  if(action==='clear-history-filters'){historyFilters={search:'',game:'all',date:'all'};render();return;}
  if(action==='undo-clip-trash'){restoreTrashedClips(lastTrashed);return;}
@@ -1678,10 +1501,11 @@ document.addEventListener('click',event=>{
  }
  if(action==='export'||action==='compress-selected-clip'){
   const selected=clip(),compression=action==='compress-selected-clip';if(!selected)return;
+  const {ready:videoReady,duration:playerDuration,start:trimStart,end:trimEnd}=player.range();
   if(!compression&&(!videoReady||!Number.isFinite(playerDuration)||playerDuration<=0||!(trimStart>0||trimEnd<playerDuration))){notify('Trim the clip before exporting.');return;}
   const start=compression?0:trimStart,end=compression?(selected.metadata?.duration_seconds||selected.duration||playerDuration):trimEnd;
   if(!Number.isFinite(end)||end-start<.1){notify('Wait for the clip duration to load.');return;}
-  mediaActionGeneration++;playRequested=false;$('#clip-video')?.pause();updatePlayerUi();
+  player.pause();
   const options={outputFormat:selected.file_name.toLowerCase().endsWith('.mkv')?'mkv':'mp4',maxSizeMb:null,compression};
   const sourceDuration=videoReady?playerDuration:(selected.metadata?.duration_seconds||selected.duration);
   modal(compression?'Compress clip':'Export clip',clipExportForm({fileName:selected.file_name,thumbnail:selected.thumbnail,sourceBytes:selected.bytes,sourceDuration,start,end,selectionStart:trimStart,selectionEnd:trimEnd,outputName:clipFilenameStem(selected.file_name)+'-copy',options}));
@@ -1738,12 +1562,11 @@ document.addEventListener('input',event=>{
  if(t.dataset.shortcut!==undefined){draftShortcuts[Number(t.dataset.shortcut)]=t.value;updateDirtyActionButtons();}
 
 });
-function pointerTimelineValue(event){const timeline=$('#clip-timeline');if(!timeline||!playerDuration)return null;const rect=timeline.getBoundingClientRect();return clamp((event.clientX-rect.left)/Math.max(1,rect.width)*playerDuration,0,playerDuration);}
-document.addEventListener('pointerdown',event=>{const timeline=event.target.closest('#clip-timeline');if(!timeline||!videoReady||exporting)return;event.preventDefault();suppressTimelineClick=true;timelineDrag=event.target.closest('[data-timeline]')?.dataset.timeline||'seek';timeline.setPointerCapture(event.pointerId);const value=pointerTimelineValue(event);if(value!==null)setTimelineValue(timelineDrag,value,false);});
-document.addEventListener('pointermove',event=>{if(!timelineDrag)return;const value=pointerTimelineValue(event);if(value!==null)setTimelineValue(timelineDrag,value,false);});
-document.addEventListener('pointerup',event=>{if(!timelineDrag)return;const kind=timelineDrag,value=pointerTimelineValue(event);timelineDrag=null;if(value!==null)setTimelineValue(kind,value,true);});
-document.addEventListener('pointercancel',()=>{timelineDrag=null;suppressTimelineClick=false;});
-document.addEventListener('keydown',event=>{const shortcut=event.target.closest('[data-shortcut]');if(shortcut){event.preventDefault();if(event.key==='Escape'){shortcut.value='';draftShortcuts[Number(shortcut.dataset.shortcut)]='';updateDirtyActionButtons();return;}if(['Control','Alt','Shift','Meta'].includes(event.key))return;const keyMap={' ':'Space','ArrowUp':'Up','ArrowDown':'Down','ArrowLeft':'Left','ArrowRight':'Right','Escape':'Esc','Tab':'Tab','Enter':'Enter','Backspace':'Backspace','Delete':'Delete'};const key=keyMap[event.key]||(/^F\d{1,2}$/i.test(event.key)?event.key.toUpperCase():event.key.length===1?event.key.toUpperCase():event.key);const parts=[];if(event.ctrlKey)parts.push('Ctrl');if(event.altKey)parts.push('Alt');if(event.shiftKey)parts.push('Shift');if(event.metaKey)parts.push('Super');parts.push(key);const value=parts.join('+');shortcut.value=value;draftShortcuts[Number(shortcut.dataset.shortcut)]=value;updateDirtyActionButtons();return;}const target=event.target.closest('[data-timeline]');if(!target||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const kind=target.dataset.timeline,current=kind==='start'?trimStart:kind==='end'?trimEnd:playerPosition;let value=current+(event.key==='ArrowRight'?1:-1)*(event.shiftKey?5:.25);if(event.key==='Home')value=kind==='seek'?trimStart:kind==='end'?trimStart+.1:0;if(event.key==='End')value=kind==='seek'?trimEnd:kind==='start'?trimEnd-.1:playerDuration;setTimelineValue(kind,value,true);});
+document.addEventListener('pointerdown',event=>player.pointerDown(event));
+document.addEventListener('pointermove',event=>player.pointerMove(event));
+document.addEventListener('pointerup',event=>player.pointerUp(event));
+document.addEventListener('pointercancel',()=>player.pointerCancel());
+document.addEventListener('keydown',event=>{const shortcut=event.target.closest('[data-shortcut]');if(shortcut){event.preventDefault();if(event.key==='Escape'){shortcut.value='';draftShortcuts[Number(shortcut.dataset.shortcut)]='';updateDirtyActionButtons();return;}if(['Control','Alt','Shift','Meta'].includes(event.key))return;const keyMap={' ':'Space','ArrowUp':'Up','ArrowDown':'Down','ArrowLeft':'Left','ArrowRight':'Right','Escape':'Esc','Tab':'Tab','Enter':'Enter','Backspace':'Backspace','Delete':'Delete'};const key=keyMap[event.key]||(/^F\d{1,2}$/i.test(event.key)?event.key.toUpperCase():event.key.length===1?event.key.toUpperCase():event.key);const parts=[];if(event.ctrlKey)parts.push('Ctrl');if(event.altKey)parts.push('Alt');if(event.shiftKey)parts.push('Shift');if(event.metaKey)parts.push('Super');parts.push(key);const value=parts.join('+');shortcut.value=value;draftShortcuts[Number(shortcut.dataset.shortcut)]=value;updateDirtyActionButtons();return;}player.keyDown(event);});
 document.addEventListener('change',event=>{
  const t=event.target;
  if(t.dataset.historyFilter){historyFilters[t.dataset.historyFilter]=t.value;if(refreshHistoryRail())focusPrecisionSelect($(`[data-history-filter="${t.dataset.historyFilter}"]`));return;}

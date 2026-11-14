@@ -15,6 +15,14 @@ trap 'result=$?; printf "result=%s\nreport=%s\n" "$result" "$report"' EXIT
 printf 'date=%s\ncommit=%s\nmode=%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse HEAD)" "$mode"
 git status --short
 python3 tools/source-snapshot.py --manifest-only "$workspace_root" "$report.source.json"
+# Fail before native compilation when the checkout is not bootstrapped.
+for command in rustc cargo node npm python3; do
+  command -v "$command" >/dev/null || { printf 'Missing validation dependency: %s\n' "$command" >&2; exit 1; }
+done
+if [[ ! -x output/tauri-redunar/node_modules/.bin/vite ]]; then
+  printf '%s\n' 'Frontend dependencies are missing. Bootstrap the locked npm dependencies before validation.' >&2
+  exit 1
+fi
 rustc --version
 node --version
 git diff --check

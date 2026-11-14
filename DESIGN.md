@@ -150,7 +150,7 @@ when either a manual refresh or a background poll returns a new snapshot.
   and a brighter border. Hover and press change the fill over 150 ms, without
   glow, shadow, or glyph movement. Destructive actions remain explicit.
 - Toggles use a graphite track and solid light handle. Enabled tracks use muted
-  red; handles slide over 180ms with clear disabled, hover, press, and keyboard
+  red; handles slide over 260ms with clear disabled, hover, press, and keyboard
   focus states. Auto-saved labels share the Overlay & metrics 4px corner radius.
 - Sliders keep readable values, units, bounds, keyboard movement, and disabled
   states. Settings sliders share a wide control column and fill the row on

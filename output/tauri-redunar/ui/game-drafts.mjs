@@ -1,4 +1,4 @@
-const keys = ['overlay', 'captureMetrics'];
+import {overrideDraftKeys as keys} from './native-data.mjs';
 const value = (overrides, key) => Object.hasOwn(overrides || {}, key) ? overrides[key] : null;
 
 // Catalog writes return every game. Merge saved data without treating an

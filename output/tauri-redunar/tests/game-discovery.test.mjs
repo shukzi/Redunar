@@ -5,7 +5,8 @@ import {runInNewContext} from 'node:vm';
 
 // Exercise the production dialog without starting the native app or scanning disk.
 const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
-const dialogSource=source.slice(source.indexOf('function discoveryModal('),source.indexOf('function stopPlayback('));
+const dialogSource=source.match(/function discoveryModal\([\s\S]*?\n\}/)?.[0];
+assert.ok(dialogSource,'Production discovery dialog is available');
 function renderDiscovery(games,candidates){
  let html;
  runInNewContext(`${dialogSource}\ndiscoveryModal(candidates);`,{

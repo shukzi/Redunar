@@ -48,6 +48,12 @@ bounded activation messages, not commands or arbitrary paths.
 | Tauri host | Typed commands, windows, tray, update handoff, supervision, and cleanup |
 | Webview | Presentation, drafts, validation messages, and user requests |
 
+The service keeps preference and catalog facade methods in private `service/`
+modules. `RedunarService` retains its public methods and runtime ownership.
+The UI's `replay-player.mjs` owns playback preparation requests, media listeners,
+seek generations, trim gestures and disposal. The application passes its selected
+filename and range to the export flow; native code still authorizes media paths.
+
 The shared service coordinates capture and Replay state. Producers use
 versioned private protocols, bounded queues, device identity, and release
 acknowledgements. Device loss, process replacement, stale results, and cleanup
@@ -64,23 +70,23 @@ helper. A failed child must be reaped before a replacement can start.
 
 ## Source map
 
-Paths are relative to `output/tauri-redunar/`:
+Paths are relative to the repository root:
 
 | Flow | Main files |
 | --- | --- |
-| Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs`, `activation.rs` |
-| Display selection | `src-tauri/src/display_backend.rs` |
-| Startup, launch, and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `session_lifecycle.rs`, `background_start.rs` |
-| Catalog and profiles | `src-tauri/src/catalog.rs`, `profiles.rs`, `ui/game-drafts.mjs` |
-| Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`, matching `ui/game-*.js` |
-| Playback and export | `src-tauri/src/playback.rs`, `clip_export.rs`, `media.rs`, `ui/clip-export.mjs` |
-| Replay and shortcuts | `src-tauri/src/hotkeys.rs`, `crates/redunar-hotkeys`, `crates/redunar-capture-vulkan/src/overlay.rs` |
-| Tray and lifecycle | `src-tauri/src/tray.rs`, `tray_native/`, `main.rs` |
-| Updates | `src-tauri/src/updates.rs`, `runtime.rs`, `ui/app.js` |
-| Preferences compatibility | `crates/redunar-daemon/src/app_preferences.rs`, `src-tauri/src/runtime.rs` |
+| Commands and app lifetime | `output/tauri-redunar/src-tauri/src/main.rs`, `output/tauri-redunar/src-tauri/src/backend.rs`, `output/tauri-redunar/src-tauri/src/runtime.rs`, `output/tauri-redunar/src-tauri/src/activation.rs` |
+| Display selection | `output/tauri-redunar/src-tauri/src/display_backend.rs` |
+| Startup, launch, and supervision | `output/tauri-redunar/src-tauri/src/launch_plan.rs`, `output/tauri-redunar/src-tauri/src/sessions.rs`, `output/tauri-redunar/src-tauri/src/session_lifecycle.rs`, `output/tauri-redunar/src-tauri/src/background_start.rs` |
+| Catalog and profiles | `crates/redunar-daemon/src/service/catalog.rs`, `output/tauri-redunar/src-tauri/src/catalog.rs`, `output/tauri-redunar/src-tauri/src/profiles.rs`, `output/tauri-redunar/ui/game-drafts.mjs` |
+| Installation and artwork | `output/tauri-redunar/src-tauri/src/installation.rs`, `output/tauri-redunar/src-tauri/src/artwork.rs`, `output/tauri-redunar/ui/game-artwork.js`, `output/tauri-redunar/ui/game-installation.js` |
+| Playback and export | `output/tauri-redunar/src-tauri/src/playback.rs`, `output/tauri-redunar/src-tauri/src/clip_export.rs`, `output/tauri-redunar/src-tauri/src/media.rs`, `output/tauri-redunar/ui/clip-export.mjs`, `output/tauri-redunar/ui/replay-player.mjs` |
+| Replay and shortcuts | `output/tauri-redunar/src-tauri/src/hotkeys.rs`, `crates/redunar-hotkeys`, `crates/redunar-capture-vulkan/src/overlay.rs` |
+| Tray and lifecycle | `output/tauri-redunar/src-tauri/src/tray.rs`, `output/tauri-redunar/src-tauri/src/tray_native/`, `output/tauri-redunar/src-tauri/src/main.rs` |
+| Updates | `output/tauri-redunar/src-tauri/src/updates.rs`, `output/tauri-redunar/src-tauri/src/runtime.rs`, `output/tauri-redunar/ui/app.js` |
+| Preferences compatibility | `crates/redunar-daemon/src/service/preferences.rs`, `crates/redunar-daemon/src/app_preferences.rs`, `output/tauri-redunar/src-tauri/src/runtime.rs` |
 | NVIDIA metrics | `crates/redunar-nvidia-nvml`, `crates/redunar-platform/src/linux.rs`, `crates/redunar-daemon/src/monitor.rs` |
 | Replay encoding | `crates/redunar-daemon/src/replay_encoder.rs`, `crates/redunar-capture-vulkan/src/replay_video.rs` |
-| UI/native data mapping | `ui/native-data.mjs`, `app.js` |
+| UI/native data mapping | `output/tauri-redunar/ui/native-data.mjs`, `output/tauri-redunar/ui/app.js` |
 
 Use [DESIGN.md](DESIGN.md) for interface behavior and [REPLAY.md](REPLAY.md)
 for media behavior. Avoid duplicating those contracts here.
