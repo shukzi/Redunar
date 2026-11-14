@@ -23,6 +23,7 @@ mod session_lifecycle;
 mod sessions;
 mod tray;
 mod tray_native;
+mod update_files;
 mod update_restart;
 mod updates;
 #[cfg(target_os = "linux")]

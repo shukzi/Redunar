@@ -533,7 +533,8 @@ fn persist_verified_release(
     ] {
         let destination = signed_metadata_path(&directory, name, digest);
         let temporary = directory.join(format!(".{name}.{digest}.download"));
-        fs::copy(source, &temporary).map_err(|error| error.to_string())?;
+        crate::update_files::copy_private(source, &temporary, MAX_METADATA_BYTES)
+            .map_err(|error| error.to_string())?;
         fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
     }
     persist_verified_package_in_directory(&directory, source, package, version, digest)
@@ -557,7 +558,8 @@ fn persist_verified_package_in_directory(
     let destination = versioned_package_path(directory, package.asset_name, digest);
     let temporary = directory.join(format!(".{}.{}.download", package.asset_name, digest));
     let destination_preexisted = destination.exists();
-    fs::copy(source, &temporary).map_err(|error| error.to_string())?;
+    crate::update_files::copy_private(source, &temporary, MAX_PACKAGE_BYTES)
+        .map_err(|error| error.to_string())?;
     if let Err(error) = verify_checksum(&temporary, digest) {
         let _ = fs::remove_file(&temporary);
         return Err(error);
@@ -620,10 +622,12 @@ fn write_pending_update_in_directory(
         "state={}\nversion={}\nkind={}\nasset_name={}\ndigest={}\n",
         update.state, update.version, update.kind, update.asset_name, update.digest
     );
-    let metadata_temporary = directory.join(".pending-update.txt.tmp");
-    fs::write(&metadata_temporary, metadata).map_err(|error| error.to_string())?;
-    fs::rename(metadata_temporary, directory.join(PENDING_UPDATE_FILE))
-        .map_err(|error| error.to_string())
+    crate::update_files::write_metadata(
+        &directory.join(PENDING_UPDATE_FILE),
+        metadata.as_bytes(),
+        MAX_METADATA_BYTES,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn read_pending_update() -> Result<PendingUpdate, String> {
@@ -632,8 +636,11 @@ fn read_pending_update() -> Result<PendingUpdate, String> {
 }
 
 fn read_pending_update_in_directory(directory: &Path) -> Result<PendingUpdate, String> {
-    let metadata = fs::read_to_string(directory.join(PENDING_UPDATE_FILE))
-        .map_err(|error| format!("no verified update is ready: {error}"))?;
+    let metadata = crate::update_files::read_metadata(
+        &directory.join(PENDING_UPDATE_FILE),
+        MAX_METADATA_BYTES,
+    )
+    .map_err(|error| format!("no verified update is ready: {error}"))?;
     parse_pending_update(&metadata)
 }
 
@@ -942,11 +949,10 @@ fn select_package(
 }
 
 fn verify_checksum(path: &Path, expected: &str) -> Result<(), String> {
-    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-    if metadata.len() > MAX_PACKAGE_BYTES {
-        return Err("package exceeds the size limit".into());
-    }
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let file = crate::update_files::open_owned(path, unsafe { libc::geteuid() }, MAX_PACKAGE_BYTES)
+        .map_err(|error| error.to_string())?;
+    let mut file = std::io::Read::take(file, MAX_PACKAGE_BYTES + 1);
+    let mut total = 0;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 1024 * 1024];
     loop {
@@ -954,6 +960,10 @@ fn verify_checksum(path: &Path, expected: &str) -> Result<(), String> {
             std::io::Read::read(&mut file, &mut buffer).map_err(|error| error.to_string())?;
         if read == 0 {
             break;
+        }
+        total += read as u64;
+        if total > MAX_PACKAGE_BYTES {
+            return Err("package grew beyond the size limit".into());
         }
         digest.update(&buffer[..read]);
     }
@@ -973,7 +983,8 @@ fn verified_release_version(
         .get("VERSION")
         .ok_or("the signed manifest has no VERSION checksum")?;
     verify_checksum(path, digest)?;
-    let version = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let version = crate::update_files::read_metadata(path, MAX_METADATA_BYTES)
+        .map_err(|error| error.to_string())?;
     let version = version.trim();
     if !valid_version(version) {
         return Err("VERSION is not a supported version number".into());
