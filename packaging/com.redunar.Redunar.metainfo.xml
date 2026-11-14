@@ -34,6 +34,7 @@
           <li>Keep session cleanup failures visible until Redunar releases its resources safely.</li>
           <li>Keep the selected game and unsaved edits when Library refresh fails.</li>
           <li>Check saved update files before reading or replacing them.</li>
+          <li>Replace notification stacks with one outlined message that expires while Redunar is hidden.</li>
         </ul>
       </description>
     </release>
