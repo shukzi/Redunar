@@ -27,6 +27,17 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.6" date="2026-11-14">
+      <description>
+        <ul>
+          <li>Retry Replay startup after temporary failures during a running game.</li>
+          <li>Keep session cleanup failures visible until Redunar releases its resources safely.</li>
+          <li>Keep the selected game and unsaved edits when Library refresh fails.</li>
+          <li>Check saved update files before reading or replacing them.</li>
+          <li>Replace notification stacks with one outlined message that expires while Redunar is hidden.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.5" date="2026-11-12">
       <description>
         <ul>
