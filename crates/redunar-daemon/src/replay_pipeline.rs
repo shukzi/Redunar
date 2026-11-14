@@ -677,7 +677,8 @@ impl ReplayHardwarePipeline {
         // `EncodedReplayPacket` shares its immutable payload through `Arc`.
         // This bounded metadata copy lets the ring and asynchronous spool own
         // the same encoded packet without copying video bytes.
-        let spool_packets = self.spool.as_ref().map(|_| batch.packets().to_vec());
+        let spool_packets =
+            (self.spool.is_some() && !self.spool_degraded).then(|| batch.packets().to_vec());
         let outcomes = self.flow.push_batch(batch)?;
         let stored_packets = outcomes
             .iter()

@@ -380,7 +380,7 @@ function library() {
  const g=game();
  const header=heading('Library',`<div class="heading-actions library-heading-actions">${button('<span>Scan installed games</span>','scan-games')}${button('<span>Refresh library</span>','reload-games')}${button(`${icon('plus')}<span>Add game</span>`,'add-game',true)}</div>`);
  if(!g)return header+`<section class="panel empty-panel"><span class="shortcut-icon">${icon('library')}</span><h2>${errors.catalog?'Library unavailable':'No games yet'}</h2><p>${escape(errors.catalog||'Scan for installed games or add a game yourself. Your settings stay on this computer.')}</p><div class="heading-actions">${button('Scan installed games','scan-games',true)}${button('Add a game','add-game')}</div></section>`;
- return header+
+ return header+(errors.catalog?`<div class="info-note" role="alert">Library could not refresh. Your edits are kept. ${escape(errors.catalog)}</div>`:'')+
  `<div class="library-workspace"><aside class="game-catalog"><label class="search">${icon('search')}<input id="game-search" type="search" placeholder="Find a game" aria-label="Find a game"></label><div class="catalog-label">Installed games</div><div id="library-list">${libraryRows()}</div><div class="catalog-note">${icon('info')}<p>Detected or added manually.</p></div></aside><section class="game-detail"><div class="game-cover ${g.color}"><div class="game-cover-banner" data-banner="${escape(g.id)}"></div><div class="cover-art" aria-hidden="true">${icon('library')}</div><div>${pill(escape(g.launcher))}<h2>${escape(g.name)}</h2><p>Settings for this game</p></div><div class="game-cover-actions"><div class="game-launch-action">${button(`${icon('play')} Launch game`,'launch-game',true,'disabled aria-describedby="game-installation-note"')}<small id="game-installation-note" aria-live="polite"></small></div><details class="game-more"><summary class="button">More ${icon('chevron-down')}</summary><div>${button('Edit launch settings','edit-launch')}${button('Remove game','remove-game')}</div></details></div></div>${g.steam_app_id?steamSetupPanel():''}<div class="tabbar">${[['profile','Game settings'],['match','Game detection']].map(([id,label])=>`<button data-library-tab="${id}" class="${libraryTab===id?'active':''}" aria-pressed="${libraryTab===id}">${label}</button>`).join('')}</div>${libraryTabContent(g)}</section></div>${gameSaveBar(g)}`;
 }
 function libraryTabContent(g) {
@@ -1008,7 +1008,6 @@ async function readSection(section, command, accept) {
  try { const result=await call(command); accept(result); delete errors[section]; return true; }
  catch(error) {
   errors[section]=message(error); loaded[section]=false;
-  if(section==='catalog'){games=[];selectedGame=null;}
   // Retain the last inventory and selection through a transient read failure.
   if(section==='history')sessions=[];
   return false;

@@ -1049,9 +1049,8 @@ impl CaptureSessionHandle {
         if let Some(mut broker) = self.steam_activation_broker.take() {
             broker.shutdown();
         }
-        if self.stop_receiver() {
-            cleanup_session_directory(&self.session_directory);
-        }
+        self.stop_receiver();
+        cleanup_session_directory(&self.session_directory);
     }
 
     /// End a capture that lost its producer without a protocol goodbye.
@@ -1088,9 +1087,13 @@ impl CaptureSessionHandle {
         publish(&self.shared, failed);
     }
 
-    /// Stop frame intake before calculating the exact completed summary.
+    /// Stop intake and retain reply transport until the session owner releases
+    /// the handle after Replay cleanup. Statistics stay stable across retries.
     pub(crate) fn finish_statistics(&mut self) -> crate::SessionFrameSummary {
-        self.shutdown();
+        if let Some(mut broker) = self.steam_activation_broker.take() {
+            broker.shutdown();
+        }
+        self.stop_receiver();
         self.shared
             .session_statistics
             .lock()

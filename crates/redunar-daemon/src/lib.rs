@@ -536,13 +536,36 @@ impl RedunarService {
     /// be loaded safely.
     pub fn replay_runtime_status(&self) -> Result<ReplayRuntimeStatus, GameCatalogError> {
         let settings = self.load_game_catalog()?.global_profile.replay;
-        let runtime = self.game_session_coordinator().replay_runtime();
-        if self.replay_validation_candidate_available() {
-            runtime.configure_validation_candidate(settings);
-        } else {
-            runtime.configure_unavailable(settings);
+        let coordinator = self.game_session_coordinator();
+        let runtime = coordinator.replay_runtime();
+        // Polling must not erase an active session's failure or recovery state.
+        // Begin and the native supervisor own recorder activation.
+        if !matches!(
+            coordinator.status().phase,
+            GameSessionPhase::Idle | GameSessionPhase::Ended
+        ) {
+            return Ok(runtime.status());
         }
+        // Discovery can overlap a launch. Recheck under the session lock before
+        // applying idle configuration so its result cannot clear a new failure.
+        coordinator.configure_idle_replay(settings, self.replay_validation_candidate_available());
         Ok(runtime.status())
+    }
+
+    /// Maintain requested Replay independently of webview polling. A failed
+    /// initial start is retried with bounded backoff while the same supported
+    /// game still owns capture. An attached pump owns encoder recovery itself.
+    ///
+    /// # Errors
+    /// Returns the current start failure. A later supervisor tick may retry.
+    pub fn maintain_replay_recording(&self) -> Result<(), ReplayRuntimeError> {
+        let coordinator = self.game_session_coordinator();
+        let Some(generation) = coordinator.claim_replay_start(std::time::Instant::now()) else {
+            return Ok(());
+        };
+        let result = self.start_replay_candidate(Some(generation));
+        coordinator.finish_replay_start(generation, std::time::Instant::now(), result.is_ok());
+        result
     }
 
     /// Start the daemon-owned hardware Replay export worker for the active
@@ -554,6 +577,13 @@ impl RedunarService {
     /// Returns [`ReplayRuntimeError`] when validation capability, settings,
     /// storage, or active-session ownership cannot be established.
     pub fn start_replay_validation_candidate(&self) -> Result<(), ReplayRuntimeError> {
+        self.start_replay_candidate(None)
+    }
+
+    fn start_replay_candidate(
+        &self,
+        expected_generation: Option<u64>,
+    ) -> Result<(), ReplayRuntimeError> {
         let settings = self
             .load_game_catalog()
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))?
@@ -587,7 +617,7 @@ impl RedunarService {
         coordinator
             .replay_runtime()
             .set_output_format(output_format);
-        let result = coordinator.start_replay_export_pump(
+        let result = coordinator.start_replay_export_pump_for_generation(
             settings,
             readiness,
             move |frame| {
@@ -609,8 +639,9 @@ impl RedunarService {
                     .map_err(|error| error.to_string())
             },
             move |frame| vulkan_replay_backend_with_nvidia(frame, settings, nvidia_candidate),
+            expected_generation,
         );
-        if result.is_err() {
+        if result.is_err() && coordinator.replay_start_matches(expected_generation) {
             coordinator
                 .replay_runtime()
                 .fail(ReplayFailure::EncoderFailed);
