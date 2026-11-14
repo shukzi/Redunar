@@ -81,6 +81,12 @@ arrival, and selection feedback use bounded opacity/transform transitions;
 reduced motion disables them. No recurring animation or whole-document observer
 is added for ordinary workspace interaction.
 
+Notifications retain one message and at most one expiry timer. Replacement
+leaves no outgoing surface or queued backlog. A short CSS entrance runs only
+when a new pill mounts. There is no spring loop or animated countdown.
+Dialog ownership uses an observer limited to the dialog's open attribute.
+Closing the page releases the timer, event listeners, and observer.
+
 ## Completed session measurements
 
 Whole-session frame summaries accumulate the count and integer nanosecond sum

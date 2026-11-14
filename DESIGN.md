@@ -114,20 +114,24 @@ size field beside its label. A range switch appears only when both the entire
 clip and a selection are available. Compression retains its original bounds,
 validation, cancellation, and retry context.
 
-Notifications use a bottom-right stack of at most three rounded graphite
-toasts. Each rises from the edge on a damped spring and leaves over 200 ms.
-Cards move and fade without blur so WebKit keeps the countdown bar inside them.
-When another toast remains, a departing card fades in place behind the stack;
-only the last card slides toward the bottom edge. Hidden backing surfaces must
-not paint below the active notification, including when a new toast arrives
-during a dismissal.
-Older cards peek behind the latest; hover or keyboard focus unfolds the stack
-and pauses its reading timers. Timers also pause while the window is in the
-background. Repeated messages refresh one toast. Every toast has a dismiss
-button and a remaining-time bar that keeps its width while the card leaves.
-Errors use an alert announcement. Toasts
-remain above draft actions and inside an open dialog's top layer. Reduced
-motion settles the stack immediately.
+Notifications use one outlined graphite pill at the bottom center of the window.
+A new message replaces the current pill without a backlog or countdown bar.
+Repeated messages refresh the same pill. Success messages last two seconds.
+Other routine messages last 2.5 seconds. Warnings start at four seconds and
+errors at five seconds. Longer messages get up to six seconds of reading time.
+Each pill has a dismiss button. Errors use an alert announcement and a muted
+red outline. Message text wraps within the window.
+
+Hover or keyboard focus can defer removal while the window is active.
+This does not move the deadline. Backgrounding the window releases that hold.
+Notifications expire while Redunar is hidden or unfocused, including during
+system sleep. Returning to the window removes expired messages immediately,
+even if the browser delayed their timers.
+
+Pills remain above draft actions and inside an open dialog's top layer.
+Opening or closing a dialog moves an existing pill to the correct layer.
+Dismissal restores keyboard focus when necessary. Pills enter over 140 ms
+with a 4 px rise. Dismissal is immediate. Reduced motion disables the entrance.
 
 Settings places Software updates first, followed by a Preferences card with
 the same plain rows, short descriptions, right-aligned toggles, and quiet
