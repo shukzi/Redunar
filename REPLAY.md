@@ -75,6 +75,19 @@ the pipeline is replaced. These saves preserve the filesystem reserve and
 cancellation checks used by disk-backed saves. A save may ask for another
 attempt while deferred disk history is still catching up.
 
+The native session supervisor retries failed initial recorder starts with a
+bounded backoff from 500 ms to 10 seconds. The attached recorder separately
+retries encoder creation and recoverable frame failures when fresh supported
+frames arrive. These workers continue while the desktop window is hidden.
+Recovery keeps the same game identity and capability checks. Unsupported sources
+and failed GPU shutdown attestation do not authorize a replacement encoder.
+Status reads preserve failures until the recorder actually recovers.
+
+End session and Quit retain failed cleanup and its reply transport. Completed
+GPU inputs and queued unsubmitted frames can retry their acknowledgements.
+Unfinished GPU reads and panicked workers remain quarantined. A retry cannot
+report success without cleanup evidence, and it cannot admit another session.
+
 ## Audio
 
 Replay records the mixed default system output through PulseAudio or PipeWire

@@ -207,10 +207,10 @@ fn replay_failure_copy(failure: redunar_daemon::ReplayFailure) -> String {
     use redunar_daemon::ReplayFailure;
     match failure {
         ReplayFailure::FrameSourceLost => {
-            "The game stopped sending Replay frames. Restart the game through Redunar.".into()
+            "The game stopped sending Replay frames. Recording can resume when supported frames return.".into()
         }
         ReplayFailure::EncoderFailed => {
-            "The video encoder failed. Check Replay hardware support, then relaunch the game."
+            "The video encoder failed. Check Replay hardware support if recording does not recover."
                 .into()
         }
         ReplayFailure::ContainerFailed => {

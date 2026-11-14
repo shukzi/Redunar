@@ -210,6 +210,8 @@ artwork.
 Game settings and Game detection are separate tabs. Show inherited values,
 custom values, Use global settings, and independent drafts. Preserve the
 selected game, artwork, search, Steam setup, and drafts while switching tabs.
+A failed Library refresh keeps the last catalog, selected game and drafts. Show
+the error beside the retained content and keep Refresh library available.
 
 Every selected Steam game has a Play from Steam panel with one paste
 instruction, the exact launch option, Copy, and a short startup explanation.

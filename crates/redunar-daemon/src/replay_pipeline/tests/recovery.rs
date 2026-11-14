@@ -195,9 +195,11 @@ fn paced_fifteen_minute_pipeline_survives_repeated_storage_stalls() {
     }
     assert_eq!(index, 54_000);
     println!(
-        "endurance_elapsed_seconds={} queue_pressure_events={} peak_sampled_rss_kib={peak_rss_kib}",
+        "endurance_elapsed_seconds={} queue_pressure_events={} peak_sampled_rss_kib={peak_rss_kib} retained_duration_ns={} segment_resyncs={}",
         started.elapsed().as_secs(),
-        stats.dropped_queue_full
+        stats.dropped_queue_full,
+        end - first,
+        stats.segment_resyncs
     );
     pipeline.shutdown().unwrap();
 }

@@ -541,7 +541,7 @@ impl Engine {
             timeline: SessionTimeline::default(),
         });
         if plan.profile.instant_replay {
-            if let Err(error) = self.service.start_replay_validation_candidate() {
+            if let Err(error) = self.service.maintain_replay_recording() {
                 self.message = Some(format!(
                     "Game launched, but recording could not start: {error}"
                 ));
@@ -623,6 +623,11 @@ impl Engine {
                 active.monitor_revision = monitor.revision;
                 let _ = session.update_overlay_hardware(monitor.hardware.as_deref());
             }
+            let replay_start_failure = active
+                .profile
+                .instant_replay
+                .then(|| self.service.maintain_replay_recording())
+                .and_then(Result::err);
             let release =
                 session.observe_launch_process(&process) == Some(CaptureLaunchDisposition::Release);
             self.capture = session.capture_snapshot();
@@ -637,7 +642,10 @@ impl Engine {
                 );
                 // Routine counters belong to the measurements DTO. Keep this
                 // message channel available for capture and cleanup failures.
-                self.message = snapshot.failure.clone();
+                self.message = snapshot.failure.clone().or_else(|| {
+                    replay_start_failure
+                        .map(|error| format!("Recording is waiting to recover: {error}"))
+                });
             }
             match active.ownership {
                 GameLaunchProcessOwnership::DirectChild => release,
@@ -645,8 +653,10 @@ impl Engine {
                     // The Steam helper and even its capture producer can exit
                     // before the game. Keep separate cached game observations.
                     if release {
-                        session.stop_capture();
-                        active.capture = false;
+                        match session.stop_capture() {
+                            Ok(()) => active.capture = false,
+                            Err(error) => self.message = Some(error.to_string()),
+                        }
                     }
                     forwarded_finished(active, monitor, app_id, &process)
                 }

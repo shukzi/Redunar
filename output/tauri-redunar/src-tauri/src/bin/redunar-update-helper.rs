@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "../update_files.rs"]
+#[allow(dead_code)]
+mod update_files;
+
 const PUBLIC_KEY: &str = include_str!("../../../../../packaging/release-signing-public.pem");
 const MAX_METADATA: u64 = 1024 * 1024;
 const MAX_PACKAGE: u64 = 2 * 1024 * 1024 * 1024;
@@ -193,15 +197,8 @@ fn install() -> Result<(), String> {
 }
 
 fn copy_bounded(source: &Path, target: &Path, uid: u32, limit: u64) -> Result<(), String> {
-    let input = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(source)
+    let input = update_files::open_owned(source, uid, limit)
         .map_err(|e| format!("could not read cached update: {e}"))?;
-    let metadata = input.metadata().map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.uid() != uid || metadata.len() > limit {
-        return Err("cached update has invalid ownership or size".into());
-    }
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)

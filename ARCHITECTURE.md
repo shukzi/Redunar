@@ -112,7 +112,8 @@ The bridge never re-executes Steam's game arguments.
 4. Supervise the authenticated game process and publish actual status.
 5. Allow reversible metrics visibility without attaching to an unrelated game.
 6. End the session, retain the launch lock until process exit, record history,
-   and release owned resources.
+   and release owned resources. Failed cleanup retains its transport and blocks
+   completion, another launch, and update restart until safe release succeeds.
 
 Replay is requested only for supported capabilities. Metrics may remain available
 when Replay is unavailable. End session does not kill the game; explicit Quit
@@ -154,6 +155,12 @@ Compatibility readers preserve existing profiles, recordings, and settings.
 Format changes require old-state tests, migration behavior, and interruption
 handling. Redunar does not add accounts, cloud sync, or telemetry as incidental
 features.
+
+Updater cache reads reject linked and special files and enforce byte limits.
+Reserved temporary files use exclusive private creation and atomic replacement.
+Interrupted owned temporary writes can be retried without following links.
+The installer helper applies the same nonblocking file checks before copying
+user-owned input into its private installation snapshot.
 
 The updater verifies signed release metadata, version, and package checksums
 before retaining a package. Settings requests checks or installation; the
