@@ -73,8 +73,9 @@ The only deliberate package post-install action reloads udev and retriggers
 existing keyboard and mouse event devices so access can apply without reconnecting
 them.
 The application, capture components, and hotkey helper run as the logged-in user.
-Only an explicit update installation may request polkit authorization for the
-fixed update helper; the package sets no setuid/setgid bits or file capabilities.
+Restricted CPU power reads may start the fixed read-only helper through polkit.
+Update installation requests separate authorization for the fixed update helper.
+The package sets no setuid/setgid bits or file capabilities.
 Package scripts must not install a global Vulkan layer, edit Steam settings,
 start monitoring, change hardware policy, or make network requests.
 
