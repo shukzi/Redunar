@@ -1,5 +1,7 @@
 """Fixture-only coverage: no app, hardware, network, or user state."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -64,6 +66,46 @@ class SnapshotTests(unittest.TestCase):
         (first / "tracked").write_text("changed in build")
         self.assertEqual((second / "tracked").read_text(), "original")
         self.assertEqual((self.root / "tracked").read_text(), "original")
+
+    def write_manifest(self, manifest):
+        path = Path(self.temporary.name) / "source-manifest.json"
+        path.write_text(json.dumps(manifest))
+        return path
+
+    def test_verifies_exported_files_and_executable_modes(self):
+        destination, manifest = self.capture()
+        path = self.write_manifest(manifest)
+        self.assertEqual(module.verify_snapshot(destination, path), manifest)
+        (destination / "tracked").chmod(0o755)
+        with self.assertRaisesRegex(ValueError, "differs"):
+            module.verify_snapshot(destination, path)
+
+    def test_rejects_missing_inputs_and_changed_manifest(self):
+        destination, manifest = self.capture()
+        path = self.write_manifest(manifest)
+        (destination / "tracked").unlink()
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            module.verify_snapshot(destination, path)
+        manifest["files"]["tracked"]["sha256"] = "0" * 64
+        self.write_manifest(manifest)
+        with self.assertRaisesRegex(ValueError, "manifest hash"):
+            module.verify_snapshot(destination, path)
+
+    def test_rejects_manifest_path_escape_and_symlink_parent(self):
+        destination, manifest = self.capture()
+        for name in ("../tracked", "/tracked", "folder/../tracked"):
+            with self.subTest(name=name):
+                altered = dict(manifest, files={name: manifest["files"]["tracked"]})
+                altered["source_sha256"] = hashlib.sha256(
+                    json.dumps(altered["files"], sort_keys=True).encode()).hexdigest()
+                with self.assertRaisesRegex(ValueError, "unsafe path"):
+                    module.verify_snapshot(destination, self.write_manifest(altered))
+        (destination / "linked").symlink_to(self.root, target_is_directory=True)
+        manifest["files"] = {"linked/tracked": manifest["files"]["tracked"]}
+        manifest["source_sha256"] = hashlib.sha256(
+            json.dumps(manifest["files"], sort_keys=True).encode()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "symlinks"):
+            module.verify_snapshot(destination, self.write_manifest(manifest))
 
 
 if __name__ == "__main__":

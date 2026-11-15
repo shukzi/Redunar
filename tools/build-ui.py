@@ -2,6 +2,7 @@
 """Build the frontend and bind its assets to the exact working source."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -15,12 +16,19 @@ def asset_hashes(directory):
             for path in sorted(directory.rglob('*')) if path.is_file()}
 
 
+def source_snapshot():
+    source_tools = runpy.run_path(str(ROOT/'tools/source-snapshot.py'))
+    manifest = os.environ.get('REDUNAR_SOURCE_MANIFEST')
+    if manifest:
+        return source_tools['verify_snapshot'](ROOT, Path(manifest))
+    return source_tools['snapshot'](ROOT)
+
+
 def main():
-    snapshot = runpy.run_path(str(ROOT/'tools/source-snapshot.py'))['snapshot']
-    before = snapshot(ROOT)
+    before = source_snapshot()
     subprocess.run([str(NATIVE/'node_modules/.bin/vite'), 'build', '--config', 'vite.config.js', '--outDir', 'dist'],
                    cwd=NATIVE, check=True)
-    after = snapshot(ROOT)
+    after = source_snapshot()
     if before != after:
         raise SystemExit('Source changed during the UI build. Rebuild the fixed source tree.')
     report = ROOT/'.redunar-build/ui-build.json'
