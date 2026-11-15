@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -23,10 +24,10 @@ class BuildIsolationTests(unittest.TestCase):
         base = Path(self.temporary.name)
         self.root = base / 'checkout'
         (self.root / 'tools/lib').mkdir(parents=True)
-        for name in ('build-linux-release.sh', 'source-snapshot.py', 'prepare-release.sh'):
+        for name in ('build-linux-release.sh', 'build-ui.py', 'source-snapshot.py', 'prepare-release.sh'):
             shutil.copy2(TOOLS / name, self.root / 'tools' / name)
         shutil.copy2(TOOLS / 'lib/release-paths.sh', self.root / 'tools/lib/release-paths.sh')
-        (self.root / '.gitignore').write_text('.redunar-build/\nnode_modules/\ntarget/\n')
+        (self.root / '.gitignore').write_text('.redunar-build/\nnode_modules/\ntarget/\n**/dist/\n')
         (self.root / 'output/tauri-redunar').mkdir(parents=True)
         (self.root / 'output/tauri-redunar/package.json').write_text('{}')
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
@@ -35,6 +36,14 @@ class BuildIsolationTests(unittest.TestCase):
                         'commit', '-qm', 'fixture'], cwd=self.root, check=True)
         (self.root / 'output/tauri-redunar/node_modules').mkdir(parents=True)
         (self.root / 'output/tauri-redunar/node_modules/fixture').write_text('dependency')
+        vite = self.root / 'output/tauri-redunar/node_modules/.bin/vite'
+        vite.parent.mkdir()
+        vite.write_text(f'#!{sys.executable}\n' + '''from pathlib import Path
+output = Path('ui/dist')
+output.mkdir(parents=True)
+(output/'main.js').write_text('fixture asset')
+''')
+        vite.chmod(0o755)
         (self.root / 'target').mkdir()
         (self.root / 'target/keep').write_text('host build')
         cargo_home = base / 'cargo'
@@ -43,7 +52,7 @@ class BuildIsolationTests(unittest.TestCase):
         bin_directory.mkdir()
         podman = bin_directory / 'podman'
         podman.write_text('''#!/usr/bin/env python3
-import os, sys, time
+import json, os, subprocess, sys, time
 from pathlib import Path
 if os.environ.get('FAKE_FAIL'):
     sys.exit(9)
@@ -56,6 +65,18 @@ if sys.argv[1] == 'run':
         Path(os.environ['FAKE_WAIT']).write_text(str(os.getpid()))
         time.sleep(30)
     build = next(arg[:-len(':/build:Z')] for arg in sys.argv if arg.endswith(':/build:Z'))
+    source = Path(next(arg[:-len(':/workspace:Z')] for arg in sys.argv if arg.endswith(':/workspace:Z')))
+    assert 'REDUNAR_SOURCE_MANIFEST=/build/source-manifest.json' in sys.argv
+    manifest = Path(build)/'source-manifest.json'
+    environment = dict(os.environ, REDUNAR_SOURCE_MANIFEST=str(manifest),
+                       GIT_CEILING_DIRECTORIES=str(source.parent))
+    assert subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=source,
+                          env=environment, capture_output=True).returncode != 0
+    subprocess.run([sys.executable, str(source/'tools/build-ui.py')], cwd=source,
+                   env=environment, check=True)
+    evidence = json.loads((source/'.redunar-build/ui-build.json').read_text())
+    assert evidence['source_sha256'] == json.loads(manifest.read_text())['source_sha256']
+    assert 'main.js' in evidence['assets']
     output = Path(build) / 'native/tauri/release'
     output.mkdir(parents=True, exist_ok=True)
     for name in ''' + repr(ARTIFACTS) + ''':

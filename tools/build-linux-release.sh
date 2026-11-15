@@ -75,6 +75,7 @@ container_arguments=(
   --volume "$local_build_root:/build:Z"
   --volume "$cargo_home/registry:/usr/local/cargo/registry:ro,z"
   --env REDUNAR_NATIVE_BUILD_ROOT=/build/native
+  --env REDUNAR_SOURCE_MANIFEST=/build/source-manifest.json
 )
 if [[ -d "$cargo_home/git" ]]; then
   container_arguments+=(--volume "$cargo_home/git:/usr/local/cargo/git:ro,z")

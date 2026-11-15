@@ -32,6 +32,11 @@ tools/check-tauri-release.sh
 Use the package-specific checks in `tools/`, `packaging/`, and
 `output/tauri-redunar/` when the change affects those inputs.
 
+The Python fixtures exercise frontend builds in Git checkouts and exported
+source trees. The compatibility-builder fixture also runs the UI wrapper with
+the exported manifest. These checks cover provenance and build isolation;
+package qualification still requires the real compatibility container.
+
 Opt-in synthetic overlay CPU measurements use isolated file fixtures and native
 render preparation without a game or graphics driver:
 

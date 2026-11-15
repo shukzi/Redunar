@@ -98,6 +98,9 @@ Cargo targets. Its source manifest hashes the actual copied files. Locks allow
 only one compatibility build and one validation run per checkout.
 Frontend builds also record the working-source and asset hashes for the UI
 fixture runner. Rebuild after changing source before running those fixtures.
+In the exported container snapshot, `REDUNAR_SOURCE_MANIFEST` identifies the
+manifest whose declared files and executable modes are verified before and after
+the frontend build. Ordinary checkout builds use Git to enumerate source files.
 Independent worktrees have independent outputs. Each container runs the exact
 image ID produced by its own build; cancellation stops its container before
 removing the source snapshot. Dependency download caches may be shared; mutable
