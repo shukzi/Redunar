@@ -27,6 +27,16 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.7" date="2026-11-15">
+      <description>
+        <ul>
+          <li>Mark the Overlay tab as unsaved when overlay spacing changes.</li>
+          <li>Move replay-player and preference/catalog code into focused modules.</li>
+          <li>Add grouped UI test runs with stricter command checks, bounded waits and cleanup.</li>
+          <li>Clarify application wording and documentation.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.6" date="2026-11-14">
       <description>
         <ul>
